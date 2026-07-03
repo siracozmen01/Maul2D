@@ -25,7 +25,7 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 11u
+#define M2_SNAPSHOT_VERSION 12u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -290,9 +290,14 @@ static void UpdatePairs(m2World* world)
         hasPrevious = true;
         outCount += 1;
     }
+    // The merge writes the m-th smallest key to scratch[cap-1-m]; the
+    // read-back must mirror that, or the whole list comes back
+    // reversed and every downstream both-sorted walk (warm-start
+    // carry, end-event diff) silently degrades. It did, for twenty
+    // slices - deterministically, so no hash gate ever saw it.
     for (int32_t k = 0; k < outCount; ++k)
     {
-        world->pairKeys[k] = world->pairScratch[world->pairCapacity - 1 - (outCount - 1 - k)];
+        world->pairKeys[k] = world->pairScratch[world->pairCapacity - 1 - k];
     }
     world->pairCount = outCount;
 
@@ -539,6 +544,55 @@ static void UpdateContactsRange(int32_t begin, int32_t end, void* userCtx)
     {
         int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
         int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+
+        // Frozen pair: both ends static or sleeping, so transforms and
+        // geometry are untouched and the stored manifold is exactly
+        // what ComputeManifold would return - skip the arithmetic,
+        // keep the bits. A kinematic end never freezes (its velocity
+        // can change without stepping).
+        int32_t frozenBodyA = world->shapeBody[shapeA];
+        int32_t frozenBodyB = world->shapeBody[shapeB];
+        bool frozenA = world->types[frozenBodyA] == (uint8_t)m2_staticBody ||
+                       (world->types[frozenBodyA] == (uint8_t)m2_dynamicBody &&
+                        world->asleep[frozenBodyA] != 0 && world->sleepStreak[frozenBodyA] >= 2);
+        bool frozenB = world->types[frozenBodyB] == (uint8_t)m2_staticBody ||
+                       (world->types[frozenBodyB] == (uint8_t)m2_dynamicBody &&
+                        world->asleep[frozenBodyB] != 0 && world->sleepStreak[frozenBodyB] >= 2);
+        if (frozenA && frozenB)
+        {
+            int32_t flo = 0;
+            int32_t fhi = world->oldPairCount - 1;
+            while (flo <= fhi)
+            {
+                int32_t mid = (flo + fhi) / 2;
+                if (world->oldPairScratch[mid] == world->pairKeys[i])
+                {
+                    world->manifolds[i] = world->manifoldScratch[mid];
+                    // Recompute would match every id against itself and
+                    // set the persisted bit; the copy owes the same.
+                    for (int32_t k = 0; k < world->manifolds[i].pointCount; ++k)
+                    {
+                        world->manifolds[i].points[k].flags |= 1;
+                    }
+                    break;
+                }
+                if (world->oldPairScratch[mid] < world->pairKeys[i])
+                {
+                    flo = mid + 1;
+                }
+                else
+                {
+                    fhi = mid - 1;
+                }
+            }
+            if (flo <= fhi)
+            {
+                continue; // found and copied
+            }
+            // Brand-new pair between frozen bodies (restore edges):
+            // fall through and compute once.
+        }
+
         m2RelativePose pose =
             MakeRelativePose(world, world->shapeBody[shapeA], world->shapeBody[shapeB]);
         m2Manifold fresh = ComputeManifold(world, shapeA, shapeB, pose);
@@ -665,6 +719,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(localCenters, cap, m2Vec2);
     M2_ALLOC(asleep, cap, uint8_t);
     M2_ALLOC(sleepTimes, cap, float);
+    M2_ALLOC(sleepStreak, cap, uint8_t);
     M2_ALLOC(bullets, cap, uint8_t);
     M2_ALLOC(ccdPrevPositions, cap, m2Pos2);
     M2_ALLOC(islandParent, cap, int32_t);
@@ -801,6 +856,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->localCenters);
     m2Free(world->asleep);
     m2Free(world->sleepTimes);
+    m2Free(world->sleepStreak);
     m2Free(world->bullets);
     m2Free(world->ccdPrevPositions);
     m2Free(world->islandParent);
@@ -914,7 +970,8 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     // order within a body (both snapshot-deterministic).
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
     {
-        if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody)
+        if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody ||
+            (world->types[i] == (uint8_t)m2_dynamicBody && world->asleep[i] != 0))
         {
             continue;
         }
@@ -963,6 +1020,19 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     m2SolveStep(world, dt, substepCount);
     uint64_t tSolve = m2TimeNowNs();
     m2UpdateSleep(world, dt);
+    // Freshness streak: two consecutive step-ends asleep guarantee the
+    // stashed manifolds were computed from these exact transforms.
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody)
+        {
+            continue;
+        }
+        world->sleepStreak[i] =
+            world->asleep[i] != 0
+                ? (uint8_t)(world->sleepStreak[i] < 2 ? world->sleepStreak[i] + 1 : 2)
+                : 0;
+    }
     uint64_t tEnd = m2TimeNowNs();
 
     world->profile.stepMs = (float)((double)(tEnd - tStart) * 1.0e-6);
@@ -1056,6 +1126,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->localCenters, cap * sizeof(m2Vec2));
     M2_BLOCK(world->asleep, cap * sizeof(uint8_t));
     M2_BLOCK(world->sleepTimes, cap * sizeof(float));
+    M2_BLOCK(world->sleepStreak, cap * sizeof(uint8_t));
     M2_BLOCK(world->bullets, cap * sizeof(uint8_t));
     M2_BLOCK(world->userData, cap * sizeof(uint64_t));
     M2_BLOCK(world->types, cap * sizeof(uint8_t));
@@ -1225,6 +1296,7 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->asleep[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->sleepTimes[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->sleepStreak[i], 1);
         h = m2Hash64(h, &world->bullets[i], (int32_t)sizeof(uint8_t));
     }
     h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
@@ -1287,6 +1359,7 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->invInertia[index] = 0.0f;
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;
+    world->sleepStreak[index] = 0;
     world->bullets[index] = def->isBullet ? 1 : 0;
     if (index + 1 > world->maxBodyIndex)
     {

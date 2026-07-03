@@ -39,6 +39,7 @@ typedef struct m2World
     m2Vec2* localCenters;   // body-frame center of mass (snapshot state)
     uint8_t* asleep;        // sleep flag (snapshot + hashed: the sleep law)
     float* sleepTimes;      // seconds under tolerance (snapshot + hashed)
+    uint8_t* sleepStreak;   // step-ends asleep, saturating at 2 (snapshot state)
     uint8_t* bullets;       // isBullet flag (snapshot + hashed)
 
     // Body id pool: FIFO free queue + generations; saturated slots retire.
