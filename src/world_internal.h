@@ -9,6 +9,7 @@
 
 #include "dynamic_tree.h"
 #include "maul2d/body.h"
+#include "maul2d/events.h"
 #include "maul2d/world.h"
 #include "shape_internal.h"
 
@@ -71,7 +72,8 @@ typedef struct m2World
     uint8_t* inMoved;  // per shape slot dedup flag
     int32_t* moved;    // shape indices, consumed and cleared by step
     int32_t movedCount;
-    uint64_t* pairKeys; // sorted, deduplicated (minShape << 32 | maxShape)
+    uint64_t* pairKeys;    // sorted, deduplicated (minShape << 32 | maxShape)
+    uint8_t* pairTouching; // manifold had points last step (snapshot state)
     int32_t pairCount;
     int32_t pairCapacity;
     uint64_t* pairScratch; // step-transient; not hashed, snapshot-benign
@@ -90,8 +92,19 @@ typedef struct m2World
     int32_t* islandParent;    // union-find scratch (step-transient)
     uint8_t* islandDisturbed; // island flags scratch (step-transient)
     m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)
+    uint8_t* touchingScratch; // pair-touching carry scratch (step-transient)
+
+    // Event buffers (world-owned observer stream; cleared at Step start
+    // and by Restore; never snapshot state).
+    m2ContactBeginEvent* beginEvents;
+    int32_t beginEventCount;
+    m2ContactEndEvent* endEvents;
+    int32_t endEventCount;
+    m2ContactEndEvent* pendingEndEvents; // between-step destroys, flushed at Step
+    int32_t pendingEndCount;
 
     uint16_t worldGeneration;
+    uint16_t worldIndex0; // registry slot + 1, for building public ids
 } m2World;
 
 // Islands & sleep (src/island.c).

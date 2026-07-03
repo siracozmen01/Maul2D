@@ -70,6 +70,12 @@ target_include_directories(test_ccd PRIVATE src)
 maul2d_apply_flags(test_ccd)
 add_test(NAME ccd COMMAND test_ccd)
 
+add_executable(test_events test/test_events.c)
+target_link_libraries(test_events PRIVATE maul2d)
+target_include_directories(test_events PRIVATE src)
+maul2d_apply_flags(test_events)
+add_test(NAME events COMMAND test_events)
+
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)

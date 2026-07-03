@@ -19,7 +19,7 @@
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 7u
+#define M2_SNAPSHOT_VERSION 8u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -149,6 +149,36 @@ static bool ShapeIsDynamic(const m2World* world, int32_t shapeIndex)
     return world->types[world->shapeBody[shapeIndex]] == (uint8_t)m2_dynamicBody;
 }
 
+static m2ShapeId MakeShapeId(const m2World* world, int32_t shapeIndex)
+{
+    m2ShapeId id = {shapeIndex + 1, world->worldIndex0, world->shapeGenerations[shapeIndex]};
+    return id;
+}
+
+static void EmitEnd(m2World* world, int32_t shapeA, int32_t shapeB)
+{
+    if (world->endEventCount >= world->pairCapacity)
+    {
+        return;
+    }
+    m2ContactEndEvent* e = &world->endEvents[world->endEventCount++];
+    e->shapeIdA = MakeShapeId(world, shapeA);
+    e->shapeIdB = MakeShapeId(world, shapeB);
+    e->step = world->stepCount;
+}
+
+static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB)
+{
+    if (world->beginEventCount >= world->pairCapacity)
+    {
+        return;
+    }
+    m2ContactBeginEvent* e = &world->beginEvents[world->beginEventCount++];
+    e->shapeIdA = MakeShapeId(world, shapeA);
+    e->shapeIdB = MakeShapeId(world, shapeB);
+    e->step = world->stepCount;
+}
+
 // Re-derive pairs touched by the moved set, then batch-merge with the
 // untouched remainder (topic-02 §4.2, RT1-PERF-3).
 static void UpdatePairs(m2World* world)
@@ -209,6 +239,11 @@ static void UpdatePairs(m2World* world)
 
     qsort(world->pairScratch, (size_t)collected, sizeof(uint64_t), CompareU64);
 
+    // Old set stash for the end-event diff and the touching carry.
+    memcpy(world->oldPairScratch, world->pairKeys, (size_t)world->pairCount * sizeof(uint64_t));
+    memcpy(world->touchingScratch, world->pairTouching, (size_t)world->pairCount * sizeof(uint8_t));
+    int32_t oldCount = world->pairCount;
+
     int32_t kept = 0;
     for (int32_t i = 0; i < world->pairCount; ++i)
     {
@@ -255,6 +290,43 @@ static void UpdatePairs(m2World* world)
     }
     world->pairCount = outCount;
 
+    // Diff old vs new (both sorted): vanished-and-touching pairs emit
+    // their end events here (M19: pair loss is a contact-killing path);
+    // surviving pairs carry their touching flag to the new slot.
+    {
+        int32_t oi = 0;
+        int32_t ni = 0;
+        while (oi < oldCount || ni < world->pairCount)
+        {
+            uint64_t ok = oi < oldCount ? world->oldPairScratch[oi] : UINT64_MAX;
+            uint64_t nk = ni < world->pairCount ? world->pairKeys[ni] : UINT64_MAX;
+            if (ok == nk)
+            {
+                world->pairTouching[ni] = world->touchingScratch[oi];
+                oi += 1;
+                ni += 1;
+            }
+            else if (ok < nk)
+            {
+                if (world->touchingScratch[oi] != 0)
+                {
+                    int32_t a = (int32_t)(ok >> 32);
+                    int32_t b = (int32_t)(ok & 0xFFFFFFFFu);
+                    if (world->shapeAlive[a] != 0 && world->shapeAlive[b] != 0)
+                    {
+                        EmitEnd(world, a, b); // destroy path emits its own
+                    }
+                }
+                oi += 1;
+            }
+            else
+            {
+                world->pairTouching[ni] = 0;
+                ni += 1;
+            }
+        }
+    }
+
     for (int32_t m = 0; m < world->movedCount; ++m)
     {
         world->inMoved[world->moved[m]] = 0;
@@ -272,6 +344,8 @@ static void PrunePairsOfShape(m2World* world, int32_t shapeIndex)
         if (a != shapeIndex && b != shapeIndex)
         {
             world->pairKeys[kept] = world->pairKeys[i];
+            world->pairTouching[kept] = world->pairTouching[i];
+            world->manifolds[kept] = world->manifolds[i];
             kept += 1;
         }
     }
@@ -582,6 +656,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(inMoved, shapeCap, uint8_t);
     M2_ALLOC(moved, shapeCap, int32_t);
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
+    M2_ALLOC(pairTouching, world->pairCapacity, uint8_t);
+    M2_ALLOC(touchingScratch, world->pairCapacity, uint8_t);
+    M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
+    M2_ALLOC(endEvents, world->pairCapacity, m2ContactEndEvent);
+    M2_ALLOC(pendingEndEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pairScratch, world->pairCapacity, uint64_t);
     M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
     M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
@@ -629,6 +708,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
 
     s_worldGenerations[slot] += 1;
     world->worldGeneration = s_worldGenerations[slot];
+    world->worldIndex0 = (uint16_t)(slot + 1);
     s_worlds[slot] = world;
 
     m2WorldId id = {(uint16_t)(slot + 1), world->worldGeneration};
@@ -678,6 +758,11 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->inMoved);
     free(world->moved);
     free(world->pairKeys);
+    free(world->pairTouching);
+    free(world->touchingScratch);
+    free(world->beginEvents);
+    free(world->endEvents);
+    free(world->pendingEndEvents);
     free(world->pairScratch);
     free(world->manifolds);
     free(world->oldPairScratch);
@@ -707,6 +792,16 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         return;
     }
 
+    // Fresh event window: clear the public buffers, then flush ends
+    // queued by between-step destroys (they belong to this window).
+    world->beginEventCount = 0;
+    world->endEventCount = 0;
+    for (int32_t i = 0; i < world->pendingEndCount && i < world->pairCapacity; ++i)
+    {
+        world->endEvents[world->endEventCount++] = world->pendingEndEvents[i];
+    }
+    world->pendingEndCount = 0;
+
     // Collide first (reference order): broadphase + narrowphase produce
     // fresh manifolds from current positions, then the solver moves the
     // world. Warm-start impulses arrive via the manifold carry.
@@ -734,6 +829,27 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     StashContacts(world);
     UpdatePairs(world);
     UpdateContacts(world);
+
+    // Touch transitions in canonical contact order (serial compaction:
+    // the topic-08 event law, scalar edition).
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        uint8_t touchingNow = world->manifolds[i].pointCount > 0 ? 1 : 0;
+        if (touchingNow != world->pairTouching[i])
+        {
+            int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+            int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            if (touchingNow != 0)
+            {
+                EmitBegin(world, a, b);
+            }
+            else
+            {
+                EmitEnd(world, a, b);
+            }
+            world->pairTouching[i] = touchingNow;
+        }
+    }
 
     m2UpdateIslandsAndWake(world);
     m2SolveStep(world, dt, substepCount);
@@ -848,6 +964,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         M2_BLOCK(world->treeNodes[t], (size_t)world->treeNodeCapacity * sizeof(m2TreeNode));
     }
     M2_BLOCK(world->pairKeys, (size_t)world->pairCapacity * sizeof(uint64_t));
+    M2_BLOCK(world->pairTouching, (size_t)world->pairCapacity * sizeof(uint8_t));
     M2_BLOCK(world->manifolds, (size_t)world->pairCapacity * sizeof(m2Manifold));
 #undef M2_BLOCK
     return cursor;
@@ -926,6 +1043,12 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     int32_t cursor = (int32_t)sizeof(header) + WalkBlocks(world, NULL, in + sizeof(header), 1);
     M2_ASSERT(cursor == size);
     (void)cursor;
+
+    // Events are an observer stream from an abandoned timeline: cleared
+    // on restore, re-emitted by re-simulation (RT1-ROLL-3 / RT1-API-3).
+    world->beginEventCount = 0;
+    world->endEventCount = 0;
+    world->pendingEndCount = 0;
     return true;
 }
 
@@ -1015,6 +1138,30 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
 
 static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
 {
+    // M19 bookending: a destroyed shape ends every touching contact it
+    // had, id captured before the generation bump. Between steps these
+    // land in the pending queue and flush into the next step's buffers.
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (a != shapeIndex && b != shapeIndex)
+        {
+            continue;
+        }
+        if (world->pendingEndCount < world->pairCapacity)
+        {
+            m2ContactEndEvent* e = &world->pendingEndEvents[world->pendingEndCount++];
+            e->shapeIdA = MakeShapeId(world, a);
+            e->shapeIdB = MakeShapeId(world, b);
+            e->step = world->stepCount;
+        }
+    }
+
     if (world->proxyIds[shapeIndex] != M2_NULL_NODE)
     {
         int32_t tree = ShapeTreeIndex(world, shapeIndex);
@@ -1271,4 +1418,19 @@ uint64_t m2Shape_GetUserData(m2ShapeId shapeId)
         return 0;
     }
     return world->shapeUserData[index];
+}
+
+m2ContactEvents m2World_GetContactEvents(m2WorldId worldId)
+{
+    m2ContactEvents events = {NULL, NULL, 0, 0};
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return events;
+    }
+    events.beginEvents = world->beginEvents;
+    events.beginCount = world->beginEventCount;
+    events.endEvents = world->endEvents;
+    events.endCount = world->endEventCount;
+    return events;
 }
