@@ -38,13 +38,16 @@ jobs:
       - name: Run determinism gate
         shell: bash
         run: |
-          if [ -f build/Release/test_core.exe ]; then
-            EXE=build/Release/test_core.exe
+          if [ -d build/Release ]; then
+            BIN=build/Release
+            SUFFIX=.exe
           else
-            EXE=build/test_core
+            BIN=build
+            SUFFIX=
           fi
-          $EXE | tee out.txt
-          grep '^M2_DET_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          "$BIN/test_core$SUFFIX" | tee out.txt
+          "$BIN/test_world$SUFFIX" | tee -a out.txt
+          grep -E '^M2_(DET|WORLD)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,14 +67,17 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -h '^M2_DET_HASH=' hashes/*.txt | tee all-hashes.txt
-          COUNT=$(sort -u all-hashes.txt | wc -l)
-          CELLS=$(wc -l < all-hashes.txt)
-          if [ "$CELLS" -lt 6 ] || [ "$COUNT" != "1" ]; then
-            echo "DETERMINISM FAILURE: $CELLS cells, $COUNT distinct hashes"
+          grep -hE '^M2_(DET|WORLD)_HASH=' hashes/*.txt | tee all-hashes.txt
+          CELLS=6
+          # Every distinct hash line must appear exactly once per cell:
+          # a divergent cell or a silently missing line both fail.
+          BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
+          DISTINCT=$(sort -u all-hashes.txt | wc -l)
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "2" ]; then
+            echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi
-          echo "all $CELLS platform cells produced identical bits"
+          echo "all cells produced identical bits for every gate"
 
   sanitize:
     name: asan+ubsan
@@ -83,7 +89,9 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Run
-        run: ./build/test_core
+        run: |
+          ./build/test_core
+          ./build/test_world
 
   format:
     name: clang-format
@@ -96,7 +104,7 @@ jobs:
         run: |
           pip install clang-format==22.1.5 >/dev/null
           clang-format --version
-          clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c
+          clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c benchmark/*.c
 
   harness:
     name: dual-backend harness (reference)

@@ -7,20 +7,26 @@ include(cmake/CompilerFlags.cmake)
 
 add_library(maul2d STATIC
     src/core.c
-    src/math_functions.c)
+    src/math_functions.c
+    src/world.c)
 target_include_directories(maul2d PUBLIC include)
 maul2d_apply_flags(maul2d)
+if(NOT MSVC)
+    # The library's own math (sqrtf/floorf) needs libm; consumers inherit it.
+    target_link_libraries(maul2d PUBLIC m)
+endif()
 
 enable_testing()
 
 add_executable(test_core test/test_core.c)
 target_link_libraries(test_core PRIVATE maul2d)
 maul2d_apply_flags(test_core)
-if(NOT MSVC)
-    # Tests compare against libm references.
-    target_link_libraries(test_core PRIVATE m)
-endif()
 add_test(NAME core COMMAND test_core)
+
+add_executable(test_world test/test_world.c)
+target_link_libraries(test_world PRIVATE maul2d)
+maul2d_apply_flags(test_world)
+add_test(NAME world COMMAND test_world)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
