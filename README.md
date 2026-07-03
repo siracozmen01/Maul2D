@@ -6,19 +6,55 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status
+## Status: 0.1.0
 
-Early. The engine is being built determinism-first: what exists today is the
-core math substrate (deterministic trig, pinned min/max semantics, the state
-hash) and the cross-platform determinism gate in CI. Every commit must produce
-bit-identical results on Linux/Windows/macOS, x64 and arm64, GCC/Clang/MSVC —
-the gate compares raw output hashes across all cells and fails the build on a
-single differing bit. The FMA canary and the min/max semantics tests catch
-toolchain drift at the function level before it can smear into simulation
-noise.
+The core engine is complete and gated:
 
-Solver, broadphase, and the rollback/snapshot system land next, in that
-architecture. Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Rigid bodies** — circles, capsules, segments, polygons (rounded too);
+  static, kinematic, dynamic; proper center-of-mass handling.
+- **Soft-step solver** with graph-colored parallel solving. Worker count is
+  *non-semantic*: 1, 2 or 8 threads produce bit-identical trajectories, and
+  a CI gate proves it.
+- **Joints** — distance, revolute, prismatic, weld, wheel; motors, limits and
+  suspension springs; runtime tuning that wakes and journals.
+- **Sleeping** (island-coupled), **continuous collision** for bullets,
+  **contact events** with strict begin/end bookending.
+- **Rollback-native**: flat snapshots restore bit-exactly; a command journal
+  records a session and replays it into a fresh world, byte for byte.
+- **Queries** — closest ray cast and AABB overlap, canonical ordering, exact
+  hundreds of kilometers from the origin (positions are f64).
+- **Diagnostics** — deterministic counters, wall-clock phase profile,
+  allocator hooks for engines that own their memory.
+
+Determinism is the contract, not a feature flag: every commit must produce
+bit-identical simulation on Linux/Windows/macOS, x64 and arm64,
+GCC/Clang/MSVC. CI runs fourteen gated hash lines across six platform cells
+and fails on a single differing bit; Debug and Release must agree too, and a
+dual-backend harness holds behavior inside bands anchored to Box2D v3.
+
+## Taste
+
+```c
+m2WorldDef def = m2DefaultWorldDef();
+m2WorldId world = m2CreateWorld(&def);
+
+// A car: two sprung, motorized wheels.
+m2WheelJointDef ride = m2DefaultWheelJointDef();
+ride.bodyIdA = chassis;
+ride.bodyIdB = wheel;
+ride.enableMotor = true;
+ride.motorSpeed = -12.0f; // rad/s
+ride.maxMotorTorque = 20.0f;
+m2CreateWheelJoint(world, &ride);
+
+// Rollback netcode in four lines.
+int32_t size = m2World_SnapshotSize(world);
+m2World_Snapshot(world, buffer, size);
+/* ... mispredicted steps ... */
+m2World_Restore(world, buffer, size); // bit-exact resimulation from here
+```
+
+Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Building
 

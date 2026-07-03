@@ -629,7 +629,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         return m2_nullWorldId;
     }
 
-    m2World* world = calloc(1, sizeof(m2World));
+    m2World* world = m2AllocZeroed(sizeof(m2World));
     if (world == NULL)
     {
         return m2_nullWorldId;
@@ -649,7 +649,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
 #define M2_ALLOC(field, count, type)                                                               \
     do                                                                                             \
     {                                                                                              \
-        world->field = calloc((size_t)(count), sizeof(type));                                      \
+        world->field = m2AllocZeroed((size_t)(count) * sizeof(type));                              \
         ok = ok && world->field != NULL;                                                           \
     } while (0)
     M2_ALLOC(transforms, cap, m2Transform);
@@ -725,12 +725,12 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(deltaPositions, cap, m2Vec2);
     M2_ALLOC(deltaRotations, cap, m2Rot);
     world->constraintScratch =
-        calloc((size_t)world->pairCapacity, (size_t)m2ContactConstraintSize());
+        m2AllocZeroed((size_t)world->pairCapacity * (size_t)m2ContactConstraintSize());
     ok = ok && world->constraintScratch != NULL;
 #undef M2_ALLOC
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
-        world->treeNodes[t] = calloc((size_t)world->treeNodeCapacity, sizeof(m2TreeNode));
+        world->treeNodes[t] = m2AllocZeroed((size_t)world->treeNodeCapacity * sizeof(m2TreeNode));
         ok = ok && world->treeNodes[t] != NULL;
     }
     if (!ok)
@@ -788,83 +788,83 @@ void m2DestroyWorld(m2WorldId worldId)
     {
         return;
     }
-    free(world->transforms);
-    free(world->linearVelocities);
-    free(world->angularVelocities);
-    free(world->gravityScales);
-    free(world->userData);
-    free(world->types);
-    free(world->alive);
-    free(world->bodyShapeHead);
-    free(world->invMass);
-    free(world->invInertia);
-    free(world->localCenters);
-    free(world->asleep);
-    free(world->sleepTimes);
-    free(world->bullets);
-    free(world->ccdPrevPositions);
-    free(world->islandParent);
-    free(world->islandDisturbed);
-    free(world->generations);
-    free(world->freeQueue);
-    free(world->shapeGeometry);
-    free(world->shapeDensity);
-    free(world->shapeFriction);
-    free(world->shapeRestitution);
-    free(world->shapeUserData);
-    free(world->shapeBody);
-    free(world->shapeNext);
-    free(world->shapeAlive);
-    free(world->shapeGenerations);
-    free(world->shapeFreeQueue);
-    free(world->proxyIds);
-    free(world->inMoved);
-    free(world->moved);
-    free(world->jointType);
-    free(world->jointAlive);
-    free(world->jointBodyA);
-    free(world->jointBodyB);
-    free(world->jointLocalAnchorA);
-    free(world->jointLocalAnchorB);
-    free(world->jointLength);
-    free(world->jointHertz);
-    free(world->jointDamping);
-    free(world->jointImpulse);
-    free(world->jointFlags);
-    free(world->jointMotorSpeed);
-    free(world->jointMaxMotor);
-    free(world->jointLower);
-    free(world->jointUpper);
-    free(world->jointLocalAxisA);
-    free(world->jointRefAngle);
-    free(world->jointMotorImpulse);
-    free(world->jointLowerImpulse);
-    free(world->jointUpperImpulse);
-    free(world->jointGenerations);
-    free(world->jointFreeQueue);
-    free(world->pairKeys);
-    free(world->pairTouching);
-    free(world->touchingScratch);
-    free(world->queryScratch);
-    free(world->colorMasks);
-    free(world->constraintColors);
-    free(world->colorOrder);
+    m2Free(world->transforms);
+    m2Free(world->linearVelocities);
+    m2Free(world->angularVelocities);
+    m2Free(world->gravityScales);
+    m2Free(world->userData);
+    m2Free(world->types);
+    m2Free(world->alive);
+    m2Free(world->bodyShapeHead);
+    m2Free(world->invMass);
+    m2Free(world->invInertia);
+    m2Free(world->localCenters);
+    m2Free(world->asleep);
+    m2Free(world->sleepTimes);
+    m2Free(world->bullets);
+    m2Free(world->ccdPrevPositions);
+    m2Free(world->islandParent);
+    m2Free(world->islandDisturbed);
+    m2Free(world->generations);
+    m2Free(world->freeQueue);
+    m2Free(world->shapeGeometry);
+    m2Free(world->shapeDensity);
+    m2Free(world->shapeFriction);
+    m2Free(world->shapeRestitution);
+    m2Free(world->shapeUserData);
+    m2Free(world->shapeBody);
+    m2Free(world->shapeNext);
+    m2Free(world->shapeAlive);
+    m2Free(world->shapeGenerations);
+    m2Free(world->shapeFreeQueue);
+    m2Free(world->proxyIds);
+    m2Free(world->inMoved);
+    m2Free(world->moved);
+    m2Free(world->jointType);
+    m2Free(world->jointAlive);
+    m2Free(world->jointBodyA);
+    m2Free(world->jointBodyB);
+    m2Free(world->jointLocalAnchorA);
+    m2Free(world->jointLocalAnchorB);
+    m2Free(world->jointLength);
+    m2Free(world->jointHertz);
+    m2Free(world->jointDamping);
+    m2Free(world->jointImpulse);
+    m2Free(world->jointFlags);
+    m2Free(world->jointMotorSpeed);
+    m2Free(world->jointMaxMotor);
+    m2Free(world->jointLower);
+    m2Free(world->jointUpper);
+    m2Free(world->jointLocalAxisA);
+    m2Free(world->jointRefAngle);
+    m2Free(world->jointMotorImpulse);
+    m2Free(world->jointLowerImpulse);
+    m2Free(world->jointUpperImpulse);
+    m2Free(world->jointGenerations);
+    m2Free(world->jointFreeQueue);
+    m2Free(world->pairKeys);
+    m2Free(world->pairTouching);
+    m2Free(world->touchingScratch);
+    m2Free(world->queryScratch);
+    m2Free(world->colorMasks);
+    m2Free(world->constraintColors);
+    m2Free(world->colorOrder);
     m2ThreadPoolDestroy(world->pool);
-    free(world->beginEvents);
-    free(world->endEvents);
-    free(world->pendingEndEvents);
-    free(world->pairScratch);
-    free(world->manifolds);
-    free(world->oldPairScratch);
-    free(world->manifoldScratch);
-    free(world->deltaPositions);
-    free(world->deltaRotations);
-    free(world->constraintScratch);
+    m2Free(world->beginEvents);
+    m2Free(world->endEvents);
+    m2Free(world->pendingEndEvents);
+    m2Free(world->pairScratch);
+    m2Free(world->manifolds);
+    m2Free(world->oldPairScratch);
+    m2Free(world->manifoldScratch);
+    m2Free(world->deltaPositions);
+    m2Free(world->deltaRotations);
+    m2Free(world->constraintScratch);
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
-        free(world->treeNodes[t]);
+        m2Free(world->treeNodes[t]);
     }
-    free(world);
+    m2Free(world);
     s_worlds[worldId.index1 - 1] = NULL;
 }
 

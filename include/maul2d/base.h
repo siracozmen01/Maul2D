@@ -4,6 +4,7 @@
 #ifndef MAUL2D_BASE_H
 #define MAUL2D_BASE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -12,12 +13,19 @@ extern "C"
 #endif
 
 #define M2_VERSION_MAJOR 0
-#define M2_VERSION_MINOR 0
-#define M2_VERSION_PATCH 1
+#define M2_VERSION_MINOR 1
+#define M2_VERSION_PATCH 0
 
     /// Library version, encoded as major * 10000 + minor * 100 + patch.
     /// Thread class: reader (callable from any thread, no world required).
     int32_t m2GetVersion(void);
+
+    /// Routes every internal allocation through your hooks. Set BEFORE
+    /// creating any world and never change it while worlds exist. The
+    /// zeroFn contract: returned memory must be zero-initialized.
+    typedef void* m2AllocZeroedFn(size_t bytes);
+    typedef void m2FreeFn(void* memory);
+    void m2SetAllocator(m2AllocZeroedFn* allocZeroed, m2FreeFn* freeFn);
 
     /// FNV-1a 64-bit hash over a byte range. This is the hash used by the
     /// determinism gates; its constants are frozen and will never change.

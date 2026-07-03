@@ -14,6 +14,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int s_failures = 0;
@@ -230,8 +231,59 @@ static uint64_t HashSweep(void)
     return h;
 }
 
+static int32_t s_liveAllocations = 0;
+static int32_t s_totalAllocations = 0;
+
+static void* CountingAlloc(size_t bytes)
+{
+    s_liveAllocations += 1;
+    s_totalAllocations += 1;
+    return calloc(1, bytes);
+}
+
+static void CountingFree(void* memory)
+{
+    if (memory != NULL)
+    {
+        s_liveAllocations -= 1;
+    }
+    free(memory);
+}
+
+static void TestAllocatorHooks(void)
+{
+    // Every internal allocation flows through the hooks, and a world's
+    // whole lifetime balances to zero live blocks.
+    m2SetAllocator(CountingAlloc, CountingFree);
+
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.workerCount = 2; // the thread pool must ride the hooks too
+    m2WorldId world = m2CreateWorld(&def);
+    CHECK(s_totalAllocations > 10, "world creation allocates through the hooks");
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 2.0};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle circle = {{0.0f, 0.0f}, 0.4f};
+    m2CreateCircleShape(body, &sd, &circle);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2DestroyWorld(world);
+    CHECK(s_liveAllocations == 0, "destroying the world frees every block");
+
+    m2SetAllocator(NULL, NULL); // back to defaults for the other tests
+}
+
 int main(void)
 {
+    TestAllocatorHooks();
     printf("maul2d version %d\n", m2GetVersion());
 
     TestAccuracy();

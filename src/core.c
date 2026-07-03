@@ -6,6 +6,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <stdlib.h>
+
+static void* DefaultAllocZeroed(size_t bytes)
+{
+    return calloc(1, bytes);
+}
+
+static void DefaultFree(void* memory)
+{
+    free(memory);
+}
+
+static m2AllocZeroedFn* s_alloc = DefaultAllocZeroed;
+static m2FreeFn* s_free = DefaultFree;
+
+void m2SetAllocator(m2AllocZeroedFn* allocZeroed, m2FreeFn* freeFn)
+{
+    s_alloc = allocZeroed != NULL ? allocZeroed : DefaultAllocZeroed;
+    s_free = freeFn != NULL ? freeFn : DefaultFree;
+}
+
+// Internal faces (world_internal.h).
+void* m2AllocZeroed(size_t bytes)
+{
+    return s_alloc(bytes);
+}
+
+void m2Free(void* memory)
+{
+    s_free(memory);
+}
+
 int32_t m2GetVersion(void)
 {
     return M2_VERSION_MAJOR * 10000 + M2_VERSION_MINOR * 100 + M2_VERSION_PATCH;

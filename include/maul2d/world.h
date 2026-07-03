@@ -38,6 +38,14 @@ extern "C"
         int32_t internalValue;
     } m2WorldDef;
 
+    /// THREAD CLASSES. Every API is tagged reader or writer. Readers
+    /// (queries, getters, diagnostics) may run concurrently with each
+    /// other but never during m2World_Step or any writer. Writers
+    /// (create/destroy, setters, impulses, Step itself) require
+    /// exclusive access to their world. Distinct worlds are fully
+    /// independent. The solver's own workers are internal and do not
+    /// change any of this.
+
     /// Returns a def with pinned defaults and a valid cookie.
     /// Thread class: reader (pure).
     m2WorldDef m2DefaultWorldDef(void);

@@ -10,6 +10,9 @@
 
 #include "maul2d/base.h"
 
+void* m2AllocZeroed(size_t bytes);
+void m2Free(void* memory);
+
 #include <stdlib.h>
 
 #define M2_MAX_WORKERS 8
@@ -221,7 +224,7 @@ m2ThreadPool* m2ThreadPoolCreate(int32_t workerCount)
     {
         return NULL;
     }
-    m2ThreadPool* pool = (m2ThreadPool*)calloc(1, sizeof(m2ThreadPool));
+    m2ThreadPool* pool = (m2ThreadPool*)m2AllocZeroed(sizeof(m2ThreadPool));
     if (pool == NULL)
     {
         return NULL;
@@ -271,7 +274,7 @@ void m2ThreadPoolDestroy(m2ThreadPool* pool)
     MutexDestroy(&pool->mutex);
     CondDestroy(&pool->wake);
     CondDestroy(&pool->done);
-    free(pool);
+    m2Free(pool);
 }
 
 void m2ThreadPoolRun(m2ThreadPool* pool, m2ParallelFn* fn, void* ctx, int32_t itemCount)
