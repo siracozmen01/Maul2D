@@ -121,13 +121,17 @@ typedef struct m2World
     // Solver scratch (slice 4): all step-transient, zeroed at prepare.
     m2Vec2* deltaPositions; // f32 position deltas within the step
     m2Rot* deltaRotations;
-    void* constraintScratch;   // m2ContactConstraint[pairCapacity]
-    int32_t* islandParent;     // union-find scratch (step-transient)
-    uint8_t* islandDisturbed;  // island flags scratch (step-transient)
-    m2Pos2* ccdPrevPositions;  // bullet substep origins (step-transient)
-    uint8_t* touchingScratch;  // pair-touching carry scratch (step-transient)
-    int32_t* queryScratch;     // shapeCapacity ints (query-transient, never snapshot)
-    m2ThreadPool* pool;        // NULL = serial; never snapshot state
+    void* constraintScratch;  // m2ContactConstraint[pairCapacity]
+    int32_t* islandParent;    // union-find scratch (step-transient)
+    uint8_t* islandDisturbed; // island flags scratch (step-transient)
+    m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)
+    uint8_t* touchingScratch; // pair-touching carry scratch (step-transient)
+    int32_t* queryScratch;    // shapeCapacity ints (query-transient, never snapshot)
+    m2ThreadPool* pool;       // NULL = serial; never snapshot state
+    m2Profile profile;        // diagnostics only (never walked/hashed)
+    int32_t lastConstraintCount;
+    int32_t lastGraphColors;
+    int32_t lastOverflow;
     uint32_t* colorMasks;      // per body: colors already used (step-transient)
     uint8_t* constraintColors; // per constraint (step-transient)
     int32_t* colorOrder;       // constraints sorted by color (step-transient)

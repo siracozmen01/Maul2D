@@ -54,6 +54,36 @@ extern "C"
     /// Generation-checked liveness. Thread class: reader.
     bool m2World_IsValid(m2WorldId worldId);
 
+    /// Diagnostics. Counters are derived from simulation state and are
+    /// therefore deterministic; profile times are wall-clock and are
+    /// NOT - neither is ever snapshot state or hash input.
+    typedef struct m2Profile
+    {
+        float stepMs;     // whole m2World_Step
+        float pairsMs;    // broadphase + pair update
+        float contactsMs; // narrowphase manifolds
+        float solveMs;    // solver incl. CCD
+        float sleepMs;    // islands + sleep accounting
+    } m2Profile;
+
+    typedef struct m2Counters
+    {
+        int32_t bodies;
+        int32_t awakeBodies;
+        int32_t shapes;
+        int32_t joints;
+        int32_t pairs;
+        int32_t touchingPairs;
+        int32_t constraints;         // solved last step
+        int32_t graphColors;         // colors used last step
+        int32_t overflowConstraints; // serial bucket last step
+        int32_t stepCount;
+    } m2Counters;
+
+    /// Snapshot of the last completed Step. Thread class: reader.
+    m2Profile m2World_GetProfile(m2WorldId worldId);
+    m2Counters m2World_GetCounters(m2WorldId worldId);
+
     /// Advance the simulation. dt in seconds, substepCount >= 1.
     /// Deterministic: identical worlds and inputs produce bit-identical
     /// state on every supported platform. Thread class: writer.

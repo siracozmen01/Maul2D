@@ -27,4 +27,8 @@ void m2ThreadPoolDestroy(m2ThreadPool* pool);
 // every range is done. pool == NULL runs everything inline.
 void m2ThreadPoolRun(m2ThreadPool* pool, m2ParallelFn* fn, void* ctx, int32_t itemCount);
 
+// Monotonic wall clock for diagnostics only - profile numbers are
+// never simulation state, never snapshot, never hashed.
+uint64_t m2TimeNowNs(void);
+
 #endif // MAUL2D_PLATFORM_THREAD_H

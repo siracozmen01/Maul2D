@@ -165,8 +165,93 @@ static uint64_t DeterminismSweep(void)
     return h;
 }
 
+static void TestCountersAndProfile(void)
+{
+    // Counters are state-derived and deterministic; profile is wall
+    // clock and merely sane. Neither may touch the simulation hash.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 32;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    for (int32_t i = 0; i < 6; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-2.5 + (double)i, 0.55};
+        m2BodyId body = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon box = m2MakeBox(0.45f, 0.45f);
+        m2CreatePolygonShape(body, &sd, &box);
+    }
+
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2Counters counters = m2World_GetCounters(world);
+    CHECK(counters.bodies == 7 && counters.shapes == 7, "body and shape counts");
+    CHECK(counters.awakeBodies == 7, "everyone still awake early on");
+    CHECK(counters.joints == 0, "no joints in this scene");
+    CHECK(counters.touchingPairs == 6, "six boxes rest on the slab");
+    CHECK(counters.pairs >= counters.touchingPairs,
+          "speculative pairs may outnumber touching ones");
+    CHECK(counters.constraints == 6, "one constraint per touching pair");
+    CHECK(counters.graphColors >= 1 && counters.overflowConstraints == 0,
+          "colored without overflow");
+    CHECK(counters.stepCount == 10, "step count mirrors the world");
+
+    m2Profile profile = m2World_GetProfile(world);
+    CHECK(profile.stepMs > 0.0f, "a step takes measurable time");
+    CHECK(profile.pairsMs >= 0.0f && profile.contactsMs >= 0.0f && profile.solveMs >= 0.0f &&
+              profile.sleepMs >= 0.0f,
+          "phase times are sane");
+
+    // Diagnostics never touch the simulation: hash before == after.
+    uint64_t before = m2World_Hash(world);
+    for (int32_t i = 0; i < 25; ++i)
+    {
+        m2World_GetCounters(world);
+        m2World_GetProfile(world);
+    }
+    CHECK(m2World_Hash(world) == before, "diagnostics are read-only");
+
+    // Twin world, same ops: counters identical (determinism).
+    m2WorldId twin = m2CreateWorld(&def);
+    m2BodyId floor2 = m2CreateBody(twin, &fd);
+    m2CreatePolygonShape(floor2, &fs, &slab);
+    for (int32_t i = 0; i < 6; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-2.5 + (double)i, 0.55};
+        m2BodyId body = m2CreateBody(twin, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon box = m2MakeBox(0.45f, 0.45f);
+        m2CreatePolygonShape(body, &sd, &box);
+    }
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        m2World_Step(twin, 1.0f / 60.0f, 4);
+    }
+    m2Counters twinCounters = m2World_GetCounters(twin);
+    CHECK(memcmp(&counters, &twinCounters, sizeof(m2Counters)) == 0,
+          "twin worlds report identical counters");
+
+    m2DestroyWorld(twin);
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestCountersAndProfile();
     TestDefCookies();
     TestRollbackIdentity();
     TestIdSemantics();

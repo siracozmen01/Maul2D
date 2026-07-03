@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sirac Ozmen
 
+// For clock_gettime/CLOCK_MONOTONIC under strict C17.
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L
+#endif
+
 #include "platform_thread.h"
 
 #include "maul2d/base.h"
@@ -102,6 +107,28 @@ static void CondSignal(m2Cond* c)
     pthread_cond_signal(c);
 }
 
+#endif
+
+#ifdef _WIN32
+uint64_t m2TimeNowNs(void)
+{
+    static LARGE_INTEGER frequency;
+    if (frequency.QuadPart == 0)
+    {
+        QueryPerformanceFrequency(&frequency);
+    }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return (uint64_t)((double)now.QuadPart * 1.0e9 / (double)frequency.QuadPart);
+}
+#else
+#include <time.h>
+uint64_t m2TimeNowNs(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
 #endif
 
 typedef struct m2Worker

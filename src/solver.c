@@ -1198,6 +1198,13 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
     int32_t colorStart[M2_GRAPH_COLORS + 2];
     ColorConstraints(world, constraints, constraintCount, colorStart);
+    world->lastConstraintCount = constraintCount;
+    world->lastOverflow = colorStart[M2_GRAPH_COLORS + 1] - colorStart[M2_GRAPH_COLORS];
+    world->lastGraphColors = 0;
+    for (int32_t c = 0; c < M2_GRAPH_COLORS; ++c)
+    {
+        world->lastGraphColors += colorStart[c + 1] > colorStart[c] ? 1 : 0;
+    }
 
     // The push clamp is pre-divided by the static mass scale so the
     // later massScale multiply cannot weaken it (reference detail).

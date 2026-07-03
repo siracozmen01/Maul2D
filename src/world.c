@@ -897,6 +897,9 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     }
     world->pendingEndCount = 0;
 
+    // Wall-clock diagnostics only; never fed back into simulation.
+    uint64_t tStart = m2TimeNowNs();
+
     // Collide first (reference order): broadphase + narrowphase produce
     // fresh manifolds from current positions, then the solver moves the
     // world. Warm-start impulses arrive via the manifold carry.
@@ -923,7 +926,9 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     world->oldPairCount = world->pairCount;
     StashContacts(world);
     UpdatePairs(world);
+    uint64_t tPairs = m2TimeNowNs();
     UpdateContacts(world);
+    uint64_t tContacts = m2TimeNowNs();
 
     // Touch transitions in canonical contact order (serial compaction:
     // the topic-08 event law, scalar edition).
@@ -947,8 +952,18 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     }
 
     m2UpdateIslandsAndWake(world);
+    uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);
+    uint64_t tSolve = m2TimeNowNs();
     m2UpdateSleep(world, dt);
+    uint64_t tEnd = m2TimeNowNs();
+
+    world->profile.stepMs = (float)((double)(tEnd - tStart) * 1.0e-6);
+    world->profile.pairsMs = (float)((double)(tPairs - tStart) * 1.0e-6);
+    world->profile.contactsMs = (float)((double)(tContacts - tPairs) * 1.0e-6);
+    world->profile.solveMs = (float)((double)(tSolve - tIslands) * 1.0e-6);
+    world->profile.sleepMs =
+        (float)((double)(tIslands - tContacts) * 1.0e-6 + (double)(tEnd - tSolve) * 1.0e-6);
 
     world->stepCount += 1;
 }
@@ -1669,6 +1684,55 @@ m2ContactEvents m2World_GetContactEvents(m2WorldId worldId)
     events.endEvents = world->endEvents;
     events.endCount = world->endEventCount;
     return events;
+}
+
+m2Profile m2World_GetProfile(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        m2Profile zero = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        return zero;
+    }
+    return world->profile;
+}
+
+m2Counters m2World_GetCounters(m2WorldId worldId)
+{
+    m2Counters counters;
+    memset(&counters, 0, sizeof(counters));
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return counters;
+    }
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0)
+        {
+            continue;
+        }
+        counters.bodies += 1;
+        counters.awakeBodies += world->asleep[i] == 0 ? 1 : 0;
+    }
+    for (int32_t i = 0; i < world->maxShapeIndex; ++i)
+    {
+        counters.shapes += world->shapeAlive[i] != 0 ? 1 : 0;
+    }
+    for (int32_t i = 0; i < world->maxJointIndex; ++i)
+    {
+        counters.joints += world->jointAlive[i] != 0 ? 1 : 0;
+    }
+    counters.pairs = world->pairCount;
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        counters.touchingPairs += world->pairTouching[i] != 0 ? 1 : 0;
+    }
+    counters.constraints = world->lastConstraintCount;
+    counters.graphColors = world->lastGraphColors;
+    counters.overflowConstraints = world->lastOverflow;
+    counters.stepCount = world->stepCount;
+    return counters;
 }
 
 static int32_t AllocateJoint(m2World* world)
