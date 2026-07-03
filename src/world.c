@@ -1712,6 +1712,78 @@ void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse)
     world->sleepTimes[index] = 0.0f;
 }
 
+void m2Body_SetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            m2Pos2 position;
+            m2Rot rotation;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.position = position;
+        record.rotation = rotation;
+        m2JournalRecord(world, m2_opSetTransform, &record, (int32_t)sizeof(record));
+    }
+
+    // Whatever this body was resting on - or holding up - must notice.
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t a = world->shapeBody[(int32_t)(world->pairKeys[i] >> 32)];
+        int32_t b = world->shapeBody[(int32_t)(world->pairKeys[i] & 0xFFFFFFFFu)];
+        if (a != index && b != index)
+        {
+            continue;
+        }
+        int32_t other = a == index ? b : a;
+        if (world->types[other] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[other] = 0;
+            world->sleepTimes[other] = 0.0f;
+        }
+    }
+
+    world->transforms[index].p = position;
+    world->transforms[index].q = rotation;
+    if (world->types[index] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[index] = 0;
+        world->sleepTimes[index] = 0.0f;
+    }
+
+    // Broadphase refresh right now: the next step's pair update must
+    // see the new home, not the old one.
+    for (int32_t shape = world->bodyShapeHead[index]; shape != -1; shape = world->shapeNext[shape])
+    {
+        if (world->proxyIds[shape] == M2_NULL_NODE)
+        {
+            continue;
+        }
+        m2AABB tight = ShapeTightAABB(world, shape);
+        int32_t tree = ShapeTreeIndex(world, shape);
+        if (!m2AABB_Contains(world->treeNodes[tree][world->proxyIds[shape]].aabb, tight))
+        {
+            m2Tree_Move(&world->trees[tree], world->treeNodes[tree], world->proxyIds[shape],
+                        Fatten(tight));
+        }
+        PushMoved(world, shape);
+    }
+}
+
 bool m2Body_IsAwake(m2BodyId bodyId)
 {
     m2World* world = GetBodyWorld(bodyId);

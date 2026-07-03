@@ -290,8 +290,40 @@ static void TestTowerSleeps(void)
     m2DestroyWorld(world);
 }
 
+static void TestTeleportWakesBystanders(void)
+{
+    // Pull the support out from under a sleeping stack by teleporting
+    // it away: the sleepers must wake and fall, not float.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    AddSlab(world, -0.5);
+    m2BodyId support = AddBox(world, 0.0, 0.55);
+    m2BodyId rider = AddBox(world, 0.0, 1.57);
+
+    for (int32_t i = 0; i < 200; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(support) && !m2Body_IsAwake(rider), "stack asleep");
+    double riderY = m2Body_GetPosition(rider).y;
+
+    m2Body_SetTransform(support, (m2Pos2){50.0, 0.55}, (m2Rot){1.0f, 0.0f});
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_IsAwake(rider), "the rider notices its support vanish");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(rider).y < riderY - 0.5, "and falls");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestTeleportWakesBystanders();
     TestTowerSleeps();
     TestPyramidSleeps();
     TestKinematicWakesSleepers();

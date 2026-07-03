@@ -133,6 +133,10 @@ extern "C"
     /// embedded snapshot and re-applies the stream; deterministic id
     /// re-minting is asserted along the way. Restore during recording
     /// stops the journal (recorded limitation). Thread class: writer.
+    /// The journal's fixed cost: header plus the embedded snapshot.
+    /// Size tapes as this plus room for your ops. Thread class: reader.
+    int32_t m2World_JournalBaseSize(m2WorldId worldId);
+
     bool m2World_StartJournal(m2WorldId worldId, void* buffer, int32_t capacity);
     int32_t m2World_StopJournal(m2WorldId worldId);
     bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size);

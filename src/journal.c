@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 4u
+#define M2_JOURNAL_VERSION 5u
 
 typedef struct m2JournalHeader
 {
@@ -45,6 +45,16 @@ void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t by
     world->journal[world->journalCursor] = op;
     memcpy(world->journal + world->journalCursor + 1, payload, (size_t)bytes);
     world->journalCursor += 1 + bytes;
+}
+
+int32_t m2World_JournalBaseSize(m2WorldId worldId)
+{
+    int32_t snapshot = m2World_SnapshotSize(worldId);
+    if (snapshot <= 0)
+    {
+        return 0;
+    }
+    return (int32_t)sizeof(m2JournalHeader) + snapshot;
 }
 
 bool m2World_StartJournal(m2WorldId worldId, void* buffer, int32_t capacity)
@@ -165,6 +175,13 @@ typedef struct m2OpJointParam
     float value;
     uint8_t param;
 } m2OpJointParam;
+
+typedef struct m2OpSetTransform
+{
+    m2BodyId body;
+    m2Pos2 position;
+    m2Rot rotation;
+} m2OpSetTransform;
 
 typedef struct m2OpBodyVec
 {
@@ -371,6 +388,13 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
                 return false;
             }
             m2SetJointParamInternal(target, jp.joint, jp.param, jp.value);
+            break;
+        }
+        case m2_opSetTransform:
+        {
+            M2_READ_OP(m2OpSetTransform, st);
+            st.body.world0 = here;
+            m2Body_SetTransform(st.body, st.position, st.rotation);
             break;
         }
         default:

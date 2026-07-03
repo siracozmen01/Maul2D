@@ -74,6 +74,13 @@ extern "C"
     /// Impulses act instantly on the velocity; the world point's arm
     /// is measured from the center of mass. Dynamic bodies only; the
     /// body wakes. Thread class: writer.
+    /// Teleports the body: position and rotation snap, velocities are
+    /// untouched, the broadphase refreshes immediately, and the body
+    /// plus everything it was touching wake up (a sleeping stack must
+    /// notice its support vanishing). Teleporting is not a sweep - no
+    /// tunneling protection applies. Journaled. Thread class: writer.
+    void m2Body_SetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation);
+
     void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint);
     void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse);
 

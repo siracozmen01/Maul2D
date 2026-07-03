@@ -148,6 +148,7 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Body_ApplyLinearImpulse(ram, (m2Vec2){0.4f, 0.9f}, (m2Pos2){9.1, 2.0});
     m2Body_ApplyAngularImpulse(ram, 0.3f);
     m2Joint_SetMotorSpeed(pressJoint, 0.7f);
+    m2Body_SetTransform(ram, (m2Pos2){8.6, 2.4}, m2MakeRot(0.3f)); // op 17
     m2DestroyShape(sacrificial);
     for (int32_t i = 0; i < 15; ++i)
     {

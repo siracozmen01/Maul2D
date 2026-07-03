@@ -319,8 +319,42 @@ static void TestKineticEnergy(void)
     m2DestroyWorld(b);
 }
 
+static void TestTeleport(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 5.0};
+    bd.linearVelocity = (m2Vec2){1.5f, 0.0f};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle c = {{0.0f, 0.0f}, 0.4f};
+    m2CreateCircleShape(body, &sd, &c);
+
+    m2Body_SetTransform(body, (m2Pos2){100.0, -3.0}, m2MakeRot(0.5f));
+    m2Pos2 p = m2Body_GetPosition(body);
+    CHECK(p.x == 100.0 && p.y == -3.0, "teleport moves the origin exactly");
+    m2Vec2 v = m2Body_GetLinearVelocity(body);
+    CHECK(v.x == 1.5f && v.y == 0.0f, "teleport leaves velocity untouched");
+
+    // Ray finds it at the new home immediately (broadphase refreshed).
+    m2RayCastResult hit =
+        m2World_CastRayClosest(world, (m2Pos2){100.0, 2.0}, (m2Vec2){0.0f, -6.0f});
+    CHECK(hit.hit, "queries see the teleported body at once");
+
+    CHECK(m2World_JournalBaseSize(world) == 32 + m2World_SnapshotSize(world),
+          "journal base size is header plus snapshot");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestTeleport();
     TestKineticEnergy();
     TestCountersAndProfile();
     TestDefCookies();
