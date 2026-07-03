@@ -193,7 +193,12 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
             m2Vec2 lcB = world->localCenters[bodyB];
             cp->rA = Rotate(qA, (m2Vec2){mp->anchorA.x - lcA.x, mp->anchorA.y - lcA.y});
             cp->rB = Rotate(qB, (m2Vec2){mp->anchorB.x - lcB.x, mp->anchorB.y - lcB.y});
-            cp->baseSeparation = mp->separation;
+            // Reference factoring: fold the prepare-time anchor gap in,
+            // then track the ABSOLUTE rotated gap during solve - the
+            // incremental (rs - r0) form cancels catastrophically at
+            // small rotations and feeds the bias noise.
+            cp->baseSeparation = mp->separation - ((cp->rB.x - cp->rA.x) * c->normal.x +
+                                                   (cp->rB.y - cp->rA.y) * c->normal.y);
             cp->normalImpulse = mp->normalImpulse;
             cp->tangentImpulse = mp->tangentImpulse;
             cp->id = mp->id;
@@ -286,8 +291,7 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
             // the substep deltas only measure the current separation.
             m2Vec2 rsA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
             m2Vec2 rsB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
-            m2Vec2 ds = {dp.x + rsB.x - cp->rB.x - (rsA.x - cp->rA.x),
-                         dp.y + rsB.y - cp->rB.y - (rsA.y - cp->rA.y)};
+            m2Vec2 ds = {dp.x + rsB.x - rsA.x, dp.y + rsB.y - rsA.y};
             float s = cp->baseSeparation + ds.x * normal.x + ds.y * normal.y;
 
             // Reference bias selection: the push clamp lands BEFORE the

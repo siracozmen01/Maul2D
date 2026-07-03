@@ -245,8 +245,54 @@ static uint64_t IslandSweepHash(void)
     return h;
 }
 
+static void TestTowerSleeps(void)
+{
+    // Regression tripwire for solver-schedule changes: a plain 8-box
+    // tower must fall asleep promptly. The F-T8 hunts showed schedule
+    // combinations that leave exactly this scene grinding forever.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.friction = 0.6f;
+    m2Polygon unit = m2MakeBox(0.5f, 0.5f);
+    m2BodyId boxes[8];
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){0.0, 0.55 + 1.02 * (double)i};
+        boxes[i] = m2CreateBody(world, &bd);
+        m2CreatePolygonShape(boxes[i], &sd, &unit);
+    }
+    int32_t sleepStep = -1;
+    for (int32_t step = 0; step < 300 && sleepStep < 0; ++step)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        bool allAsleep = true;
+        for (int32_t i = 0; i < 8; ++i)
+        {
+            allAsleep = allAsleep && !m2Body_IsAwake(boxes[i]);
+        }
+        if (allAsleep)
+        {
+            sleepStep = step;
+        }
+    }
+    CHECK(sleepStep >= 0 && sleepStep < 250, "an eight-box tower sleeps promptly");
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestTowerSleeps();
     TestPyramidSleeps();
     TestKinematicWakesSleepers();
     TestSleepRollback();
