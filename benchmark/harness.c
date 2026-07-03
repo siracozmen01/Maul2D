@@ -397,6 +397,170 @@ static SceneResult RunMaulScene(const char* name, MaulScene (*create)(void), int
     return result;
 }
 
+// --- Perf-tracking scenes (timings reported, never banded) --------------
+// pyramid30: 465 bodies of pure contact pressure. jointfarm: eighty
+// running machines. Behavior bands stay loose - no explosions, stay
+// calm - because these rows exist to watch step-time medians drift
+// across commits, not to referee physics.
+
+static SceneWorld ScenePyramid30(void)
+{
+    SceneWorld s = {0};
+    b2WorldDef def = b2DefaultWorldDef();
+    s.world = b2CreateWorld(&def);
+    b2BodyDef gd = b2DefaultBodyDef();
+    gd.position = (b2Vec2){0.0f, -1.0f};
+    b2BodyId ground = b2CreateBody(s.world, &gd);
+    b2ShapeDef gs = b2DefaultShapeDef();
+    b2Polygon slab = b2MakeBox(80.0f, 1.0f);
+    b2CreatePolygonShape(ground, &gs, &slab);
+    b2Polygon box = b2MakeBox(0.5f, 0.5f);
+    b2ShapeDef sd = b2DefaultShapeDef();
+    sd.material.friction = 0.6f;
+    int32_t rows = 30;
+    for (int32_t i = 0; i < rows; ++i)
+    {
+        for (int32_t j = i; j < rows; ++j)
+        {
+            b2BodyDef bd = b2DefaultBodyDef();
+            bd.type = b2_dynamicBody;
+            bd.position = (b2Vec2){(float)j - 0.5f * (float)(rows + i), 0.55f + 1.05f * (float)i};
+            b2BodyId body = b2CreateBody(s.world, &bd);
+            b2CreatePolygonShape(body, &sd, &box);
+            s.bodies[s.bodyCount++] = body;
+        }
+    }
+    return s;
+}
+
+static MaulScene MaulPyramid30(void)
+{
+    MaulScene s = {0};
+    m2WorldDef def = m2DefaultWorldDef();
+    s.world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -1.0};
+    m2BodyId ground = m2CreateBody(s.world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(80.0f, 1.0f);
+    m2CreatePolygonShape(ground, &gs, &slab);
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.friction = 0.6f;
+    int32_t rows = 30;
+    for (int32_t i = 0; i < rows; ++i)
+    {
+        for (int32_t j = i; j < rows; ++j)
+        {
+            m2BodyDef bd = m2DefaultBodyDef();
+            bd.type = m2_dynamicBody;
+            bd.position = (m2Pos2){(double)j - 0.5 * (double)(rows + i), 0.55 + 1.05 * (double)i};
+            m2BodyId body = m2CreateBody(s.world, &bd);
+            m2CreatePolygonShape(body, &sd, &box);
+            s.bodies[s.bodyCount++] = body;
+        }
+    }
+    return s;
+}
+
+static SceneWorld SceneJointFarm(void)
+{
+    SceneWorld s = {0};
+    b2WorldDef def = b2DefaultWorldDef();
+    s.world = b2CreateWorld(&def);
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        float x = 4.0f * (float)i;
+        b2BodyDef td = b2DefaultBodyDef();
+        td.position = (b2Vec2){x, 5.0f};
+        b2BodyId tower = b2CreateBody(s.world, &td);
+        b2BodyDef wd = b2DefaultBodyDef();
+        wd.type = b2_dynamicBody;
+        wd.position = (b2Vec2){x, 5.0f};
+        b2BodyId blade = b2CreateBody(s.world, &wd);
+        b2ShapeDef ws = b2DefaultShapeDef();
+        b2Polygon bar = b2MakeBox(1.0f, 0.08f);
+        b2CreatePolygonShape(blade, &ws, &bar);
+        b2RevoluteJointDef mill = b2DefaultRevoluteJointDef();
+        mill.bodyIdA = tower;
+        mill.bodyIdB = blade;
+        mill.enableMotor = true;
+        mill.motorSpeed = 2.5f;
+        mill.maxMotorTorque = 30.0f;
+        b2CreateRevoluteJoint(s.world, &mill);
+        s.bodies[s.bodyCount++] = blade;
+
+        b2BodyDef pd = b2DefaultBodyDef();
+        pd.position = (b2Vec2){x + 2.0f, 8.0f};
+        b2BodyId pivot = b2CreateBody(s.world, &pd);
+        b2BodyDef rd = b2DefaultBodyDef();
+        rd.type = b2_dynamicBody;
+        rd.position = (b2Vec2){x + 2.6f, 8.0f};
+        b2BodyId rod = b2CreateBody(s.world, &rd);
+        b2Polygon rodBox = b2MakeBox(0.6f, 0.05f);
+        b2CreatePolygonShape(rod, &ws, &rodBox);
+        b2RevoluteJointDef swing = b2DefaultRevoluteJointDef();
+        swing.bodyIdA = pivot;
+        swing.bodyIdB = rod;
+        swing.localAnchorB = (b2Vec2){-0.6f, 0.0f};
+        swing.enableLimit = true;
+        swing.lowerAngle = -0.6f;
+        swing.upperAngle = 0.6f;
+        b2CreateRevoluteJoint(s.world, &swing);
+        s.bodies[s.bodyCount++] = rod;
+    }
+    return s;
+}
+
+static MaulScene MaulJointFarm(void)
+{
+    MaulScene s = {0};
+    m2WorldDef def = m2DefaultWorldDef();
+    s.world = m2CreateWorld(&def);
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        double x = 4.0 * (double)i;
+        m2BodyDef td = m2DefaultBodyDef();
+        td.position = (m2Pos2){x, 5.0};
+        m2BodyId tower = m2CreateBody(s.world, &td);
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){x, 5.0};
+        m2BodyId blade = m2CreateBody(s.world, &wd);
+        m2ShapeDef ws = m2DefaultShapeDef();
+        m2Polygon bar = m2MakeBox(1.0f, 0.08f);
+        m2CreatePolygonShape(blade, &ws, &bar);
+        m2RevoluteJointDef mill = m2DefaultRevoluteJointDef();
+        mill.bodyIdA = tower;
+        mill.bodyIdB = blade;
+        mill.enableMotor = true;
+        mill.motorSpeed = 2.5f;
+        mill.maxMotorTorque = 30.0f;
+        m2CreateRevoluteJoint(s.world, &mill);
+        s.bodies[s.bodyCount++] = blade;
+
+        m2BodyDef pd = m2DefaultBodyDef();
+        pd.position = (m2Pos2){x + 2.0, 8.0};
+        m2BodyId pivot = m2CreateBody(s.world, &pd);
+        m2BodyDef rd = m2DefaultBodyDef();
+        rd.type = m2_dynamicBody;
+        rd.position = (m2Pos2){x + 2.6, 8.0};
+        m2BodyId rod = m2CreateBody(s.world, &rd);
+        m2Polygon rodBox = m2MakeBox(0.6f, 0.05f);
+        m2CreatePolygonShape(rod, &ws, &rodBox);
+        m2RevoluteJointDef swing = m2DefaultRevoluteJointDef();
+        swing.bodyIdA = pivot;
+        swing.bodyIdB = rod;
+        swing.localAnchorB = (m2Vec2){-0.6f, 0.0f};
+        swing.enableLimit = true;
+        swing.lowerAngle = -0.6f;
+        swing.upperAngle = 0.6f;
+        m2CreateRevoluteJoint(s.world, &swing);
+        s.bodies[s.bodyCount++] = rod;
+    }
+    return s;
+}
+
 // --- Two-sided behavior trials -----------------------------------------
 // Each trial builds the same scene in both engines and returns one
 // scalar; the bands below referee the pair. Ramps are polygons with
@@ -778,6 +942,26 @@ int main(void)
             failures += 1;
         }
     }
+    SceneResult perf[4];
+    perf[0] = RunScene("b2:pyramid30", ScenePyramid30, 0, 600);
+    perf[1] = RunScene("b2:jointfarm80", SceneJointFarm, 0, 300);
+    perf[2] = RunMaulScene("m2:pyramid30", MaulPyramid30, 0, 600);
+    perf[3] = RunMaulScene("m2:jointfarm80", MaulJointFarm, 0, 300);
+    for (int i = 0; i < 4; ++i)
+    {
+        SceneResult* r = &perf[i];
+        printf("%s,%d,%d,%016llx,%e,%e,%.3f,%.3f\n", r->name, r->bodyCount, r->settleStep,
+               (unsigned long long)r->endHash, r->jitter, r->maxEndSpeed, r->stepMsMedian,
+               r->stepMsP99);
+    }
+    // Loose sanity only: perf scenes must stay calm, never explode.
+    if (perf[2].maxEndSpeed > 1.0 || perf[3].maxEndSpeed > 20.0)
+    {
+        printf("BAND FAIL: perf scene lost its calm (pyr30 %.3f farm %.3f)\n", perf[2].maxEndSpeed,
+               perf[3].maxEndSpeed);
+        failures += 1;
+    }
+
     failures += RunTrials();
 
     return failures > 0 ? 1 : 0;

@@ -791,8 +791,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(touchingScratch, world->pairCapacity, uint8_t);
     M2_ALLOC(queryScratch, cap, int32_t);
     M2_ALLOC(colorMasks, cap, uint32_t);
-    M2_ALLOC(constraintColors, cap, uint8_t);
-    M2_ALLOC(colorOrder, cap, int32_t);
+    // Indexed by CONSTRAINT, not body: one slot per potential pair.
+    // (Sized by body capacity until the pyramid30 perf scene found the
+    // overflow - constraints outnumber bodies in dense stacks.)
+    M2_ALLOC(constraintColors, world->pairCapacity, uint8_t);
+    M2_ALLOC(colorOrder, world->pairCapacity, int32_t);
 
     world->pool = m2ThreadPoolCreate(def->workerCount);
     M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
