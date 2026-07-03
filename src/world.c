@@ -25,7 +25,7 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 10u
+#define M2_SNAPSHOT_VERSION 11u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -370,6 +370,7 @@ static void RecomputeMass(m2World* world, int32_t bodyIndex)
     {
         world->invMass[bodyIndex] = 0.0f;
         world->invInertia[bodyIndex] = 0.0f;
+        world->localCenters[bodyIndex] = (m2Vec2){0.0f, 0.0f};
         return;
     }
 
@@ -391,6 +392,7 @@ static void RecomputeMass(m2World* world, int32_t bodyIndex)
         // do not rotate from impulses (deterministic fallback, no NaN).
         world->invMass[bodyIndex] = 1.0f;
         world->invInertia[bodyIndex] = 0.0f;
+        world->localCenters[bodyIndex] = (m2Vec2){0.0f, 0.0f};
         return;
     }
 
@@ -400,6 +402,9 @@ static void RecomputeMass(m2World* world, int32_t bodyIndex)
     float inertiaCenter = inertiaOrigin - mass * (center.x * center.x + center.y * center.y);
     world->invMass[bodyIndex] = invMass;
     world->invInertia[bodyIndex] = inertiaCenter > 0.0f ? 1.0f / inertiaCenter : 0.0f;
+    // The body now rotates about this point: velocities, solver
+    // anchors and integration all live in the COM frame.
+    world->localCenters[bodyIndex] = center;
 }
 
 // --- Contacts (topic-04) -------------------------------------------------------
@@ -657,6 +662,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(bodyShapeHead, cap, int32_t);
     M2_ALLOC(invMass, cap, float);
     M2_ALLOC(invInertia, cap, float);
+    M2_ALLOC(localCenters, cap, m2Vec2);
     M2_ALLOC(asleep, cap, uint8_t);
     M2_ALLOC(sleepTimes, cap, float);
     M2_ALLOC(bullets, cap, uint8_t);
@@ -792,6 +798,7 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->bodyShapeHead);
     free(world->invMass);
     free(world->invInertia);
+    free(world->localCenters);
     free(world->asleep);
     free(world->sleepTimes);
     free(world->bullets);
@@ -1046,6 +1053,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->gravityScales, cap * sizeof(float));
     M2_BLOCK(world->invMass, cap * sizeof(float));
     M2_BLOCK(world->invInertia, cap * sizeof(float));
+    M2_BLOCK(world->localCenters, cap * sizeof(m2Vec2));
     M2_BLOCK(world->asleep, cap * sizeof(uint8_t));
     M2_BLOCK(world->sleepTimes, cap * sizeof(float));
     M2_BLOCK(world->bullets, cap * sizeof(uint8_t));
@@ -1213,6 +1221,7 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->angularVelocities[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->invMass[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->invInertia[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->localCenters[i], (int32_t)sizeof(m2Vec2));
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->asleep[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->sleepTimes[i], (int32_t)sizeof(float));
@@ -1274,6 +1283,7 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->alive[index] = 1;
     world->bodyShapeHead[index] = -1;
     world->invMass[index] = def->type == m2_dynamicBody ? 1.0f : 0.0f; // shapeless floor
+    world->localCenters[index] = (m2Vec2){0.0f, 0.0f};
     world->invInertia[index] = 0.0f;
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;

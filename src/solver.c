@@ -186,8 +186,13 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         {
             m2ManifoldPoint* mp = &manifold->points[k];
             m2ConstraintPoint* cp = &c->points[k];
-            cp->rA = Rotate(qA, mp->anchorA);
-            cp->rB = Rotate(qB, mp->anchorB);
+            // Anchors relative to each body's center of mass: the arm
+            // the impulse actually torques about (bit-neutral when the
+            // COM sits on the origin).
+            m2Vec2 lcA = world->localCenters[bodyA];
+            m2Vec2 lcB = world->localCenters[bodyB];
+            cp->rA = Rotate(qA, (m2Vec2){mp->anchorA.x - lcA.x, mp->anchorA.y - lcA.y});
+            cp->rB = Rotate(qB, (m2Vec2){mp->anchorB.x - lcB.x, mp->anchorB.y - lcB.y});
             cp->baseSeparation = mp->separation;
             cp->normalImpulse = mp->normalImpulse;
             cp->tangentImpulse = mp->tangentImpulse;
@@ -324,8 +329,8 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
         {
             // Friction rides the relax pass. NOTE: the reference solves
             // friction in both passes; in our pipeline that destabilizes
-            // stacks (recorded finding) - the structural cause is still
-            // open, revisit with the COM work.
+            // stacks even with static stiffening (recorded finding
+            // F-T8-FRICTION) - the structural cause is still open.
             for (int32_t k = 0; k < c->pointCount; ++k)
             {
                 m2ConstraintPoint* cp = &c->points[k];
@@ -599,12 +604,18 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
 
         m2Rot qA = world->transforms[bodyA].q;
         m2Rot qB = world->transforms[bodyB].q;
-        c->rA = Rotate(qA, world->jointLocalAnchorA[j]);
-        c->rB = Rotate(qB, world->jointLocalAnchorB[j]);
-        float dx = (float)(world->transforms[bodyB].p.x - world->transforms[bodyA].p.x) + c->rB.x -
-                   c->rA.x;
-        float dy = (float)(world->transforms[bodyB].p.y - world->transforms[bodyA].p.y) + c->rB.y -
-                   c->rA.y;
+        m2Vec2 lcA = world->localCenters[bodyA];
+        m2Vec2 lcB = world->localCenters[bodyB];
+        c->rA = Rotate(qA, (m2Vec2){world->jointLocalAnchorA[j].x - lcA.x,
+                                    world->jointLocalAnchorA[j].y - lcA.y});
+        c->rB = Rotate(qB, (m2Vec2){world->jointLocalAnchorB[j].x - lcB.x,
+                                    world->jointLocalAnchorB[j].y - lcB.y});
+        m2Vec2 comA = Rotate(qA, lcA);
+        m2Vec2 comB = Rotate(qB, lcB);
+        float dx = (float)(world->transforms[bodyB].p.x - world->transforms[bodyA].p.x) +
+                   (comB.x - comA.x) + c->rB.x - c->rA.x;
+        float dy = (float)(world->transforms[bodyB].p.y - world->transforms[bodyA].p.y) +
+                   (comB.y - comA.y) + c->rB.y - c->rA.y;
         float mA = world->invMass[bodyA];
         float iA = world->invInertia[bodyA];
         float mB = world->invMass[bodyB];
@@ -1247,6 +1258,11 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             {
                 continue;
             }
+            // The center of mass is what the velocity moves; the origin
+            // swings around it. With the COM on the origin both extra
+            // terms are exact zeros and the old bits fall out.
+            m2Vec2 lc = world->localCenters[i];
+            m2Vec2 rlcOld = Rotate(world->transforms[i].q, lc);
             world->transforms[i].p.x += (double)world->linearVelocities[i].x * (double)h;
             world->transforms[i].p.y += (double)world->linearVelocities[i].y * (double)h;
             world->deltaPositions[i].x += world->linearVelocities[i].x * h;
@@ -1254,6 +1270,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             m2Rot dq = m2MakeRot(world->angularVelocities[i] * h);
             world->transforms[i].q = m2MulRot(world->transforms[i].q, dq);
             world->deltaRotations[i] = m2MulRot(world->deltaRotations[i], dq);
+            m2Vec2 rlcNew = Rotate(world->transforms[i].q, lc);
+            world->transforms[i].p.x += (double)(rlcOld.x - rlcNew.x);
+            world->transforms[i].p.y += (double)(rlcOld.y - rlcNew.y);
         }
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)

@@ -36,6 +36,7 @@ typedef struct m2World
     int32_t* bodyShapeHead; // head of the body's shape list (-1 = none)
     float* invMass;         // dynamic bodies: derived from shapes, floored
     float* invInertia;      // about the body origin; 0 = no rotation response
+    m2Vec2* localCenters;   // body-frame center of mass (snapshot state)
     uint8_t* asleep;        // sleep flag (snapshot + hashed: the sleep law)
     float* sleepTimes;      // seconds under tolerance (snapshot + hashed)
     uint8_t* bullets;       // isBullet flag (snapshot + hashed)

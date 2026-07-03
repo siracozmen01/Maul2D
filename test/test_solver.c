@@ -269,8 +269,118 @@ static uint64_t SolverSweepHash(void)
     return h;
 }
 
+static void TestSpinsAboutCenterOfMass(void)
+{
+    // A body whose shape sits away from its origin must rotate about
+    // the shape's center of mass: the COM stays put, the origin orbits.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle offset = {{2.0f, 0.0f}, 0.5f}; // COM at local (2, 0)
+    m2CreateCircleShape(body, &sd, &offset);
+    m2Body_SetAngularVelocity(body, 4.0f);
+
+    double comX0 = 2.0;
+    double comY0 = 0.0;
+    double maxComDrift = 0.0;
+    double maxOriginTravel = 0.0;
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2Transform xf = m2Body_GetTransform(body);
+        double comX = xf.p.x + (double)(xf.q.c * 2.0f);
+        double comY = xf.p.y + (double)(xf.q.s * 2.0f);
+        double dx = comX - comX0;
+        double dy = comY - comY0;
+        double drift = dx * dx + dy * dy;
+        maxComDrift = drift > maxComDrift ? drift : maxComDrift;
+        double travel = xf.p.x * xf.p.x + xf.p.y * xf.p.y;
+        maxOriginTravel = travel > maxOriginTravel ? travel : maxOriginTravel;
+    }
+    CHECK(maxComDrift < 1.0e-4, "the center of mass holds still while spinning");
+    CHECK(maxOriginTravel > 1.0, "the origin orbits the center of mass");
+    float w = m2Body_GetAngularVelocity(body);
+    CHECK(w > 3.99f && w < 4.01f, "free spin keeps its rate");
+
+    // Counterweight at (-2, 0) pulls the COM back onto the origin.
+    m2Circle balance = {{-2.0f, 0.0f}, 0.5f};
+    m2CreateCircleShape(body, &sd, &balance);
+    m2Transform mark = m2Body_GetTransform(body);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Transform after = m2Body_GetTransform(body);
+    double ox = after.p.x - mark.p.x;
+    double oy = after.p.y - mark.p.y;
+    CHECK(ox * ox + oy * oy < 1.0e-4, "balanced body spins in place again");
+
+    m2DestroyWorld(world);
+}
+
+static void TestOffCenterRollback(void)
+{
+    // The new localCenter block rides the snapshot: an off-center
+    // tumbling body must replay bit-exactly.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 3.0};
+    m2BodyId hammer = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon handle = m2MakeBox(0.6f, 0.08f);
+    m2CreatePolygonShape(hammer, &sd, &handle);
+    m2Circle head = {{0.7f, 0.0f}, 0.25f};
+    sd.density = 4.0f;
+    m2CreateCircleShape(hammer, &sd, &head);
+    m2Body_SetAngularVelocity(hammer, 3.0f);
+
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot");
+    uint64_t hashes[90];
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+    }
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "off-center tumble replays bit-exactly");
+    }
+    free(snap);
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestSpinsAboutCenterOfMass();
+    TestOffCenterRollback();
     TestRestitution();
     TestFriction();
     TestPyramid();
