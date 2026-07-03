@@ -520,9 +520,17 @@ static void StashContacts(m2World* world)
     memcpy(world->manifoldScratch, world->manifolds, (size_t)world->pairCount * sizeof(m2Manifold));
 }
 
-static void UpdateContacts(m2World* world)
+typedef struct m2UpdateContactsCtx
 {
-    for (int32_t i = 0; i < world->pairCount; ++i)
+    m2World* world;
+} m2UpdateContactsCtx;
+
+// Each pair writes only its own manifold slot, so the range splits
+// freely across workers without touching the arithmetic.
+static void UpdateContactsRange(int32_t begin, int32_t end, void* userCtx)
+{
+    m2World* world = ((m2UpdateContactsCtx*)userCtx)->world;
+    for (int32_t i = begin; i < end; ++i)
     {
         int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
         int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
@@ -571,6 +579,12 @@ static void UpdateContacts(m2World* world)
         }
         world->manifolds[i] = fresh;
     }
+}
+
+static void UpdateContacts(m2World* world)
+{
+    m2UpdateContactsCtx ctx = {world};
+    m2ThreadPoolRun(world->pool, UpdateContactsRange, &ctx, world->pairCount);
 }
 
 // --- Defs & world lifecycle ----------------------------------------------------
@@ -690,6 +704,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(pairTouching, world->pairCapacity, uint8_t);
     M2_ALLOC(touchingScratch, world->pairCapacity, uint8_t);
     M2_ALLOC(queryScratch, cap, int32_t);
+    M2_ALLOC(colorMasks, cap, uint32_t);
+    M2_ALLOC(constraintColors, cap, uint8_t);
+    M2_ALLOC(colorOrder, cap, int32_t);
+
+    world->pool = m2ThreadPoolCreate(def->workerCount);
     M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
     M2_ALLOC(endEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pendingEndEvents, world->pairCapacity, m2ContactEndEvent);
@@ -820,6 +839,10 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->pairTouching);
     free(world->touchingScratch);
     free(world->queryScratch);
+    free(world->colorMasks);
+    free(world->constraintColors);
+    free(world->colorOrder);
+    m2ThreadPoolDestroy(world->pool);
     free(world->beginEvents);
     free(world->endEvents);
     free(world->pendingEndEvents);

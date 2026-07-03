@@ -31,6 +31,10 @@ extern "C"
         int32_t bodyCapacity; // fixed capacities for now (no growth yet)
         int32_t shapeCapacity;
         int32_t jointCapacity;
+        /// Solver worker threads including the caller (clamped to 8).
+        /// NON-SEMANTIC by law: any worker count produces identical
+        /// bits; it only changes how the same arithmetic is scheduled.
+        int32_t workerCount;
         int32_t internalValue;
     } m2WorldDef;
 

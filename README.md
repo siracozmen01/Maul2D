@@ -30,3 +30,14 @@ cmake --build build
 
 No dependencies. C17 compiler required (MSVC ≥ VS2022 17.0 — older versions
 cannot disable FP contraction, which this engine requires).
+
+## Acknowledgments
+
+Maul2D stands on the shoulders of [Box2D](https://github.com/erincatto/box2d)
+by Erin Catto (MIT). Several kernels - the polygon clipper, the soft-step
+solver stage structure, joint constraint formulations, ray cast kernels and
+the trigonometric approximations - are adapted from Box2D v3 sources, with
+the adaptation noted in each file. Box2D's license and copyright apply to
+those portions; see its repository for the original work. The determinism
+architecture (f64 hybrid positions, snapshot/rollback, the command journal,
+cross-platform hash gating) is Maul's own.

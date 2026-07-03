@@ -5,6 +5,8 @@ option(MAUL2D_SANITIZE "Build with ASAN/UBSAN" OFF)
 
 include(cmake/CompilerFlags.cmake)
 
+find_package(Threads REQUIRED)
+
 add_library(maul2d STATIC
     src/core.c
     src/ccd.c
@@ -12,6 +14,7 @@ add_library(maul2d STATIC
     src/island.c
     src/journal.c
     src/query.c
+    src/platform_thread.c
     src/manifold.c
     src/math_functions.c
     src/shape.c
@@ -101,6 +104,12 @@ target_link_libraries(test_redteam PRIVATE maul2d)
 target_include_directories(test_redteam PRIVATE src)
 maul2d_apply_flags(test_redteam)
 add_test(NAME redteam COMMAND test_redteam)
+
+add_executable(test_threads test/test_threads.c)
+target_link_libraries(test_threads PRIVATE maul2d)
+target_include_directories(test_threads PRIVATE src)
+maul2d_apply_flags(test_threads)
+add_test(NAME threads COMMAND test_threads)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)

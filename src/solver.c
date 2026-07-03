@@ -203,37 +203,53 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
     return count;
 }
 
-static void WarmStart(m2World* world, m2ContactConstraint* constraints, int32_t count)
+// Write-backs are guarded on dynamic bodies: a static or kinematic
+// body shared across graph colors must never be written, even with an
+// unchanged value - concurrent identical writes are still a race.
+static void StoreBodyVelocities(m2World* world, const m2ContactConstraint* c, m2Vec2 vA, float wA,
+                                m2Vec2 vB, float wB)
 {
-    for (int32_t i = 0; i < count; ++i)
+    if (world->types[c->bodyA] == (uint8_t)m2_dynamicBody)
     {
-        m2ContactConstraint* c = constraints + i;
-        float mA = world->invMass[c->bodyA];
-        float iA = world->invInertia[c->bodyA];
-        float mB = world->invMass[c->bodyB];
-        float iB = world->invInertia[c->bodyB];
-        m2Vec2 tangent = {-c->normal.y, c->normal.x};
-        for (int32_t k = 0; k < c->pointCount; ++k)
-        {
-            m2ConstraintPoint* cp = &c->points[k];
-            m2Vec2 P = {cp->normalImpulse * c->normal.x + cp->tangentImpulse * tangent.x,
-                        cp->normalImpulse * c->normal.y + cp->tangentImpulse * tangent.y};
-            world->linearVelocities[c->bodyA].x -= mA * P.x;
-            world->linearVelocities[c->bodyA].y -= mA * P.y;
-            world->angularVelocities[c->bodyA] -= iA * Cross(cp->rA, P);
-            world->linearVelocities[c->bodyB].x += mB * P.x;
-            world->linearVelocities[c->bodyB].y += mB * P.y;
-            world->angularVelocities[c->bodyB] += iB * Cross(cp->rB, P);
-        }
+        world->linearVelocities[c->bodyA] = vA;
+        world->angularVelocities[c->bodyA] = wA;
+    }
+    if (world->types[c->bodyB] == (uint8_t)m2_dynamicBody)
+    {
+        world->linearVelocities[c->bodyB] = vB;
+        world->angularVelocities[c->bodyB] = wB;
     }
 }
 
-static void SolveContacts(m2World* world, m2ContactConstraint* constraints, int32_t count,
-                          float invH, bool useBias)
+static void WarmStartOne(m2World* world, m2ContactConstraint* c)
 {
-    for (int32_t i = 0; i < count; ++i)
+    float mA = world->invMass[c->bodyA];
+    float iA = world->invInertia[c->bodyA];
+    float mB = world->invMass[c->bodyB];
+    float iB = world->invInertia[c->bodyB];
+    m2Vec2 vA = world->linearVelocities[c->bodyA];
+    float wA = world->angularVelocities[c->bodyA];
+    m2Vec2 vB = world->linearVelocities[c->bodyB];
+    float wB = world->angularVelocities[c->bodyB];
+    m2Vec2 tangent = {-c->normal.y, c->normal.x};
+    for (int32_t k = 0; k < c->pointCount; ++k)
     {
-        m2ContactConstraint* c = constraints + i;
+        m2ConstraintPoint* cp = &c->points[k];
+        m2Vec2 P = {cp->normalImpulse * c->normal.x + cp->tangentImpulse * tangent.x,
+                    cp->normalImpulse * c->normal.y + cp->tangentImpulse * tangent.y};
+        vA.x -= mA * P.x;
+        vA.y -= mA * P.y;
+        wA -= iA * Cross(cp->rA, P);
+        vB.x += mB * P.x;
+        vB.y += mB * P.y;
+        wB += iB * Cross(cp->rB, P);
+    }
+    StoreBodyVelocities(world, c, vA, wA, vB, wB);
+}
+
+static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, bool useBias)
+{
+    {
         float mA = world->invMass[c->bodyA];
         float iA = world->invInertia[c->bodyA];
         float mB = world->invMass[c->bodyB];
@@ -319,21 +335,16 @@ static void SolveContacts(m2World* world, m2ContactConstraint* constraints, int3
             }
         }
 
-        world->linearVelocities[c->bodyA] = vA;
-        world->angularVelocities[c->bodyA] = wA;
-        world->linearVelocities[c->bodyB] = vB;
-        world->angularVelocities[c->bodyB] = wB;
+        StoreBodyVelocities(world, c, vA, wA, vB, wB);
     }
 }
 
-static void ApplyRestitution(m2World* world, m2ContactConstraint* constraints, int32_t count)
+static void RestitutionOne(m2World* world, m2ContactConstraint* c)
 {
-    for (int32_t i = 0; i < count; ++i)
     {
-        m2ContactConstraint* c = constraints + i;
         if (c->restitution == 0.0f)
         {
-            continue;
+            return;
         }
         float mA = world->invMass[c->bodyA];
         float iA = world->invInertia[c->bodyA];
@@ -366,23 +377,153 @@ static void ApplyRestitution(m2World* world, m2ContactConstraint* constraints, i
             vB.y += mB * P.y;
             wB += iB * Cross(cp->rB, P);
         }
-        world->linearVelocities[c->bodyA] = vA;
-        world->angularVelocities[c->bodyA] = wA;
-        world->linearVelocities[c->bodyB] = vB;
-        world->angularVelocities[c->bodyB] = wB;
+        StoreBodyVelocities(world, c, vA, wA, vB, wB);
     }
 }
 
-static void StoreImpulses(m2World* world, m2ContactConstraint* constraints, int32_t count)
+// --- Graph coloring (topic-08): constraints in one color share no
+// dynamic body, so a color solves in parallel with bit-identical
+// results at ANY worker count. The color assignment itself is greedy
+// over canonical constraint order - fully deterministic. The colored
+// order is used even when serial, so worker count can never change
+// the arithmetic sequence.
+
+#define M2_GRAPH_COLORS 24 // colors 0..23; 24 = overflow, solved serially
+
+static void ColorConstraints(m2World* world, m2ContactConstraint* constraints, int32_t count,
+                             int32_t* colorStart)
 {
+    uint32_t* masks = world->colorMasks;
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        masks[i] = 0;
+    }
+    int32_t counts[M2_GRAPH_COLORS + 1];
+    for (int32_t c = 0; c <= M2_GRAPH_COLORS; ++c)
+    {
+        counts[c] = 0;
+    }
+
     for (int32_t i = 0; i < count; ++i)
     {
-        m2ContactConstraint* c = constraints + i;
-        m2Manifold* manifold = &world->manifolds[c->pairIndex];
-        for (int32_t k = 0; k < c->pointCount; ++k)
+        int32_t bodyA = constraints[i].bodyA;
+        int32_t bodyB = constraints[i].bodyB;
+        bool dynA = world->types[bodyA] == (uint8_t)m2_dynamicBody;
+        bool dynB = world->types[bodyB] == (uint8_t)m2_dynamicBody;
+        uint32_t used = (dynA ? masks[bodyA] : 0u) | (dynB ? masks[bodyB] : 0u);
+        int32_t color = 0;
+        while (color < M2_GRAPH_COLORS && (used & (1u << color)) != 0)
         {
-            manifold->points[k].normalImpulse = c->points[k].normalImpulse;
-            manifold->points[k].tangentImpulse = c->points[k].tangentImpulse;
+            color += 1;
+        }
+        if (color < M2_GRAPH_COLORS)
+        {
+            if (dynA)
+            {
+                masks[bodyA] |= 1u << color;
+            }
+            if (dynB)
+            {
+                masks[bodyB] |= 1u << color;
+            }
+        }
+        world->constraintColors[i] = (uint8_t)color;
+        counts[color] += 1;
+    }
+
+    colorStart[0] = 0;
+    for (int32_t c = 0; c <= M2_GRAPH_COLORS; ++c)
+    {
+        colorStart[c + 1] = colorStart[c] + counts[c];
+    }
+    int32_t cursor[M2_GRAPH_COLORS + 1];
+    for (int32_t c = 0; c <= M2_GRAPH_COLORS; ++c)
+    {
+        cursor[c] = colorStart[c];
+    }
+    for (int32_t i = 0; i < count; ++i)
+    {
+        int32_t color = world->constraintColors[i];
+        world->colorOrder[cursor[color]] = i;
+        cursor[color] += 1;
+    }
+}
+
+typedef enum m2ContactStage
+{
+    m2_stageWarmStart,
+    m2_stageSolve,
+    m2_stageRestitution,
+    m2_stageStore,
+} m2ContactStage;
+
+typedef struct m2ContactStageCtx
+{
+    m2World* world;
+    m2ContactConstraint* constraints;
+    const int32_t* order;
+    m2ContactStage stage;
+    float invH;
+    bool useBias;
+} m2ContactStageCtx;
+
+static void ContactStageRange(int32_t begin, int32_t end, void* userCtx)
+{
+    m2ContactStageCtx* ctx = (m2ContactStageCtx*)userCtx;
+    for (int32_t k = begin; k < end; ++k)
+    {
+        m2ContactConstraint* c = ctx->constraints + ctx->order[k];
+        switch (ctx->stage)
+        {
+        case m2_stageWarmStart:
+            WarmStartOne(ctx->world, c);
+            break;
+        case m2_stageSolve:
+            SolveContactOne(ctx->world, c, ctx->invH, ctx->useBias);
+            break;
+        case m2_stageRestitution:
+            RestitutionOne(ctx->world, c);
+            break;
+        default:
+        {
+            m2Manifold* manifold = &ctx->world->manifolds[c->pairIndex];
+            for (int32_t j = 0; j < c->pointCount; ++j)
+            {
+                manifold->points[j].normalImpulse = c->points[j].normalImpulse;
+                manifold->points[j].tangentImpulse = c->points[j].tangentImpulse;
+            }
+            break;
+        }
+        }
+    }
+}
+
+static void RunContactStage(m2World* world, m2ContactConstraint* constraints,
+                            const int32_t* colorStart, m2ContactStage stage, float invH,
+                            bool useBias)
+{
+    m2ContactStageCtx ctx;
+    ctx.world = world;
+    ctx.constraints = constraints;
+    ctx.stage = stage;
+    ctx.invH = invH;
+    ctx.useBias = useBias;
+    for (int32_t color = 0; color <= M2_GRAPH_COLORS; ++color)
+    {
+        int32_t begin = colorStart[color];
+        int32_t end = colorStart[color + 1];
+        if (begin == end)
+        {
+            continue;
+        }
+        ctx.order = world->colorOrder + begin;
+        if (color == M2_GRAPH_COLORS)
+        {
+            ContactStageRange(0, end - begin, &ctx); // overflow: serial
+        }
+        else
+        {
+            m2ThreadPoolRun(world->pool, ContactStageRange, &ctx, end - begin);
         }
     }
 }
@@ -1030,6 +1171,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
                              (size_t)world->pairCapacity * sizeof(m2ContactConstraint));
     int32_t jointCount = PrepareJoints(world, joints, h);
 
+    int32_t colorStart[M2_GRAPH_COLORS + 2];
+    ColorConstraints(world, constraints, constraintCount, colorStart);
+
     for (int32_t sub = 0; sub < substepCount; ++sub)
     {
         // Integrate velocities (fixed body order).
@@ -1045,9 +1189,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         }
 
         WarmStartJoints(world, joints, jointCount);
-        WarmStart(world, constraints, constraintCount);
+        RunContactStage(world, constraints, colorStart, m2_stageWarmStart, invH, true);
         SolveJoints(world, joints, jointCount, true, invH); // joints before contacts (topic-05 §5)
-        SolveContacts(world, constraints, constraintCount, invH, true);
+        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, true);
 
         // Bullet substep origins, captured before positions move.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
@@ -1077,10 +1221,10 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
         SolveJoints(world, joints, jointCount, false, invH);
-        SolveContacts(world, constraints, constraintCount, invH, false);
+        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, false);
     }
 
-    ApplyRestitution(world, constraints, constraintCount);
-    StoreImpulses(world, constraints, constraintCount);
+    RunContactStage(world, constraints, colorStart, m2_stageRestitution, invH, false);
+    RunContactStage(world, constraints, colorStart, m2_stageStore, invH, false);
     StoreJointImpulses(world, joints, jointCount);
 }

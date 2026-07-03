@@ -58,7 +58,8 @@ jobs:
           "$BIN/test_journal$SUFFIX" | tee -a out.txt
           "$BIN/test_queries$SUFFIX" | tee -a out.txt
           "$BIN/test_redteam$SUFFIX" | tee -a out.txt
-          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          "$BIN/test_threads$SUFFIX" | tee -a out.txt
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,13 +79,13 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS)_HASH=' hashes/*.txt | tee all-hashes.txt
+          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD)_HASH=' hashes/*.txt | tee all-hashes.txt
           CELLS=6
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
           DISTINCT=$(sort -u all-hashes.txt | wc -l)
-          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "13" ]; then
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "14" ]; then
             echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi
@@ -114,6 +115,7 @@ jobs:
           ./build/test_journal
           ./build/test_queries
           ./build/test_redteam
+          ./build/test_threads
 
   format:
     name: clang-format
