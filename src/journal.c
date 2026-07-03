@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 6u
+#define M2_JOURNAL_VERSION 7u
 
 typedef struct m2JournalHeader
 {
@@ -175,6 +175,12 @@ typedef struct m2OpJointParam
     float value;
     uint8_t param;
 } m2OpJointParam;
+
+typedef struct m2OpSetType
+{
+    m2BodyId body;
+    uint8_t type;
+} m2OpSetType;
 
 typedef struct m2OpSetTransform
 {
@@ -388,6 +394,13 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
                 return false;
             }
             m2SetJointParamInternal(target, jp.joint, jp.param, jp.value);
+            break;
+        }
+        case m2_opSetType:
+        {
+            M2_READ_OP(m2OpSetType, tc);
+            tc.body.world0 = here;
+            m2Body_SetType(tc.body, (m2BodyType)tc.type);
             break;
         }
         case m2_opSetTransform:

@@ -352,8 +352,70 @@ static void TestTeleport(void)
     m2DestroyWorld(world);
 }
 
+static void TestSetType(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // A falling box freezes mid-air when it turns static...
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId shelf = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.5f, 0.1f);
+    m2CreatePolygonShape(shelf, &sd, &unit);
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Body_SetType(shelf, m2_staticBody);
+    double frozenY = m2Body_GetPosition(shelf).y;
+    m2Vec2 v = m2Body_GetLinearVelocity(shelf);
+    CHECK(v.x == 0.0f && v.y == 0.0f, "becoming static zeroes velocity");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(shelf).y == frozenY, "a static shelf hangs mid-air");
+
+    // ...carries a dynamic guest on its migrated proxy...
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.type = m2_dynamicBody;
+    gd.position = (m2Pos2){0.0, frozenY + 0.5};
+    m2BodyId guest = m2CreateBody(world, &gd);
+    m2Polygon g = m2MakeBox(0.3f, 0.3f);
+    m2CreatePolygonShape(guest, &sd, &g);
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(guest).y > frozenY + 0.3, "a guest rests on the frozen shelf");
+
+    // ...and drops like anyone else once it is dynamic again.
+    m2Body_SetType(shelf, m2_dynamicBody);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(shelf).y < frozenY - 0.5, "dynamic again, it falls");
+    CHECK(m2Body_GetPosition(shelf).y > 0.0, "and lands on the real floor");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestSetType();
     TestTeleport();
     TestKineticEnergy();
     TestCountersAndProfile();

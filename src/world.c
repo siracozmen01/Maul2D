@@ -1795,6 +1795,84 @@ void m2Body_SetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation)
     }
 }
 
+void m2Body_SetType(m2BodyId bodyId, m2BodyType type)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || (int32_t)type < 0 || (int32_t)type >= M2_TREE_COUNT)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->types[index] == (uint8_t)type)
+    {
+        return; // no-op, and deliberately not journaled
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            uint8_t type;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.type = (uint8_t)type;
+        m2JournalRecord(world, m2_opSetType, &record, (int32_t)sizeof(record));
+    }
+
+    // Contacts change meaning: wake every touching partner while the
+    // old type is still in effect.
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t a = world->shapeBody[(int32_t)(world->pairKeys[i] >> 32)];
+        int32_t b = world->shapeBody[(int32_t)(world->pairKeys[i] & 0xFFFFFFFFu)];
+        if (a != index && b != index)
+        {
+            continue;
+        }
+        int32_t other = a == index ? b : a;
+        if (world->types[other] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[other] = 0;
+            world->sleepTimes[other] = 0.0f;
+        }
+    }
+
+    // Proxies move between the per-type trees; marking them moved also
+    // purges stale pairs and re-forms the valid ones, which is exactly
+    // the M19 path for pairs that stop making sense.
+    int32_t oldTree = world->types[index];
+    world->types[index] = (uint8_t)type;
+    for (int32_t shape = world->bodyShapeHead[index]; shape != -1; shape = world->shapeNext[shape])
+    {
+        if (world->proxyIds[shape] == M2_NULL_NODE)
+        {
+            continue;
+        }
+        m2Tree_Remove(&world->trees[oldTree], world->treeNodes[oldTree], world->proxyIds[shape]);
+        world->proxyIds[shape] = m2Tree_Insert(&world->trees[type], world->treeNodes[type],
+                                               Fatten(ShapeTightAABB(world, shape)), shape);
+        M2_ASSERT(world->proxyIds[shape] != M2_NULL_NODE);
+        PushMoved(world, shape);
+    }
+
+    RecomputeMass(world, index);
+    if (type == m2_staticBody)
+    {
+        world->linearVelocities[index] = (m2Vec2){0.0f, 0.0f};
+        world->angularVelocities[index] = 0.0f;
+    }
+    // Fresh start for the sleep ledger under the new identity.
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+    world->sleepStreak[index] = 0;
+}
+
 bool m2Body_IsAwake(m2BodyId bodyId)
 {
     m2World* world = GetBodyWorld(bodyId);

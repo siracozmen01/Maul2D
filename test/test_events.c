@@ -288,8 +288,57 @@ static void TestDestroyShapeBookends(void)
     m2DestroyWorld(world);
 }
 
+static void TestTypeChangeBookends(void)
+{
+    // Two touching dynamics; turn BOTH static and the pair stops
+    // making sense - M19 says its end must be witnessed.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.55};
+    m2BodyId a = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2ShapeId shapeA = m2CreatePolygonShape(a, &sd, &unit);
+    bd.position = (m2Pos2){0.0, 1.37};
+    m2BodyId b = m2CreateBody(world, &bd);
+    m2ShapeId shapeB = m2CreatePolygonShape(b, &sd, &unit);
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2Body_SetType(a, m2_staticBody);
+    m2Body_SetType(b, m2_staticBody);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2ContactEvents events = m2World_GetContactEvents(world);
+    bool sawEnd = false;
+    for (int32_t i = 0; i < events.endCount; ++i)
+    {
+        bool hasA = events.endEvents[i].shapeIdA.index1 == shapeA.index1 ||
+                    events.endEvents[i].shapeIdB.index1 == shapeA.index1;
+        bool hasB = events.endEvents[i].shapeIdA.index1 == shapeB.index1 ||
+                    events.endEvents[i].shapeIdB.index1 == shapeB.index1;
+        sawEnd = sawEnd || (hasA && hasB);
+    }
+    CHECK(sawEnd, "a pair that stops making sense emits its end (M19)");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestTypeChangeBookends();
     TestDestroyShapeBookends();
     TestLifecycleSymmetry();
     TestDestroyBookending();

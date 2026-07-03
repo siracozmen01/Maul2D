@@ -195,6 +195,7 @@ enum
     m2_opApplyAngularImpulse = 15,
     m2_opSetJointParam = 16,
     m2_opSetTransform = 17,
+    m2_opSetType = 18,
 };
 
 // Journaled joint parameter channel (op 16).

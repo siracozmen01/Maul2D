@@ -81,6 +81,13 @@ extern "C"
     /// tunneling protection applies. Journaled. Thread class: writer.
     void m2Body_SetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation);
 
+    /// Converts the body's type in place. Becoming static zeroes the
+    /// velocities; becoming dynamic recomputes mass from the shapes.
+    /// The body and everything it touches wake, proxies migrate to the
+    /// right tree, and stale pairs end with proper events. Journaled.
+    /// Thread class: writer.
+    void m2Body_SetType(m2BodyId bodyId, m2BodyType type);
+
     void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint);
     void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse);
 
