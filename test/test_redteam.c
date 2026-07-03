@@ -480,6 +480,161 @@ static void TestThreadedChurnParity(void)
     CHECK(one == four, "the thread law survives lifecycle churn");
 }
 
+static void TestTeleportOntoSleepers(void)
+{
+    // Teleport a heavy box INTO a sleeping stack: overlap must resolve
+    // through the ordinary pushout without an explosion, and the stack
+    // must wake.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyId a = AddBox(world, 0.0, 0.5);
+    m2BodyId b = AddBox(world, 0.0, 1.42);
+    m2BodyId intruder = AddBox(world, 8.0, 0.5);
+    for (int32_t i = 0; i < 200; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(a) && !m2Body_IsAwake(b), "stack asleep");
+
+    m2Body_SetTransform(intruder, (m2Pos2){0.1, 0.9}, (m2Rot){1.0f, 0.0f}); // into the stack
+    bool exploded = false;
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2Vec2 v = m2Body_GetLinearVelocity(b);
+        exploded = exploded || v.x * v.x + v.y * v.y > 100.0f;
+    }
+    CHECK(!exploded, "overlap resolves without an explosion");
+    CHECK(m2Body_GetPosition(b).y > 0.3, "the stack sorts itself out");
+    m2DestroyWorld(world);
+}
+
+static void TestSetTypeEdges(void)
+{
+    // Convert a sleeping body, a jointed body, and a bullet; flip-flop
+    // types under twin-world scrutiny.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // Sleeping conversion round trip.
+    m2BodyId sleeper = AddBox(world, 0.0, 0.5);
+    for (int32_t i = 0; i < 150; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(sleeper), "asleep before conversion");
+    m2Body_SetType(sleeper, m2_staticBody);
+    m2Body_SetType(sleeper, m2_dynamicBody);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_IsAwake(sleeper), "round-trip conversion wakes it");
+    bool resleeps = false;
+    for (int32_t i = 0; i < 200 && !resleeps; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        resleeps = !m2Body_IsAwake(sleeper);
+    }
+    CHECK(resleeps, "and it earns sleep again with real mass");
+
+    // A pendulum whose pivot end turns static mid-swing.
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.type = m2_dynamicBody;
+    ad.position = (m2Pos2){5.0, 4.0};
+    m2BodyId pivot = m2CreateBody(world, &ad);
+    m2ShapeDef ps = m2DefaultShapeDef();
+    m2Circle pc = {{0.0f, 0.0f}, 0.2f};
+    m2CreateCircleShape(pivot, &ps, &pc);
+    m2BodyId bob = AddBox(world, 6.5, 4.0);
+    m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+    jd.bodyIdA = pivot;
+    jd.bodyIdB = bob;
+    jd.localAnchorB = (m2Vec2){-1.5f, 0.0f};
+    m2JointId hinge = m2CreateRevoluteJoint(world, &jd);
+    m2Body_SetType(pivot, m2_staticBody); // becomes a wall anchor
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Joint_IsValid(hinge), "the joint survives its anchor turning static");
+    m2Pos2 pp = m2Body_GetPosition(pivot);
+    CHECK(pp.x == 5.0 && pp.y == 4.0, "the static anchor holds its ground");
+    double dx = m2Body_GetPosition(bob).x - pp.x;
+    double dy = m2Body_GetPosition(bob).y - pp.y;
+    double rod = dx * dx + dy * dy;
+    CHECK(rod > 1.9 && rod < 2.6, "the bob still hangs from it");
+
+    // A bullet that turns static mid-flight simply stops mattering.
+    m2BodyDef bulletDef = m2DefaultBodyDef();
+    bulletDef.type = m2_dynamicBody;
+    bulletDef.isBullet = true;
+    bulletDef.position = (m2Pos2){-8.0, 2.0};
+    bulletDef.linearVelocity = (m2Vec2){60.0f, 0.0f};
+    m2BodyId bullet = m2CreateBody(world, &bulletDef);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    m2Circle bc = {{0.0f, 0.0f}, 0.1f};
+    m2CreateCircleShape(bullet, &bs, &bc);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2Body_SetType(bullet, m2_staticBody);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // must not crash the sweep
+    }
+    CHECK(m2Body_GetLinearVelocity(bullet).x == 0.0f, "a static bullet is just a pebble");
+
+    m2DestroyWorld(world);
+}
+
+static uint64_t FlipFlopTrajectory(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyId flipper = AddBox(world, 0.0, 2.0);
+    m2BodyId witness = AddBox(world, 0.9, 3.0);
+    (void)witness;
+    uint64_t h = M2_HASH_INIT;
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        if (i % 7 == 3)
+        {
+            m2Body_SetType(flipper, i % 14 == 3 ? m2_kinematicBody : m2_dynamicBody);
+        }
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        uint64_t wh = m2World_Hash(world);
+        h = m2Hash64(h, &wh, (int32_t)sizeof(wh));
+    }
+    m2DestroyWorld(world);
+    return h;
+}
+
+static void TestFlipFlopDeterminism(void)
+{
+    CHECK(FlipFlopTrajectory() == FlipFlopTrajectory(), "type flip-flop is twin-deterministic");
+}
+
 static uint64_t ChaosHash(void)
 {
     // Lifecycle churn far from the origin: bodies and joints created
@@ -546,6 +701,20 @@ static uint64_t ChaosHash(void)
                     jointCount += 1;
                 }
             }
+        }
+        if (step % 19 == 7 && ringCount > 1 && m2Body_IsValid(ring[ringHead]))
+        {
+            // Teleport the oldest ring member to a fresh drop point.
+            m2Body_SetTransform(ring[ringHead],
+                                (m2Pos2){7.7e5 + 6.0 + 0.3 * (double)(step % 5), 4.0},
+                                m2MakeRot(0.1f * (float)(step % 7)));
+        }
+        if (step % 29 == 13 && ringCount > 2 && m2Body_IsValid(ring[(ringHead + 1) % 16]))
+        {
+            // Flip a member's nature and back a few steps later via the
+            // deterministic schedule.
+            m2Body_SetType(ring[(ringHead + 1) % 16],
+                           step % 58 == 13 ? m2_kinematicBody : m2_dynamicBody);
         }
         if (step % 17 == 9 && jointCount > 0)
         {
@@ -615,6 +784,9 @@ int main(void)
     TestFrozenEraRollback();
     TestWakeAfterFrozenEra();
     TestThreadedChurnParity();
+    TestTeleportOntoSleepers();
+    TestSetTypeEdges();
+    TestFlipFlopDeterminism();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
