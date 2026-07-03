@@ -115,6 +115,12 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         {
             continue; // both non-dynamic
         }
+        bool asleepA = world->types[bodyA] != (uint8_t)m2_dynamicBody || world->asleep[bodyA] != 0;
+        bool asleepB = world->types[bodyB] != (uint8_t)m2_dynamicBody || world->asleep[bodyB] != 0;
+        if (asleepA && asleepB)
+        {
+            continue; // frozen contact inside a sleeping island
+        }
 
         m2ContactConstraint* c = constraints + count;
         count += 1;
@@ -371,7 +377,8 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         // Integrate velocities (fixed body order).
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
-            if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody)
+            if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody ||
+                world->asleep[i] != 0)
             {
                 continue;
             }
@@ -385,7 +392,8 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         // Integrate positions: f64 positions advance, f32 deltas track.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
-            if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody)
+            if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody ||
+                world->asleep[i] != 0)
             {
                 continue;
             }

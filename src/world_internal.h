@@ -33,6 +33,8 @@ typedef struct m2World
     int32_t* bodyShapeHead; // head of the body's shape list (-1 = none)
     float* invMass;         // dynamic bodies: derived from shapes, floored
     float* invInertia;      // about the body origin; 0 = no rotation response
+    uint8_t* asleep;        // sleep flag (snapshot + hashed: the sleep law)
+    float* sleepTimes;      // seconds under tolerance (snapshot + hashed)
 
     // Body id pool: FIFO free queue + generations; saturated slots retire.
     uint16_t* generations;
@@ -83,10 +85,16 @@ typedef struct m2World
     // Solver scratch (slice 4): all step-transient, zeroed at prepare.
     m2Vec2* deltaPositions; // f32 position deltas within the step
     m2Rot* deltaRotations;
-    void* constraintScratch; // m2ContactConstraint[pairCapacity]
+    void* constraintScratch;  // m2ContactConstraint[pairCapacity]
+    int32_t* islandParent;    // union-find scratch (step-transient)
+    uint8_t* islandDisturbed; // island flags scratch (step-transient)
 
     uint16_t worldGeneration;
 } m2World;
+
+// Islands & sleep (src/island.c).
+void m2UpdateIslandsAndWake(m2World* world);
+void m2UpdateSleep(m2World* world, float dt);
 
 // Soft-step solve for one step (src/solver.c).
 void m2SolveStep(m2World* world, float dt, int32_t substepCount);

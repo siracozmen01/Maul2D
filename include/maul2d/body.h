@@ -60,6 +60,10 @@ extern "C"
     float m2Body_GetAngularVelocity(m2BodyId bodyId);
     uint64_t m2Body_GetUserData(m2BodyId bodyId);
 
+    /// Sleep state (topic-06). Setters and new contacts wake bodies;
+    /// waking is island-transitive at the next step.
+    bool m2Body_IsAwake(m2BodyId bodyId);
+
     /// Setters wake nothing yet (no sleep system in this slice) but are
     /// already journal-shaped: every mutation is a discrete command.
     /// Thread class: writer.

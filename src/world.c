@@ -19,7 +19,7 @@
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 5u
+#define M2_SNAPSHOT_VERSION 6u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -560,6 +560,10 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(bodyShapeHead, cap, int32_t);
     M2_ALLOC(invMass, cap, float);
     M2_ALLOC(invInertia, cap, float);
+    M2_ALLOC(asleep, cap, uint8_t);
+    M2_ALLOC(sleepTimes, cap, float);
+    M2_ALLOC(islandParent, cap, int32_t);
+    M2_ALLOC(islandDisturbed, cap, uint8_t);
     M2_ALLOC(generations, cap, uint16_t);
     M2_ALLOC(freeQueue, cap, int32_t);
     M2_ALLOC(shapeGeometry, shapeCap, m2ShapeGeometry);
@@ -650,6 +654,10 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->bodyShapeHead);
     free(world->invMass);
     free(world->invInertia);
+    free(world->asleep);
+    free(world->sleepTimes);
+    free(world->islandParent);
+    free(world->islandDisturbed);
     free(world->generations);
     free(world->freeQueue);
     free(world->shapeGeometry);
@@ -723,7 +731,9 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     UpdatePairs(world);
     UpdateContacts(world);
 
+    m2UpdateIslandsAndWake(world);
     m2SolveStep(world, dt, substepCount);
+    m2UpdateSleep(world, dt);
 
     world->stepCount += 1;
 }
@@ -760,20 +770,14 @@ typedef struct m2SnapshotHeader
 
 _Static_assert(sizeof(m2SnapshotHeader) == 80, "snapshot header must be padding-free");
 
+static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int direction);
+
+// Single source of truth: the size IS the walk (measure mode). The
+// duplicated byte formula died here after its third drift (assert-caught
+// every time; root cause now removed).
 static int32_t BlockBytes(const m2World* world)
 {
-    size_t cap = (size_t)world->bodyCapacity;
-    size_t shapeCap = (size_t)world->shapeCapacity;
-    size_t bytes = 0;
-    bytes += cap * (sizeof(m2Transform) + sizeof(m2Vec2) + 4 * sizeof(float) + sizeof(uint64_t) +
-                    2 * sizeof(uint8_t) + sizeof(uint16_t) + 2 * sizeof(int32_t));
-    bytes += shapeCap * (sizeof(m2ShapeGeometry) + 3 * sizeof(float) + sizeof(uint64_t) +
-                         5 * sizeof(int32_t) + 2 * sizeof(uint8_t) + sizeof(uint16_t));
-    bytes += M2_TREE_COUNT * sizeof(m2DynamicTree);
-    bytes += (size_t)M2_TREE_COUNT * (size_t)world->treeNodeCapacity * sizeof(m2TreeNode);
-    bytes += (size_t)world->pairCapacity * sizeof(uint64_t);
-    bytes += (size_t)world->pairCapacity * sizeof(m2Manifold);
-    return (int32_t)bytes;
+    return WalkBlocks((m2World*)world, NULL, NULL, 2);
 }
 
 int32_t m2World_SnapshotSize(m2WorldId worldId)
@@ -800,7 +804,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         {                                                                                          \
             memcpy(out + cursor, ptr, (size_t)(bytes));                                            \
         }                                                                                          \
-        else                                                                                       \
+        else if (direction == 1)                                                                   \
         {                                                                                          \
             memcpy(ptr, in + cursor, (size_t)(bytes));                                             \
         }                                                                                          \
@@ -812,6 +816,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->gravityScales, cap * sizeof(float));
     M2_BLOCK(world->invMass, cap * sizeof(float));
     M2_BLOCK(world->invInertia, cap * sizeof(float));
+    M2_BLOCK(world->asleep, cap * sizeof(uint8_t));
+    M2_BLOCK(world->sleepTimes, cap * sizeof(float));
     M2_BLOCK(world->userData, cap * sizeof(uint64_t));
     M2_BLOCK(world->types, cap * sizeof(uint8_t));
     M2_BLOCK(world->alive, cap * sizeof(uint8_t));
@@ -940,6 +946,8 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->invMass[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->invInertia[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
+        h = m2Hash64(h, &world->asleep[i], (int32_t)sizeof(uint8_t));
+        h = m2Hash64(h, &world->sleepTimes[i], (int32_t)sizeof(float));
     }
     h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
     h = m2Hash64(h, world->manifolds, world->pairCount * (int32_t)sizeof(m2Manifold));
@@ -987,6 +995,8 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->bodyShapeHead[index] = -1;
     world->invMass[index] = def->type == m2_dynamicBody ? 1.0f : 0.0f; // shapeless floor
     world->invInertia[index] = 0.0f;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
     if (index + 1 > world->maxBodyIndex)
     {
         world->maxBodyIndex = index + 1;
@@ -1104,6 +1114,8 @@ void m2Body_SetLinearVelocity(m2BodyId bodyId, m2Vec2 velocity)
         return;
     }
     world->linearVelocities[index] = velocity;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
 }
 
 void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
@@ -1116,6 +1128,19 @@ void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
         return;
     }
     world->angularVelocities[index] = velocity;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+bool m2Body_IsAwake(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        return false;
+    }
+    return world->types[index] == (uint8_t)m2_dynamicBody ? world->asleep[index] == 0 : true;
 }
 
 // --- Shapes ---------------------------------------------------------------------
