@@ -57,7 +57,7 @@ jobs:
           "$BIN/test_joints$SUFFIX" | tee -a out.txt
           "$BIN/test_journal$SUFFIX" | tee -a out.txt
           "$BIN/test_queries$SUFFIX" | tee -a out.txt
-          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -77,7 +77,7 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL)_HASH=' hashes/*.txt | tee all-hashes.txt
+          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY)_HASH=' hashes/*.txt | tee all-hashes.txt
           CELLS=6
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
