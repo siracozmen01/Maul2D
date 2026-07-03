@@ -77,7 +77,7 @@ extern "C"
         int32_t constraints;         // solved last step
         int32_t graphColors;         // colors used last step
         int32_t overflowConstraints; // serial bucket last step
-        int32_t stepCount;
+        uint64_t stepCount;
     } m2Counters;
 
     /// Snapshot of the last completed Step. Thread class: reader.
