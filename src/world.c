@@ -22,6 +22,8 @@
 #define M2_DJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2DistanceJointDef) << 8) ^ 4)
 #define M2_RJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2RevoluteJointDef) << 8) ^ 5)
 #define M2_PJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2PrismaticJointDef) << 8) ^ 6)
+#define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
+#define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
 #define M2_SNAPSHOT_VERSION 10u
 
@@ -1870,6 +1872,117 @@ m2JointId m2CreatePrismaticJoint(m2WorldId worldId, const m2PrismaticJointDef* d
         record.def = *def;
         record.expected = jointId;
         m2JournalRecord(world, m2_opCreatePrismaticJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+m2WeldJointDef m2DefaultWeldJointDef(void)
+{
+    m2WeldJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.internalValue = M2_WJOINT_COOKIE;
+    return def;
+}
+
+m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_WJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2JointId jointId = FinishJoint(world, worldId, index, 3, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointRefAngle[index] =
+        RelativeJointAngle(world->transforms[bodyA].q, world->transforms[bodyB].q);
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2WeldJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateWeldJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+m2WheelJointDef m2DefaultWheelJointDef(void)
+{
+    m2WheelJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.localAxisA = (m2Vec2){0.0f, 1.0f};
+    def.enableSpring = true;
+    def.hertz = 2.0f;
+    def.dampingRatio = 0.7f;
+    def.internalValue = M2_WHJOINT_COOKIE;
+    return def;
+}
+
+m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_WHJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    float axisLength =
+        sqrtf(def->localAxisA.x * def->localAxisA.x + def->localAxisA.y * def->localAxisA.y);
+    if (!(axisLength > 1.19209290e-7f))
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2JointId jointId = FinishJoint(world, worldId, index, 4, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointFlags[index] =
+        (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u) | (def->enableSpring ? 4u : 0u);
+    world->jointMotorSpeed[index] = def->motorSpeed;
+    world->jointMaxMotor[index] = def->maxMotorTorque;
+    world->jointLower[index] = def->lowerTranslation;
+    world->jointUpper[index] = def->upperTranslation;
+    world->jointLocalAxisA[index] =
+        (m2Vec2){def->localAxisA.x / axisLength, def->localAxisA.y / axisLength};
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2WheelJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateWheelJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
 }

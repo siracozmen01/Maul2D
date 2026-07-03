@@ -119,6 +119,24 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     press.upperTranslation = 0.3f;
     m2CreatePrismaticJoint(world, &press);
 
+    // Weld and wheel creates put ops 11 and 12 into the gated bytes.
+    m2BodyDef sideDef = m2DefaultBodyDef();
+    sideDef.type = m2_dynamicBody;
+    sideDef.position = (m2Pos2){9.6, 2.0};
+    m2BodyId sidecar = m2CreateBody(world, &sideDef);
+    m2CreateCircleShape(sidecar, &bs, &bc);
+    m2WeldJointDef weld = m2DefaultWeldJointDef();
+    weld.bodyIdA = ram;
+    weld.bodyIdB = sidecar;
+    m2CreateWeldJoint(world, &weld);
+    m2WheelJointDef ride = m2DefaultWheelJointDef();
+    ride.bodyIdA = sidecar;
+    ride.bodyIdB = bob;
+    ride.enableMotor = true;
+    ride.motorSpeed = 2.0f;
+    ride.maxMotorTorque = 5.0f;
+    m2CreateWheelJoint(world, &ride);
+
     for (int32_t i = 0; i < 45; ++i)
     {
         m2World_Step(world, 1.0f / 60.0f, 4);

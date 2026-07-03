@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 2u
+#define M2_JOURNAL_VERSION 3u
 
 typedef struct m2JournalHeader
 {
@@ -139,6 +139,18 @@ typedef struct m2OpCreatePrismaticJoint
     m2PrismaticJointDef def;
     m2JointId expected;
 } m2OpCreatePrismaticJoint;
+
+typedef struct m2OpCreateWeldJoint
+{
+    m2WeldJointDef def;
+    m2JointId expected;
+} m2OpCreateWeldJoint;
+
+typedef struct m2OpCreateWheelJoint
+{
+    m2WheelJointDef def;
+    m2JointId expected;
+} m2OpCreateWheelJoint;
 
 typedef struct m2OpBodyVec
 {
@@ -283,6 +295,26 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             create.def.bodyIdA.world0 = here;
             create.def.bodyIdB.world0 = here;
             m2JointId id = m2CreatePrismaticJoint(worldId, &create.def);
+            M2_ASSERT(id.index1 == create.expected.index1);
+            (void)id;
+            break;
+        }
+        case m2_opCreateWeldJoint:
+        {
+            M2_READ_OP(m2OpCreateWeldJoint, create);
+            create.def.bodyIdA.world0 = here;
+            create.def.bodyIdB.world0 = here;
+            m2JointId id = m2CreateWeldJoint(worldId, &create.def);
+            M2_ASSERT(id.index1 == create.expected.index1);
+            (void)id;
+            break;
+        }
+        case m2_opCreateWheelJoint:
+        {
+            M2_READ_OP(m2OpCreateWheelJoint, create);
+            create.def.bodyIdA.world0 = here;
+            create.def.bodyIdB.world0 = here;
+            m2JointId id = m2CreateWheelJoint(worldId, &create.def);
             M2_ASSERT(id.index1 == create.expected.index1);
             (void)id;
             break;

@@ -79,7 +79,7 @@ typedef struct m2World
     float* jointHertz;
     float* jointDamping;
     m2Vec2* jointImpulse; // distance uses .x only
-    uint8_t* jointFlags;  // bit0 enableMotor, bit1 enableLimit
+    uint8_t* jointFlags;  // bit0 enableMotor, bit1 enableLimit, bit2 enableSpring
     float* jointMotorSpeed;
     float* jointMaxMotor; // torque (revolute) or force (prismatic)
     float* jointLower;
@@ -162,6 +162,8 @@ enum
     m2_opCreateRevoluteJoint = 8,
     m2_opDestroyJoint = 9,
     m2_opCreatePrismaticJoint = 10,
+    m2_opCreateWeldJoint = 11,
+    m2_opCreateWheelJoint = 12,
 };
 
 // Islands & sleep (src/island.c).

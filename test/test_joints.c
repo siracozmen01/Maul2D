@@ -466,6 +466,173 @@ static void TestMotorRollback(void)
     m2DestroyWorld(world);
 }
 
+static void TestWeldRigid(void)
+{
+    // Two boxes welded into a bar, dropped onto a slab: the weld holds
+    // through the impact and the pair lands as one rigid piece.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon box = m2MakeBox(0.4f, 0.4f);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){-0.4, 3.0};
+    m2BodyId left = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(left, &sd, &box);
+    bd.position = (m2Pos2){0.4, 3.0};
+    m2BodyId right = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(right, &sd, &box);
+
+    m2WeldJointDef wd = m2DefaultWeldJointDef();
+    wd.bodyIdA = left;
+    wd.bodyIdB = right;
+    wd.localAnchorA = (m2Vec2){0.4f, 0.0f};
+    wd.localAnchorB = (m2Vec2){-0.4f, 0.0f};
+    m2CreateWeldJoint(world, &wd);
+
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float relAngle = BodyAngle(right) - BodyAngle(left);
+    CHECK(relAngle > -0.01f && relAngle < 0.01f, "weld holds the relative angle");
+    m2Pos2 pl = m2Body_GetPosition(left);
+    m2Pos2 pr = m2Body_GetPosition(right);
+    double gap = pr.x - pl.x;
+    CHECK(gap > 0.78 && gap < 0.82, "weld holds the separation");
+    CHECK(pl.y > 0.35 && pl.y < 0.45, "welded bar rests on the slab");
+
+    m2DestroyWorld(world);
+}
+
+static void TestWheelSuspension(void)
+{
+    // A chassis on one sprung wheel: drop it, the spring absorbs the
+    // fall and the chassis settles above the wheel inside the travel
+    // limits instead of slamming rigidly.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){0.0, 2.5};
+    m2BodyId chassis = m2CreateBody(world, &cd);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    cs.density = 2.0f;
+    m2Polygon deck = m2MakeBox(0.8f, 0.15f);
+    m2CreatePolygonShape(chassis, &cs, &deck);
+
+    m2BodyId wheel = AddBall(world, 0.0, 1.9, 0.3f);
+
+    m2WheelJointDef wd = m2DefaultWheelJointDef();
+    wd.bodyIdA = chassis;
+    wd.bodyIdB = wheel;
+    wd.localAnchorA = (m2Vec2){0.0f, -0.6f};
+    wd.localAxisA = (m2Vec2){0.0f, 1.0f};
+    wd.hertz = 3.0f;
+    wd.dampingRatio = 0.7f;
+    wd.enableLimit = true;
+    wd.lowerTranslation = -0.25f;
+    wd.upperTranslation = 0.25f;
+    m2CreateWheelJoint(world, &wd);
+
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 wheelPos = m2Body_GetPosition(wheel);
+    m2Pos2 chassisPos = m2Body_GetPosition(chassis);
+    CHECK(wheelPos.y > 0.25 && wheelPos.y < 0.35, "wheel rests on the ground");
+    double ride = chassisPos.y - wheelPos.y;
+    CHECK(ride > 0.3 && ride < 0.9, "spring carries the chassis inside travel");
+    CHECK(chassisPos.x > -0.05 && chassisPos.x < 0.05, "suspension does not walk sideways");
+
+    m2DestroyWorld(world);
+}
+
+static void TestWheelCar(void)
+{
+    // The showcase: a two-wheel car drives itself with wheel-joint
+    // motors - suspension, friction and the motor all working together.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId road = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    fs.friction = 0.9f;
+    m2Polygon slab = m2MakeBox(60.0f, 0.5f);
+    m2CreatePolygonShape(road, &fs, &slab);
+
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){0.0, 1.0};
+    m2BodyId chassis = m2CreateBody(world, &cd);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    cs.density = 1.0f;
+    m2Polygon deck = m2MakeBox(0.9f, 0.15f);
+    m2CreatePolygonShape(chassis, &cs, &deck);
+
+    m2BodyId wheels[2];
+    double xs[2] = {-0.6, 0.6};
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        wheels[i] = AddBall(world, xs[i], 0.55, 0.3f);
+        m2WheelJointDef wd = m2DefaultWheelJointDef();
+        wd.bodyIdA = chassis;
+        wd.bodyIdB = wheels[i];
+        wd.localAnchorA = (m2Vec2){(float)xs[i], -0.45f};
+        wd.localAxisA = (m2Vec2){0.0f, 1.0f};
+        wd.hertz = 4.0f;
+        wd.dampingRatio = 0.7f;
+        wd.enableLimit = true;
+        wd.lowerTranslation = -0.2f;
+        wd.upperTranslation = 0.2f;
+        wd.enableMotor = true;
+        wd.motorSpeed = -10.0f; // clockwise spin rolls the car +x
+        wd.maxMotorTorque = 15.0f;
+        m2CreateWheelJoint(world, &wd);
+    }
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // settle onto the road
+    }
+    double startX = m2Body_GetPosition(chassis).x;
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double traveled = m2Body_GetPosition(chassis).x - startX;
+    CHECK(traveled > 3.0, "the car drives itself forward");
+    m2Rot q = m2Body_GetRotation(chassis);
+    CHECK(q.c > 0.95f, "chassis stays upright while driving");
+
+    m2DestroyWorld(world);
+}
+
 static uint64_t JointSweepHash(void)
 {
     // A bridge of revolute links with cargo dropped on it, far from the
@@ -548,6 +715,60 @@ static uint64_t JointSweepHash(void)
     press.upperTranslation = 0.5f;
     m2CreatePrismaticJoint(world, &press);
 
+    // A welded counterweight hangs off the right pier; a sprung buggy
+    // drives across the far apron: weld and wheel bytes join the hash.
+    m2BodyDef counterDef = m2DefaultBodyDef();
+    counterDef.type = m2_dynamicBody;
+    counterDef.position = (m2Pos2){-9.1e5 + 9.6, 3.2};
+    m2BodyId counter = m2CreateBody(world, &counterDef);
+    m2ShapeDef counterShape = m2DefaultShapeDef();
+    m2Polygon counterBox = m2MakeBox(0.3f, 0.3f);
+    m2CreatePolygonShape(counter, &counterShape, &counterBox);
+    m2WeldJointDef weld = m2DefaultWeldJointDef();
+    weld.bodyIdA = right;
+    weld.bodyIdB = counter;
+    weld.localAnchorB = (m2Vec2){0.0f, 0.8f};
+    m2CreateWeldJoint(world, &weld);
+
+    m2BodyDef apronDef = m2DefaultBodyDef();
+    apronDef.position = (m2Pos2){-9.1e5 + 20.0, 0.0};
+    m2BodyId apron = m2CreateBody(world, &apronDef);
+    m2ShapeDef apronShape = m2DefaultShapeDef();
+    apronShape.friction = 0.9f;
+    m2Polygon apronSlab = m2MakeBox(8.0f, 0.5f);
+    m2CreatePolygonShape(apron, &apronShape, &apronSlab);
+    m2BodyDef buggyDef = m2DefaultBodyDef();
+    buggyDef.type = m2_dynamicBody;
+    buggyDef.position = (m2Pos2){-9.1e5 + 15.0, 1.4};
+    m2BodyId buggy = m2CreateBody(world, &buggyDef);
+    m2Polygon buggyDeck = m2MakeBox(0.7f, 0.12f);
+    m2CreatePolygonShape(buggy, &apronShape, &buggyDeck);
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        m2BodyDef wheelDef = m2DefaultBodyDef();
+        wheelDef.type = m2_dynamicBody;
+        wheelDef.position = (m2Pos2){-9.1e5 + 15.0 + (i == 0 ? -0.5 : 0.5), 1.0};
+        m2BodyId tire = m2CreateBody(world, &wheelDef);
+        m2ShapeDef tireShape = m2DefaultShapeDef();
+        tireShape.friction = 0.9f;
+        m2Circle tireCircle = {{0.0f, 0.0f}, 0.25f};
+        m2CreateCircleShape(tire, &tireShape, &tireCircle);
+        m2WheelJointDef ride = m2DefaultWheelJointDef();
+        ride.bodyIdA = buggy;
+        ride.bodyIdB = tire;
+        ride.localAnchorA = (m2Vec2){i == 0 ? -0.5f : 0.5f, -0.4f};
+        ride.localAxisA = (m2Vec2){0.0f, 1.0f};
+        ride.hertz = 4.0f;
+        ride.dampingRatio = 0.7f;
+        ride.enableLimit = true;
+        ride.lowerTranslation = -0.15f;
+        ride.upperTranslation = 0.15f;
+        ride.enableMotor = true;
+        ride.motorSpeed = -6.0f;
+        ride.maxMotorTorque = 10.0f;
+        m2CreateWheelJoint(world, &ride);
+    }
+
     uint64_t h = M2_HASH_INIT;
     for (int32_t step = 0; step < 300; ++step)
     {
@@ -581,6 +802,9 @@ int main(void)
     TestPrismaticSlider();
     TestPrismaticMotor();
     TestMotorRollback();
+    TestWeldRigid();
+    TestWheelSuspension();
+    TestWheelCar();
 
     uint64_t hash = JointSweepHash();
     printf("M2_JOINT_HASH=%016llx\n", (unsigned long long)hash);

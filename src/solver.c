@@ -76,7 +76,7 @@ typedef struct m2JointConstraint
     int32_t jointIndex;
     int32_t bodyA;
     int32_t bodyB;
-    uint8_t type;  // 0 distance, 1 revolute, 2 prismatic
+    uint8_t type;  // 0 distance, 1 revolute, 2 prismatic, 3 weld, 4 wheel
     uint8_t flags; // bit0 motor, bit1 limit
     m2Vec2 rA;     // world-rotated anchors at prepare
     m2Vec2 rB;
@@ -93,9 +93,10 @@ typedef struct m2JointConstraint
     float maxMotorImpulse; // h * maxMotorTorque(Force), clamp budget
     float lower;
     float upper;
-    m2Softness softness;
-    m2Vec2 impulse;     // point/axial (rev/dist) or (perp, angle) (prismatic)
-    float motorImpulse; // accumulated axial trio
+    m2Softness softness;       // constraint rows (stiff for wheel)
+    m2Softness springSoftness; // wheel suspension (real spring)
+    m2Vec2 impulse;            // point/axial; prismatic (perp, angle); wheel (perp, spring)
+    float motorImpulse;        // motor accumulator; weld reuses it for the angle lock
     float lowerImpulse;
     float upperImpulse;
 } m2JointConstraint;
@@ -454,7 +455,7 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = mA + mB + iA * crA * crA + iB * crB * crB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
-        else if (c->type == 1)
+        else if (c->type == 1 || c->type == 3)
         {
             c->baseCVec = (m2Vec2){dx, dy};
             c->k11 = mA + mB + iA * c->rA.y * c->rA.y + iB * c->rB.y * c->rB.y;
@@ -464,7 +465,7 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
             c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
         }
-        else
+        else if (c->type == 2)
         {
             // Prismatic frame at prepare: Jacobians frozen for the
             // substep like the revolute point block (recorded
@@ -485,6 +486,29 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             c->k12 = iA * c->s1 + iB * c->s2;
             float k22 = iA + iB;
             c->k22 = k22 > 0.0f ? k22 : 1.0f; // fixed-rotation guard (reference)
+        }
+        else
+        {
+            // Wheel: slider frame like the prismatic, but rotation is
+            // free. The user's hertz shapes the suspension spring; the
+            // constraint rows stay on the stiff default.
+            c->springSoftness = c->softness;
+            c->softness = MakeSoft(60.0f, 2.0f, h);
+            c->axis = Rotate(qA, world->jointLocalAxisA[j]);
+            c->perp = (m2Vec2){-c->axis.y, c->axis.x};
+            c->baseC = dx * c->axis.x + dy * c->axis.y; // translation0
+            c->baseCVec = (m2Vec2){dx * c->perp.x + dy * c->perp.y, 0.0f};
+            m2Vec2 dPlusRA = {dx + c->rA.x, dy + c->rA.y};
+            c->a1 = Cross(dPlusRA, c->axis);
+            c->a2 = Cross(c->rB, c->axis);
+            c->s1 = Cross(dPlusRA, c->perp);
+            c->s2 = Cross(c->rB, c->perp);
+            float ka = mA + mB + iA * c->a1 * c->a1 + iB * c->a2 * c->a2;
+            c->axialMass = ka > 0.0f ? 1.0f / ka : 0.0f;
+            float kp = mA + mB + iA * c->s1 * c->s1 + iB * c->s2 * c->s2;
+            c->k11 = kp > 0.0f ? 1.0f / kp : 0.0f; // perp effective mass
+            float km = iA + iB;
+            c->k22 = km > 0.0f ? 1.0f / km : 0.0f; // motor effective mass
         }
     }
     return count;
@@ -530,20 +554,31 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
             ApplyJointImpulse(world, c,
                               (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y});
         }
-        else if (c->type == 1)
+        else if (c->type == 1 || c->type == 3)
         {
+            // Weld's angle-lock accumulator rides the motor slot.
             ApplyJointImpulse(world, c, c->impulse);
             float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
             world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * axial;
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * axial;
         }
-        else
+        else if (c->type == 2)
         {
             float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
             m2Vec2 P = {axial * c->axis.x + c->impulse.x * c->perp.x,
                         axial * c->axis.y + c->impulse.x * c->perp.y};
             float LA = axial * c->a1 + c->impulse.x * c->s1 + c->impulse.y;
             float LB = axial * c->a2 + c->impulse.x * c->s2 + c->impulse.y;
+            ApplyPrismaticImpulse(world, c, P, LA, LB);
+        }
+        else
+        {
+            // Wheel: spring rides impulse.y, the motor is pure angular.
+            float axial = c->impulse.y + c->lowerImpulse - c->upperImpulse;
+            m2Vec2 P = {axial * c->axis.x + c->impulse.x * c->perp.x,
+                        axial * c->axis.y + c->impulse.x * c->perp.y};
+            float LA = axial * c->a1 + c->impulse.x * c->s1 + c->motorImpulse;
+            float LB = axial * c->a2 + c->impulse.x * c->s2 + c->motorImpulse;
             ApplyPrismaticImpulse(world, c, P, LA, LB);
         }
     }
@@ -606,9 +641,33 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             c->impulse.x += impulse;
             ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
         }
-        else if (c->type == 1)
+        else if (c->type == 1 || c->type == 3)
         {
-            if ((c->flags & 1u) != 0 && c->axialMass > 0.0f)
+            if (c->type == 3 && c->axialMass > 0.0f)
+            {
+                // Weld angle lock (reference weld_joint.c): a full
+                // constraint row on relative rotation, accumulator in
+                // the motor slot.
+                float bias = 0.0f;
+                float massScale = 1.0f;
+                float impulseScale = 0.0f;
+                if (useBias)
+                {
+                    float C = m2UnwindAngle(c->baseAngle +
+                                            RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                             world->deltaRotations[c->bodyB]));
+                    bias = c->softness.biasRate * C;
+                    massScale = c->softness.massScale;
+                    impulseScale = c->softness.impulseScale;
+                }
+                float cdot = wB - wA;
+                float impulse =
+                    -massScale * c->axialMass * (cdot + bias) - impulseScale * c->motorImpulse;
+                c->motorImpulse += impulse;
+                wA -= world->invInertia[c->bodyA] * impulse;
+                wB += world->invInertia[c->bodyB] * impulse;
+            }
+            if (c->type == 1 && (c->flags & 1u) != 0 && c->axialMass > 0.0f)
             {
                 // Motor: drive relative spin toward motorSpeed within
                 // the per-step torque budget (reference formulation).
@@ -617,7 +676,7 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                 wA -= world->invInertia[c->bodyA] * delta;
                 wB += world->invInertia[c->bodyB] * delta;
             }
-            if ((c->flags & 2u) != 0 && c->axialMass > 0.0f)
+            if (c->type == 1 && (c->flags & 2u) != 0 && c->axialMass > 0.0f)
             {
                 float jointAngle =
                     m2UnwindAngle(c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
@@ -695,7 +754,7 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             c->impulse.y += impulse.y;
             ApplyJointImpulse(world, c, impulse);
         }
-        else
+        else if (c->type == 2)
         {
             float mA = world->invMass[c->bodyA];
             float iA = world->invInertia[c->bodyA];
@@ -810,6 +869,126 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                     vB.y += mB * P.y;
                     wB += iB * LB;
                 }
+            }
+            world->linearVelocities[c->bodyA] = vA;
+            world->angularVelocities[c->bodyA] = wA;
+            world->linearVelocities[c->bodyB] = vB;
+            world->angularVelocities[c->bodyB] = wB;
+        }
+        else
+        {
+            // Wheel (reference wheel_joint.c): rotational motor, real
+            // suspension spring (biased even in relax), translation
+            // limits, single perpendicular row. Rotation stays free.
+            float mA = world->invMass[c->bodyA];
+            float iA = world->invInertia[c->bodyA];
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            float translation = c->baseC + c->axis.x * ds.x + c->axis.y * ds.y;
+
+            if ((c->flags & 1u) != 0 && c->k22 > 0.0f)
+            {
+                float cdot = wB - wA - c->motorSpeed;
+                float unclamped = c->motorImpulse - c->k22 * cdot;
+                float clamped = m2ClampF(unclamped, -c->maxMotorImpulse, c->maxMotorImpulse);
+                float delta = clamped - c->motorImpulse;
+                c->motorImpulse = clamped;
+                wA -= iA * delta;
+                wB += iB * delta;
+            }
+            if ((c->flags & 4u) != 0 && c->axialMass > 0.0f)
+            {
+                float C = translation;
+                float bias = c->springSoftness.biasRate * C;
+                float cdot =
+                    c->axis.x * (vB.x - vA.x) + c->axis.y * (vB.y - vA.y) + c->a2 * wB - c->a1 * wA;
+                float impulse = -c->springSoftness.massScale * c->axialMass * (cdot + bias) -
+                                c->springSoftness.impulseScale * c->impulse.y;
+                c->impulse.y += impulse;
+                vA.x -= mA * impulse * c->axis.x;
+                vA.y -= mA * impulse * c->axis.y;
+                wA -= iA * impulse * c->a1;
+                vB.x += mB * impulse * c->axis.x;
+                vB.y += mB * impulse * c->axis.y;
+                wB += iB * impulse * c->a2;
+            }
+            if ((c->flags & 2u) != 0 && c->axialMass > 0.0f)
+            {
+                { // lower travel stop
+                    float C = translation - c->lower;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float cdot = c->axis.x * (vB.x - vA.x) + c->axis.y * (vB.y - vA.y) +
+                                 c->a2 * wB - c->a1 * wA;
+                    float delta =
+                        SolveAxial(c, cdot, bias, massScale, impulseScale, &c->lowerImpulse, true);
+                    vA.x -= mA * delta * c->axis.x;
+                    vA.y -= mA * delta * c->axis.y;
+                    wA -= iA * delta * c->a1;
+                    vB.x += mB * delta * c->axis.x;
+                    vB.y += mB * delta * c->axis.y;
+                    wB += iB * delta * c->a2;
+                }
+                { // upper travel stop, signs flipped
+                    float C = c->upper - translation;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float cdot = c->axis.x * (vA.x - vB.x) + c->axis.y * (vA.y - vB.y) +
+                                 c->a1 * wA - c->a2 * wB;
+                    float delta =
+                        SolveAxial(c, cdot, bias, massScale, impulseScale, &c->upperImpulse, true);
+                    vA.x += mA * delta * c->axis.x;
+                    vA.y += mA * delta * c->axis.y;
+                    wA += iA * delta * c->a1;
+                    vB.x -= mB * delta * c->axis.x;
+                    vB.y -= mB * delta * c->axis.y;
+                    wB -= iB * delta * c->a2;
+                }
+            }
+            if (c->k11 > 0.0f)
+            { // point-to-line row
+                float cdot =
+                    c->perp.x * (vB.x - vA.x) + c->perp.y * (vB.y - vA.y) + c->s2 * wB - c->s1 * wA;
+                float bias = 0.0f;
+                float massScale = 1.0f;
+                float impulseScale = 0.0f;
+                if (useBias)
+                {
+                    float C = c->baseCVec.x + c->perp.x * ds.x + c->perp.y * ds.y;
+                    bias = c->softness.biasRate * C;
+                    massScale = c->softness.massScale;
+                    impulseScale = c->softness.impulseScale;
+                }
+                float impulse = -massScale * c->k11 * (cdot + bias) - impulseScale * c->impulse.x;
+                c->impulse.x += impulse;
+                vA.x -= mA * impulse * c->perp.x;
+                vA.y -= mA * impulse * c->perp.y;
+                wA -= iA * impulse * c->s1;
+                vB.x += mB * impulse * c->perp.x;
+                vB.y += mB * impulse * c->perp.y;
+                wB += iB * impulse * c->s2;
             }
             world->linearVelocities[c->bodyA] = vA;
             world->angularVelocities[c->bodyA] = wA;
