@@ -61,7 +61,9 @@ extern "C"
 
     typedef struct m2ShapeDef
     {
-        float density; // kg/m^2; dynamic bodies get a minimum-mass floor
+        float density;     // kg/m^2; dynamic bodies get a minimum-mass floor
+        float friction;    // Coulomb; pairs mix by geometric mean
+        float restitution; // bounce in [0,1]; pairs mix by maximum
         uint64_t userData;
         int32_t internalValue;
     } m2ShapeDef;

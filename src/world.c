@@ -19,7 +19,7 @@
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 4u
+#define M2_SNAPSHOT_VERSION 5u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -564,6 +564,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(freeQueue, cap, int32_t);
     M2_ALLOC(shapeGeometry, shapeCap, m2ShapeGeometry);
     M2_ALLOC(shapeDensity, shapeCap, float);
+    M2_ALLOC(shapeFriction, shapeCap, float);
+    M2_ALLOC(shapeRestitution, shapeCap, float);
     M2_ALLOC(shapeUserData, shapeCap, uint64_t);
     M2_ALLOC(shapeBody, shapeCap, int32_t);
     M2_ALLOC(shapeNext, shapeCap, int32_t);
@@ -578,6 +580,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
     M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
     M2_ALLOC(manifoldScratch, world->pairCapacity, m2Manifold);
+    M2_ALLOC(deltaPositions, cap, m2Vec2);
+    M2_ALLOC(deltaRotations, cap, m2Rot);
+    world->constraintScratch =
+        calloc((size_t)world->pairCapacity, (size_t)m2ContactConstraintSize());
+    ok = ok && world->constraintScratch != NULL;
 #undef M2_ALLOC
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
@@ -647,6 +654,8 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->freeQueue);
     free(world->shapeGeometry);
     free(world->shapeDensity);
+    free(world->shapeFriction);
+    free(world->shapeRestitution);
     free(world->shapeUserData);
     free(world->shapeBody);
     free(world->shapeNext);
@@ -661,6 +670,9 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->manifolds);
     free(world->oldPairScratch);
     free(world->manifoldScratch);
+    free(world->deltaPositions);
+    free(world->deltaRotations);
+    free(world->constraintScratch);
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
         free(world->treeNodes[t]);
@@ -683,32 +695,9 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         return;
     }
 
-    float h = dt / (float)substepCount;
-    for (int32_t sub = 0; sub < substepCount; ++sub)
-    {
-        // Fixed body-index order everywhere: the ordering law (ADR-0010).
-        for (int32_t i = 0; i < world->maxBodyIndex; ++i)
-        {
-            if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody)
-            {
-                continue;
-            }
-            world->linearVelocities[i].x += world->gravity.x * world->gravityScales[i] * h;
-            world->linearVelocities[i].y += world->gravity.y * world->gravityScales[i] * h;
-        }
-        for (int32_t i = 0; i < world->maxBodyIndex; ++i)
-        {
-            if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody)
-            {
-                continue;
-            }
-            world->transforms[i].p.x += (double)world->linearVelocities[i].x * (double)h;
-            world->transforms[i].p.y += (double)world->linearVelocities[i].y * (double)h;
-            float dAngle = world->angularVelocities[i] * h;
-            world->transforms[i].q = m2MulRot(world->transforms[i].q, m2MakeRot(dAngle));
-        }
-    }
-
+    // Collide first (reference order): broadphase + narrowphase produce
+    // fresh manifolds from current positions, then the solver moves the
+    // world. Warm-start impulses arrive via the manifold carry.
     // Broadphase update: single-threaded, fixed body order, shape-list
     // order within a body (both snapshot-deterministic).
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
@@ -733,6 +722,8 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     StashContacts(world);
     UpdatePairs(world);
     UpdateContacts(world);
+
+    m2SolveStep(world, dt, substepCount);
 
     world->stepCount += 1;
 }
@@ -776,7 +767,7 @@ static int32_t BlockBytes(const m2World* world)
     size_t bytes = 0;
     bytes += cap * (sizeof(m2Transform) + sizeof(m2Vec2) + 4 * sizeof(float) + sizeof(uint64_t) +
                     2 * sizeof(uint8_t) + sizeof(uint16_t) + 2 * sizeof(int32_t));
-    bytes += shapeCap * (sizeof(m2ShapeGeometry) + sizeof(float) + sizeof(uint64_t) +
+    bytes += shapeCap * (sizeof(m2ShapeGeometry) + 3 * sizeof(float) + sizeof(uint64_t) +
                          5 * sizeof(int32_t) + 2 * sizeof(uint8_t) + sizeof(uint16_t));
     bytes += M2_TREE_COUNT * sizeof(m2DynamicTree);
     bytes += (size_t)M2_TREE_COUNT * (size_t)world->treeNodeCapacity * sizeof(m2TreeNode);
@@ -829,6 +820,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->freeQueue, cap * sizeof(int32_t));
     M2_BLOCK(world->shapeGeometry, shapeCap * sizeof(m2ShapeGeometry));
     M2_BLOCK(world->shapeDensity, shapeCap * sizeof(float));
+    M2_BLOCK(world->shapeFriction, shapeCap * sizeof(float));
+    M2_BLOCK(world->shapeRestitution, shapeCap * sizeof(float));
     M2_BLOCK(world->shapeUserData, shapeCap * sizeof(uint64_t));
     M2_BLOCK(world->shapeBody, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->shapeNext, shapeCap * sizeof(int32_t));
@@ -1132,6 +1125,8 @@ m2ShapeDef m2DefaultShapeDef(void)
     m2ShapeDef def;
     memset(&def, 0, sizeof(def));
     def.density = 1.0f;
+    def.friction = 0.6f;
+    def.restitution = 0.0f;
     def.internalValue = M2_SHAPE_COOKIE;
     return def;
 }
@@ -1142,7 +1137,8 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     m2World* world = GetBodyWorld(bodyId);
     int32_t bodyIndex = world != NULL ? BodySlot(world, bodyId) : -1;
     if (bodyIndex < 0 || def == NULL || def->internalValue != M2_SHAPE_COOKIE ||
-        !(def->density >= 0.0f))
+        !(def->density >= 0.0f) || !(def->friction >= 0.0f) ||
+        !(def->restitution >= 0.0f && def->restitution <= 1.0f))
     {
         M2_ASSERT(false);
         return m2_nullShapeId;
@@ -1160,6 +1156,8 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     memset(&world->shapeGeometry[index], 0, sizeof(m2ShapeGeometry));
     world->shapeGeometry[index] = *geometry;
     world->shapeDensity[index] = def->density;
+    world->shapeFriction[index] = def->friction;
+    world->shapeRestitution[index] = def->restitution;
     world->shapeUserData[index] = def->userData;
     world->shapeBody[index] = bodyIndex;
     world->shapeNext[index] = world->bodyShapeHead[bodyIndex];

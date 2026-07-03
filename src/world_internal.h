@@ -47,6 +47,8 @@ typedef struct m2World
     int32_t maxShapeIndex;
     m2ShapeGeometry* shapeGeometry;
     float* shapeDensity;
+    float* shapeFriction;
+    float* shapeRestitution;
     uint64_t* shapeUserData;
     int32_t* shapeBody; // owning body index
     int32_t* shapeNext; // body's shape list linkage (-1 = end)
@@ -78,8 +80,18 @@ typedef struct m2World
     uint64_t* oldPairScratch;    // step-transient
     m2Manifold* manifoldScratch; // step-transient
 
+    // Solver scratch (slice 4): all step-transient, zeroed at prepare.
+    m2Vec2* deltaPositions; // f32 position deltas within the step
+    m2Rot* deltaRotations;
+    void* constraintScratch; // m2ContactConstraint[pairCapacity]
+
     uint16_t worldGeneration;
 } m2World;
+
+// Soft-step solve for one step (src/solver.c).
+void m2SolveStep(m2World* world, float dt, int32_t substepCount);
+// sizeof(m2ContactConstraint): the scratch block is sized by its owner.
+int32_t m2ContactConstraintSize(void);
 
 // White-box accessor for tests and internal modules. Returns NULL for a
 // stale or null id. Not part of the public ABI.

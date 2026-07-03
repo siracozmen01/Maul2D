@@ -11,6 +11,7 @@ add_library(maul2d STATIC
     src/manifold.c
     src/math_functions.c
     src/shape.c
+    src/solver.c
     src/world.c)
 target_include_directories(maul2d PUBLIC include)
 maul2d_apply_flags(maul2d)
@@ -48,6 +49,12 @@ target_link_libraries(test_contacts PRIVATE maul2d)
 target_include_directories(test_contacts PRIVATE src)
 maul2d_apply_flags(test_contacts)
 add_test(NAME contacts COMMAND test_contacts)
+
+add_executable(test_solver test/test_solver.c)
+target_link_libraries(test_solver PRIVATE maul2d)
+target_include_directories(test_solver PRIVATE src)
+maul2d_apply_flags(test_solver)
+add_test(NAME solver COMMAND test_solver)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)

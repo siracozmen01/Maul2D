@@ -102,12 +102,11 @@ static void TestPersistenceAndCarry(void)
     m2WorldDef def = m2DefaultWorldDef();
     def.bodyCapacity = 8;
     def.shapeCapacity = 8;
-    def.gravity = (m2Vec2){0.0f, 0.0f};
     m2WorldId worldId = m2CreateWorld(&def);
     m2World* world = m2World_GetInternal(worldId);
 
-    // A dynamic circle resting overlapped on a static polygon: the pair
-    // is stable, so the manifold point must persist by feature id.
+    // A dynamic circle resting on a static polygon under gravity: the
+    // point must persist by feature id and carry the body's weight.
     m2BodyDef floorDef = m2DefaultBodyDef();
     m2BodyId floorBody = m2CreateBody(worldId, &floorDef);
     m2ShapeDef sd = m2DefaultShapeDef();
@@ -116,22 +115,24 @@ static void TestPersistenceAndCarry(void)
 
     m2BodyDef bd = m2DefaultBodyDef();
     bd.type = m2_dynamicBody;
-    bd.position = (m2Pos2){0.0, 0.8};
+    bd.position = (m2Pos2){0.0, 0.92};
     m2BodyId ball = m2CreateBody(worldId, &bd);
     m2Circle circle = {{0.0f, 0.0f}, 0.4f};
     m2CreateCircleShape(ball, &sd, &circle);
 
-    m2World_Step(worldId, 1.0f / 60.0f, 4);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(worldId, 1.0f / 60.0f, 4);
+    }
     CHECK(world->pairCount == 1 && world->manifolds[0].pointCount == 1, "resting contact");
     uint16_t firstId = world->manifolds[0].points[0].id;
-
-    // Inject a warm-start impulse (white box) and step: the fresh
-    // manifold must inherit it through the id match.
-    world->manifolds[0].points[0].normalImpulse = 3.5f;
+    float restingImpulse = world->manifolds[0].points[0].normalImpulse;
+    CHECK(restingImpulse > 0.0f, "resting contact carries load");
     m2World_Step(worldId, 1.0f / 60.0f, 4);
     CHECK(world->manifolds[0].points[0].id == firstId, "feature id stable across steps");
-    CHECK(world->manifolds[0].points[0].normalImpulse == 3.5f, "impulse carried by id match");
     CHECK((world->manifolds[0].points[0].flags & 1) != 0, "persisted flag set");
+    m2Pos2 rest = m2Body_GetPosition(ball);
+    CHECK(rest.y > 0.85 && rest.y < 0.95, "ball rests on the slab, no sinking");
 
     m2DestroyWorld(worldId);
 }
@@ -303,7 +304,6 @@ static void TestBoxStackPersistence(void)
     m2WorldDef def = m2DefaultWorldDef();
     def.bodyCapacity = 8;
     def.shapeCapacity = 8;
-    def.gravity = (m2Vec2){0.0f, 0.0f};
     m2WorldId worldId = m2CreateWorld(&def);
     m2World* world = m2World_GetInternal(worldId);
 
@@ -320,12 +320,13 @@ static void TestBoxStackPersistence(void)
     m2Polygon unit = m2MakeBox(0.5f, 0.5f);
     m2CreatePolygonShape(box, &sd, &unit);
 
-    m2World_Step(worldId, 1.0f / 60.0f, 4);
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        m2World_Step(worldId, 1.0f / 60.0f, 4);
+    }
     CHECK(world->pairCount == 1 && world->manifolds[0].pointCount == 2, "stack contact");
     uint16_t id0 = world->manifolds[0].points[0].id;
     uint16_t id1 = world->manifolds[0].points[1].id;
-    world->manifolds[0].points[0].normalImpulse = 1.25f;
-    world->manifolds[0].points[1].tangentImpulse = -0.75f;
 
     for (int32_t i = 0; i < 30; ++i)
     {
@@ -333,8 +334,11 @@ static void TestBoxStackPersistence(void)
     }
     CHECK(world->manifolds[0].points[0].id == id0 && world->manifolds[0].points[1].id == id1,
           "box-slab ids stable over 30 steps");
-    CHECK(world->manifolds[0].points[0].normalImpulse == 1.25f, "normal impulse carried");
-    CHECK(world->manifolds[0].points[1].tangentImpulse == -0.75f, "tangent impulse carried");
+    CHECK(world->manifolds[0].points[0].normalImpulse > 0.0f &&
+              world->manifolds[0].points[1].normalImpulse > 0.0f,
+          "both points carry the box weight");
+    m2Pos2 boxPos = m2Body_GetPosition(box);
+    CHECK(boxPos.y > 0.9 && boxPos.y < 1.05, "box rests without sinking");
 
     m2DestroyWorld(worldId);
 }
