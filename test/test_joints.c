@@ -689,6 +689,61 @@ static void TestJointRuntimeTuning(void)
     m2DestroyWorld(world);
 }
 
+static void TestSoftWeld(void)
+{
+    // Twin cantilevers off static walls: the rigid weld holds its
+    // angle, the angular-soft weld droops under the same load like the
+    // spring it now is.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.gravity = (m2Vec2){0.0f, -10.0f};
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    for (int32_t soft = 0; soft < 2; ++soft)
+    {
+        double x = soft == 0 ? 0.0 : 10.0;
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.position = (m2Pos2){x, 4.0};
+        m2BodyId wall = m2CreateBody(world, &wd);
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){x + 0.9, 4.0};
+        m2BodyId beam = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 2.0f;
+        m2Polygon bar = m2MakeBox(0.9f, 0.06f);
+        m2CreatePolygonShape(beam, &sd, &bar);
+        m2WeldJointDef weld = m2DefaultWeldJointDef();
+        weld.bodyIdA = wall;
+        weld.bodyIdB = beam;
+        weld.localAnchorB = (m2Vec2){-0.9f, 0.0f};
+        if (soft == 1)
+        {
+            weld.angularHertz = 1.5f;
+            weld.angularDampingRatio = 0.3f;
+        }
+        m2CreateWeldJoint(world, &weld);
+    }
+
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    // Compare the beam tips by looking the bodies up via queries.
+    m2RayCastResult rigid = m2World_CastRayClosest(world, (m2Pos2){1.7, 6.0}, (m2Vec2){0.0f, -6.0f},
+                                                   m2DefaultQueryFilter());
+    m2RayCastResult soft = m2World_CastRayClosest(world, (m2Pos2){11.7, 6.0}, (m2Vec2){0.0f, -6.0f},
+                                                  m2DefaultQueryFilter());
+    CHECK(rigid.hit, "rigid beam tip is where it was built");
+    CHECK(rigid.point.y > 3.85, "the rigid weld holds its angle");
+    CHECK(!soft.hit || soft.point.y < rigid.point.y - 0.05,
+          "the angular-soft weld droops under the same load");
+
+    m2DestroyWorld(world);
+}
+
 static uint64_t JointSweepHash(void)
 {
     // A bridge of revolute links with cargo dropped on it, far from the
@@ -862,6 +917,7 @@ int main(void)
     TestWheelSuspension();
     TestWheelCar();
     TestJointRuntimeTuning();
+    TestSoftWeld();
 
     uint64_t hash = JointSweepHash();
     printf("M2_JOINT_HASH=%016llx\n", (unsigned long long)hash);

@@ -93,10 +93,13 @@ typedef struct m2JointConstraint
     float maxMotorImpulse; // h * maxMotorTorque(Force), clamp budget
     float lower;
     float upper;
-    m2Softness softness;       // constraint rows (stiff for wheel)
+    m2Softness softness;       // constraint rows (stiff for wheel); weld linear
     m2Softness springSoftness; // wheel suspension (real spring)
-    m2Vec2 impulse;            // point/axial; prismatic (perp, angle); wheel (perp, spring)
-    float motorImpulse;        // motor accumulator; weld reuses it for the angle lock
+    m2Softness softness2;      // weld angular row
+    bool linearSpring;         // weld: nonzero hertz = biased even in relax
+    bool angularSpring;
+    m2Vec2 impulse;     // point/axial; prismatic (perp, angle); wheel (perp, spring)
+    float motorImpulse; // motor accumulator; weld reuses it for the angle lock
     float lowerImpulse;
     float upperImpulse;
 } m2JointConstraint;
@@ -1100,6 +1103,11 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = iA + iB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
             c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
+            c->linearSpring = c->type == 3 && world->jointHertz[j] > 0.0f;
+            c->angularSpring = c->type == 3 && world->jointHertz2[j] > 0.0f;
+            c->softness2 = c->angularSpring
+                               ? MakeSoft(world->jointHertz2[j], world->jointDamping2[j], h)
+                               : MakeSoft(60.0f, 2.0f, h);
         }
         else if (c->type == 2)
         {
@@ -1287,14 +1295,16 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                 float bias = 0.0f;
                 float massScale = 1.0f;
                 float impulseScale = 0.0f;
-                if (useBias)
+                // Nonzero angular hertz = a real spring: biased even
+                // during relax (reference semantics).
+                if (useBias || c->angularSpring)
                 {
                     float C = m2UnwindAngle(c->baseAngle +
                                             RelativeRotAngle(world->deltaRotations[c->bodyA],
                                                              world->deltaRotations[c->bodyB]));
-                    bias = c->softness.biasRate * C;
-                    massScale = c->softness.massScale;
-                    impulseScale = c->softness.impulseScale;
+                    bias = c->softness2.biasRate * C;
+                    massScale = c->softness2.massScale;
+                    impulseScale = c->softness2.impulseScale;
                 }
                 float cdot = wB - wA;
                 float impulse =
@@ -1364,7 +1374,7 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             m2Vec2 bias = {0.0f, 0.0f};
             float massScale = 1.0f;
             float impulseScale = 0.0f;
-            if (useBias)
+            if (useBias || (c->type == 3 && c->linearSpring))
             {
                 m2Vec2 C = {c->baseCVec.x + ds.x, c->baseCVec.y + ds.y};
                 bias.x = c->softness.massScale * c->softness.biasRate * C.x;

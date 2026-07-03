@@ -25,7 +25,7 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 14u
+#define M2_SNAPSHOT_VERSION 15u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -773,6 +773,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointLength, jointCap, float);
     M2_ALLOC(jointHertz, jointCap, float);
     M2_ALLOC(jointDamping, jointCap, float);
+    M2_ALLOC(jointHertz2, jointCap, float);
+    M2_ALLOC(jointDamping2, jointCap, float);
     M2_ALLOC(jointImpulse, jointCap, m2Vec2);
     M2_ALLOC(jointFlags, jointCap, uint8_t);
     M2_ALLOC(jointMotorSpeed, jointCap, float);
@@ -918,6 +920,8 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointLength);
     m2Free(world->jointHertz);
     m2Free(world->jointDamping);
+    m2Free(world->jointHertz2);
+    m2Free(world->jointDamping2);
     m2Free(world->jointImpulse);
     m2Free(world->jointFlags);
     m2Free(world->jointMotorSpeed);
@@ -1239,6 +1243,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointLength, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointHertz, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointDamping, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointHertz2, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointDamping2, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointImpulse, (size_t)world->jointCapacity * sizeof(m2Vec2));
     M2_BLOCK(world->jointFlags, (size_t)world->jointCapacity * sizeof(uint8_t));
     M2_BLOCK(world->jointMotorSpeed, (size_t)world->jointCapacity * sizeof(float));
@@ -2261,6 +2267,8 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointLength[index] = length;
     world->jointHertz[index] = hertz;
     world->jointDamping[index] = damping;
+    world->jointHertz2[index] = 0.0f;
+    world->jointDamping2[index] = 0.0f;
     world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
     world->jointFlags[index] = 0;
     world->jointMotorSpeed[index] = 0.0f;
@@ -2483,8 +2491,11 @@ m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def)
     {
         return m2_nullJointId;
     }
-    m2JointId jointId = FinishJoint(world, worldId, index, 3, bodyA, bodyB, def->localAnchorA,
-                                    def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    m2JointId jointId =
+        FinishJoint(world, worldId, index, 3, bodyA, bodyB, def->localAnchorA, def->localAnchorB,
+                    0.0f, def->linearHertz, def->linearDampingRatio);
+    world->jointHertz2[index] = def->angularHertz;
+    world->jointDamping2[index] = def->angularDampingRatio;
     world->jointRefAngle[index] =
         RelativeJointAngle(world->transforms[bodyA].q, world->transforms[bodyB].q);
     if (world->journalActive != 0)

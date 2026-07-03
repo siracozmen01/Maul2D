@@ -90,6 +90,8 @@ typedef struct m2World
     float* jointLength;
     float* jointHertz;
     float* jointDamping;
+    float* jointHertz2; // weld: angular row (linear rides jointHertz)
+    float* jointDamping2;
     m2Vec2* jointImpulse; // distance uses .x only
     uint8_t* jointFlags;  // bit0 enableMotor, bit1 enableLimit, bit2 enableSpring
     float* jointMotorSpeed;

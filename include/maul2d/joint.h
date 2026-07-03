@@ -75,16 +75,20 @@ extern "C"
     } m2PrismaticJointDef;
 
     /// Welds two bodies into one rigid piece: relative position and
-    /// rotation lock to their creation values. hertz softens the weld
-    /// (0 = rigid via the stiff default).
+    /// rotation lock to their creation values. The linear and angular
+    /// rows soften independently, reference-style: zero hertz means
+    /// rigid via the stiff default, nonzero turns that row into a real
+    /// spring (biased even in the relax pass).
     typedef struct m2WeldJointDef
     {
         m2BodyId bodyIdA;
         m2BodyId bodyIdB;
         m2Vec2 localAnchorA;
         m2Vec2 localAnchorB;
-        float hertz; // 0 = stiff default
-        float dampingRatio;
+        float linearHertz; // 0 = rigid
+        float linearDampingRatio;
+        float angularHertz; // 0 = rigid
+        float angularDampingRatio;
         int32_t internalValue;
     } m2WeldJointDef;
 
