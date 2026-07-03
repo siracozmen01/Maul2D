@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64-gcc,     os: ubuntu-latest,    cc: gcc,   cxxflags: "" }
+          - { name: linux-x64-clang,   os: ubuntu-latest,    cc: clang, cxxflags: "" }
+          - { name: linux-arm64-gcc,   os: ubuntu-24.04-arm, cc: gcc,   cxxflags: "" }
+          - { name: linux-arm64-clang, os: ubuntu-24.04-arm, cc: clang, cxxflags: "" }
+          - { name: macos-arm64-clang, os: macos-latest,     cc: clang, cxxflags: "" }
+          - { name: windows-x64-msvc,  os: windows-latest,   cc: cl,    cxxflags: "" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "${{ matrix.cc }}" = "cl" ]; then
+            cmake -B build
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          fi
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release
+
+      - name: Run determinism gate
+        shell: bash
+        run: |
+          if [ -f build/Release/test_core.exe ]; then
+            EXE=build/Release/test_core.exe
+          else
+            EXE=build/test_core
+          fi
+          $EXE | tee out.txt
+          grep '^M2_DET_HASH=' out.txt > "hash-${{ matrix.name }}.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hash-${{ matrix.name }}
+          path: hash-${{ matrix.name }}.txt
+
+  compare-hashes:
+    name: cross-platform hash equality
+    needs: build-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: hashes
+          merge-multiple: true
+      - name: Compare
+        shell: bash
+        run: |
+          cat hashes/*.txt
+          COUNT=$(cat hashes/*.txt | sort -u | wc -l)
+          if [ "$COUNT" != "1" ]; then
+            echo "DETERMINISM FAILURE: hashes differ across platforms"
+            exit 1
+          fi
+          echo "all platform cells produced identical bits"
+
+  sanitize:
+    name: asan+ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_SANITIZE=ON -DCMAKE_C_COMPILER=clang
+      - name: Build
+        run: cmake --build build
+      - name: Run
+        run: ./build/test_core
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          sudo apt-get install -y clang-format >/dev/null
+          clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c

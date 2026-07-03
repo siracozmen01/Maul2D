@@ -1,0 +1,26 @@
+# Maul pinned formatting (ADR-0013 §3). Copied verbatim into maul2d/maul3d. Never edited per-PR.
+Language: Cpp
+Standard: Latest
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+IndentCaseLabels: false
+AlignConsecutiveMacros: Consecutive
+AlignTrailingComments: true
+SpaceAfterCStyleCast: false
+SpacesInParentheses: false
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+MaxEmptyLinesToKeep: 1
+ReflowComments: true
+AlignAfterOpenBracket: Align
+BinPackArguments: true
+BinPackParameters: true
