@@ -27,6 +27,15 @@ extern "C"
 /// Seed value for m2Hash64 chains (FNV-1a offset basis).
 #define M2_HASH_INIT 14695981039346656037ULL
 
+    /// Internal assertion failure sink (debug builds only). Prints and traps.
+    void m2AssertFail(const char* condition, const char* file, int line);
+
+#if defined(NDEBUG)
+#define M2_ASSERT(cond) ((void)0)
+#else
+#define M2_ASSERT(cond) ((cond) ? (void)0 : m2AssertFail(#cond, __FILE__, __LINE__))
+#endif
+
 #ifdef __cplusplus
 }
 #endif

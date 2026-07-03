@@ -7,16 +7,32 @@
 // They are chosen for bit-identical results on every platform and for
 // behavioral parity with the reference implementation.
 
+#include "maul2d/base.h"
 #include "maul2d/math.h"
 
 #include <math.h> // floorf, sqrtf only: both are IEEE-exact operations
 
 float m2UnwindAngle(float radians)
 {
-    // Map to [-pi, pi) using only *, +, - and floorf.
+    M2_ASSERT(radians >= -1.0e6f && radians <= 1.0e6f);
+
+    // Map toward [-pi, pi] using only *, +, - and floorf, then re-fold
+    // once: twoPi * k carries rounding error, so a single fold pass pulls
+    // boundary spill back in. The final clamp is the deterministic
+    // fallback for out-of-range garbage (release builds, no assert):
+    // finite boundary values, never NaN downstream.
     float twoPi = 2.0f * M2_PI;
     float k = floorf((radians + M2_PI) / twoPi);
-    return radians - twoPi * k;
+    float u = radians - twoPi * k;
+    if (u > M2_PI)
+    {
+        u = u - twoPi;
+    }
+    if (u < -M2_PI)
+    {
+        u = u + twoPi;
+    }
+    return m2ClampF(u, -M2_PI, M2_PI);
 }
 
 m2Rot m2MakeRot(float radians)
@@ -56,8 +72,16 @@ m2Rot m2MakeRot(float radians)
         s = 16.0f * x * (M2_PI - x) / (5.0f * pi2 - 4.0f * x * (M2_PI - x));
     }
 
+    // The polynomial magnitude is bounded away from zero for in-range x;
+    // the identity fallback covers degenerate release-mode input.
     float mag = sqrtf(s * s + c * c);
-    float invMag = mag > 0.0f ? 1.0f / mag : 0.0f;
+    M2_ASSERT(mag > 0.5f && mag < 2.0f);
+    if (!(mag > 0.0f))
+    {
+        m2Rot identity = {1.0f, 0.0f};
+        return identity;
+    }
+    float invMag = 1.0f / mag;
     m2Rot q = {c * invMag, s * invMag};
     return q;
 }
@@ -74,6 +98,9 @@ float m2Atan2(float y, float x)
     float ay = m2AbsF(y);
     float mx = m2MaxF(ay, ax);
     float mn = m2MinF(ay, ax);
+    // mx > 0 is guaranteed: the (0,0) early-out above catches both signed
+    // zeros (-0.0f == 0.0f compares true).
+    M2_ASSERT(mx > 0.0f);
     float a = mn / mx;
 
     // Minimax polynomial approximation to atan(a) on [0, 1].
@@ -105,7 +132,14 @@ float m2Atan2(float y, float x)
 m2Rot m2NormalizeRot(m2Rot q)
 {
     float mag = sqrtf(q.c * q.c + q.s * q.s);
-    float invMag = mag > 0.0f ? 1.0f / mag : 0.0f;
+    if (!(mag > 0.0f))
+    {
+        // Degenerate input: deterministic identity, never NaN (a zero
+        // inverse magnitude would manufacture the {0,0} non-rotation).
+        m2Rot identity = {1.0f, 0.0f};
+        return identity;
+    }
+    float invMag = 1.0f / mag;
     m2Rot result = {q.c * invMag, q.s * invMag};
     return result;
 }

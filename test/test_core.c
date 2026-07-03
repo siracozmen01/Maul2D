@@ -80,6 +80,26 @@ static void TestAccuracy(void)
         }
     }
 
+    // Unwind: range contract + mod-2pi consistency + large-input NaN-freedom.
+    for (int i = 0; i <= 40000; ++i)
+    {
+        float angle = -200.0f + 400.0f * (float)i / 40000.0f;
+        float u = m2UnwindAngle(angle);
+        CHECK(u >= -M2_PI && u <= M2_PI, "m2UnwindAngle outside [-pi, pi]");
+        double diff = ((double)angle - (double)u) / (2.0 * 3.14159265358979323846);
+        double frac = fabs(diff - floor(diff + 0.5));
+        CHECK(frac < 1.0e-3, "m2UnwindAngle not congruent mod 2pi");
+    }
+#if defined(NDEBUG)
+    // Out-of-contract input: in release the deterministic fallback must be
+    // finite and unit; in debug M2_ASSERT guards this path instead.
+    m2Rot big = m2MakeRot(1.0e30f);
+    CHECK(big.c == big.c && big.s == big.s, "m2MakeRot must never return NaN");
+    CHECK(m2IsNormalizedRot(big), "m2MakeRot fallback must be a unit rotation");
+#endif
+    m2Rot degenerate = m2NormalizeRot((m2Rot){0.0f, 0.0f});
+    CHECK(degenerate.c == 1.0f && degenerate.s == 0.0f, "degenerate normalize must be identity");
+
     // Bhaskara I: ~2e-3 absolute worst case; atan2 minimax: ~1e-4.
     CHECK(maxSinErr < 3.0e-3, "m2MakeRot sine outside error bound");
     CHECK(maxCosErr < 3.0e-3, "m2MakeRot cosine outside error bound");
@@ -133,6 +153,14 @@ static void TestMinMaxSemantics(void)
     memcpy(&qnan, &nanBits, sizeof(qnan));
     CHECK(FloatBits(m2MinF(qnan, 1.0f)) == FloatBits(1.0f), "m2MinF(NaN,1) must return 1");
     CHECK(FloatBits(m2MinF(1.0f, qnan)) == nanBits, "m2MinF(1,NaN) must return the NaN");
+    CHECK(FloatBits(m2MaxF(qnan, 1.0f)) == FloatBits(1.0f), "m2MaxF(NaN,1) must return 1");
+    CHECK(FloatBits(m2MaxF(1.0f, qnan)) == nanBits, "m2MaxF(1,NaN) must return the NaN");
+
+    // Clamp inherits the pinned semantics; pin its edge behavior too.
+    CHECK(m2ClampF(0.5f, -1.0f, 1.0f) == 0.5f, "m2ClampF passthrough");
+    CHECK(m2ClampF(-2.0f, -1.0f, 1.0f) == -1.0f, "m2ClampF low");
+    CHECK(m2ClampF(2.0f, -1.0f, 1.0f) == 1.0f, "m2ClampF high");
+    CHECK(m2ClampF(0.0f, 1.0f, -1.0f) == 1.0f, "m2ClampF(lo>hi) resolves to lo by definition");
 }
 
 // --- 3. Determinism hash ----------------------------------------------------
@@ -180,10 +208,17 @@ static uint64_t HashSweep(void)
         h = m2Hash64(h, &mix, sizeof(mix));
     }
 
-    // Pinned min/max outcomes are part of the contract, so hash them too.
+    // Pinned min/max outcomes are part of the contract, so hash them too -
+    // including the NaN cases (their bit patterns are pinned) and clamp/abs.
     float pz = 0.0f;
     float nz = -0.0f;
-    float mm[4] = {m2MinF(pz, nz), m2MinF(nz, pz), m2MaxF(pz, nz), m2MaxF(nz, pz)};
+    uint32_t nanBits = 0x7FC00000u;
+    float qnan;
+    memcpy(&qnan, &nanBits, sizeof(qnan));
+    float mm[10] = {m2MinF(pz, nz),     m2MinF(nz, pz),     m2MaxF(pz, nz),
+                    m2MaxF(nz, pz),     m2MinF(qnan, 2.0f), m2MinF(2.0f, qnan),
+                    m2MaxF(qnan, 2.0f), m2MaxF(2.0f, qnan), m2ClampF(3.0f, -1.0f, 1.0f),
+                    m2AbsF(nz)};
     h = m2Hash64(h, mm, sizeof(mm));
 
     return h;

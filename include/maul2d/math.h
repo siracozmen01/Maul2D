@@ -4,7 +4,6 @@
 #ifndef MAUL2D_MATH_H
 #define MAUL2D_MATH_H
 
-#include <assert.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -43,10 +42,12 @@ extern "C"
 
     // Snapshot-visible structs must have no hidden padding: byte-exact
     // snapshots depend on it. sizeof must equal the sum of the members.
-    static_assert(sizeof(m2Vec2) == 8, "m2Vec2 must be 8 bytes");
-    static_assert(sizeof(m2Pos2) == 16, "m2Pos2 must be 16 bytes");
-    static_assert(sizeof(m2Rot) == 8, "m2Rot must be 8 bytes");
-    static_assert(sizeof(m2Transform) == 24, "m2Transform must be 24 bytes, no padding");
+    _Static_assert(sizeof(m2Vec2) == 8, "m2Vec2 must be 8 bytes");
+    _Static_assert(sizeof(m2Pos2) == 16, "m2Pos2 must be 16 bytes");
+    _Static_assert(sizeof(m2Rot) == 8, "m2Rot must be 8 bytes");
+    _Static_assert(sizeof(m2Transform) == 24, "m2Transform must be 24 bytes, no padding");
+    _Static_assert(_Alignof(m2Vec2) == 4 && _Alignof(m2Rot) == 4, "float pair alignment");
+    _Static_assert(_Alignof(m2Pos2) == 8 && _Alignof(m2Transform) == 8, "double alignment");
 
 #if defined(_MSC_VER) && defined(_M_X64)
 #include <xmmintrin.h>
@@ -62,6 +63,9 @@ extern "C"
     {
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_min_ss(_mm_set_ss(a), _mm_set_ss(b)));
+#elif defined(_MSC_VER)
+#error                                                                                             \
+    "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"
 #else
     return a < b ? a : b;
 #endif
@@ -73,6 +77,9 @@ extern "C"
     {
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(a), _mm_set_ss(b)));
+#elif defined(_MSC_VER)
+#error                                                                                             \
+    "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"
 #else
     return a > b ? a : b;
 #endif
@@ -90,15 +97,17 @@ extern "C"
         return m2MaxF(lo, m2MinF(a, hi));
     }
 
-    /// Map an angle in radians to [-pi, pi). Deterministic on every
-    /// platform (uses only +, -, *, / and floorf). Intended for API-rim
-    /// angles of ordinary magnitude; extreme inputs lose precision like
-    /// any float angle does.
+    /// Map an angle to [-pi, pi] (boundary within one rounding step of pi).
+    /// Deterministic on every platform (uses only +, -, *, / and floorf).
+    /// Valid input range is |radians| <= 1.0e6f (asserted in debug); beyond
+    /// float precision limits an angle is meaningless anyway, and the
+    /// deterministic fallback is the clamped boundary, never NaN.
     float m2UnwindAngle(float radians);
 
     /// Build a rotation from an angle. Deterministic across platforms:
-    /// does not call libm. Accuracy is a documented approximation
-    /// (see src/math_functions.c), identical bits everywhere.
+    /// does not call libm; never returns NaN (out-of-range input falls
+    /// back deterministically, see m2UnwindAngle). Accuracy is a
+    /// documented approximation, identical bits everywhere.
     m2Rot m2MakeRot(float radians);
 
     /// Deterministic atan2 replacement. Returns 0 for (0, 0) instead of NaN.
@@ -106,6 +115,8 @@ extern "C"
 
     /// Renormalize a rotation. Every rotation composition site must call
     /// this immediately (drift control is part of the determinism contract).
+    /// A degenerate input (zero or non-finite magnitude) returns the
+    /// identity rotation - never NaN, never a non-unit result.
     m2Rot m2NormalizeRot(m2Rot q);
 
     /// Compose two rotations (q followed by r), renormalized.

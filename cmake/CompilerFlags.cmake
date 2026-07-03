@@ -3,6 +3,14 @@
 # test suite verifies at runtime what these flags promise at build time.
 
 function(maul2d_apply_flags target)
+    # A host injecting fast-math through global flags would silently void
+    # the determinism contract; refuse to configure at all.
+    string(FIND "${CMAKE_C_FLAGS}" "fast-math" _m2_fastmath)
+    string(FIND "${CMAKE_C_FLAGS}" "/fp:fast" _m2_fpfast)
+    if(NOT _m2_fastmath EQUAL -1 OR NOT _m2_fpfast EQUAL -1)
+        message(FATAL_ERROR "fast-math in CMAKE_C_FLAGS is incompatible with maul2d's determinism contract")
+    endif()
+
     set_target_properties(${target} PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
 
     if(MSVC)
@@ -15,7 +23,7 @@ function(maul2d_apply_flags target)
         target_compile_options(${target} PRIVATE /W4 /WX /fp:precise /fp:contract-)
     else()
         target_compile_options(${target} PRIVATE
-            -ffp-contract=off
+            -ffp-contract=off -fno-fast-math -fno-unsafe-math-optimizations
             -Wall -Wextra -Werror -Wshadow -Wdouble-promotion)
     endif()
 

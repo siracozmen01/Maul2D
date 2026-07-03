@@ -44,7 +44,7 @@ jobs:
             EXE=build/test_core
           fi
           $EXE | tee out.txt
-          grep '^M2_DET_HASH=' out.txt > "hash-${{ matrix.name }}.txt"
+          grep '^M2_DET_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -108,7 +108,9 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Run
+        shell: bash
         run: |
+          set -o pipefail
           ./build/benchmark/harness | tee harness-metrics.txt
       - uses: actions/upload-artifact@v4
         with:
