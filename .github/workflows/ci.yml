@@ -95,3 +95,20 @@ jobs:
           pip install clang-format==22.1.5 >/dev/null
           clang-format --version
           clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c
+
+  harness:
+    name: dual-backend harness (reference)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMAUL2D_BENCHMARKS=ON
+      - name: Build
+        run: cmake --build build
+      - name: Run
+        run: |
+          ./build/benchmark/harness | tee harness-metrics.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harness-metrics
+          path: harness-metrics.txt

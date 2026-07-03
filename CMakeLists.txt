@@ -21,3 +21,8 @@ if(NOT MSVC)
     target_link_libraries(test_core PRIVATE m)
 endif()
 add_test(NAME core COMMAND test_core)
+
+option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
+if(MAUL2D_BENCHMARKS)
+    add_subdirectory(benchmark)
+endif()
