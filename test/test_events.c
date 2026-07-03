@@ -237,8 +237,60 @@ static uint64_t EventSweepHash(void)
     return h;
 }
 
+static void TestDestroyShapeBookends(void)
+{
+    // M19 for the newest killing path: destroying one shape of a
+    // two-shape body must end its touching contact and lighten the
+    // body, while the body itself lives on.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.55};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon foot = m2MakeBox(0.4f, 0.4f);
+    m2ShapeId footId = m2CreatePolygonShape(body, &sd, &foot);
+    m2Circle hat = {{0.0f, 0.9f}, 0.3f};
+    m2ShapeId hatId = m2CreateCircleShape(body, &sd, &hat);
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    // Destroy the touching foot between steps.
+    m2DestroyShape(footId);
+    CHECK(!m2Shape_IsValid(footId), "destroyed shape id dies");
+    CHECK(m2Shape_IsValid(hatId), "sibling shape lives");
+    CHECK(m2Body_IsValid(body), "body survives losing a shape");
+
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2ContactEvents events = m2World_GetContactEvents(world);
+    bool sawEnd = false;
+    for (int32_t i = 0; i < events.endCount; ++i)
+    {
+        sawEnd = sawEnd || events.endEvents[i].shapeIdA.index1 == footId.index1 ||
+                 events.endEvents[i].shapeIdB.index1 == footId.index1;
+    }
+    CHECK(sawEnd, "destroying a touching shape emits its end event (M19)");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestDestroyShapeBookends();
     TestLifecycleSymmetry();
     TestDestroyBookending();
     TestRestoreClearsAndReplays();

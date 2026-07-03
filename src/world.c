@@ -1363,6 +1363,50 @@ static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
     world->shapeFreeCount += 1;
 }
 
+void m2DestroyShape(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    if (world == NULL)
+    {
+        return;
+    }
+    int32_t index = shapeId.index1 - 1;
+    if (index < 0 || index >= world->shapeCapacity || world->shapeAlive[index] == 0 ||
+        world->shapeGenerations[index] != shapeId.generation)
+    {
+        return;
+    }
+    m2JournalRecord(world, m2_opDestroyShape, &shapeId, (int32_t)sizeof(shapeId));
+
+    int32_t bodyIndex = world->shapeBody[index];
+    // Unlink from the body's shape list (insertion-ordered, singly
+    // linked - the walk is canonical).
+    if (world->bodyShapeHead[bodyIndex] == index)
+    {
+        world->bodyShapeHead[bodyIndex] = world->shapeNext[index];
+    }
+    else
+    {
+        for (int32_t s = world->bodyShapeHead[bodyIndex]; s != -1; s = world->shapeNext[s])
+        {
+            if (world->shapeNext[s] == index)
+            {
+                world->shapeNext[s] = world->shapeNext[index];
+                break;
+            }
+        }
+    }
+    world->shapeNext[index] = -1;
+
+    DestroyShapeInternal(world, index);
+    RecomputeMass(world, bodyIndex);
+    if (world->types[bodyIndex] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyIndex] = 0;
+        world->sleepTimes[bodyIndex] = 0.0f;
+    }
+}
+
 void m2DestroyBody(m2BodyId bodyId)
 {
     m2World* world = GetBodyWorld(bodyId);
@@ -1519,6 +1563,68 @@ void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
         record.value = velocity;
         m2JournalRecord(world, m2_opSetAngularVelocity, &record, (int32_t)sizeof(record));
     }
+}
+
+void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->types[index] != (uint8_t)m2_dynamicBody)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            m2Vec2 impulse;
+            m2Pos2 point;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.impulse = impulse;
+        record.point = worldPoint;
+        m2JournalRecord(world, m2_opApplyLinearImpulse, &record, (int32_t)sizeof(record));
+    }
+    // Arm from the center of mass; the single f64 crossing.
+    m2Transform xf = world->transforms[index];
+    m2Vec2 rlc = {xf.q.c * world->localCenters[index].x - xf.q.s * world->localCenters[index].y,
+                  xf.q.s * world->localCenters[index].x + xf.q.c * world->localCenters[index].y};
+    m2Vec2 r = {(float)(worldPoint.x - xf.p.x) - rlc.x, (float)(worldPoint.y - xf.p.y) - rlc.y};
+    world->linearVelocities[index].x += world->invMass[index] * impulse.x;
+    world->linearVelocities[index].y += world->invMass[index] * impulse.y;
+    world->angularVelocities[index] +=
+        world->invInertia[index] * (r.x * impulse.y - r.y * impulse.x);
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->types[index] != (uint8_t)m2_dynamicBody)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            float value;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.value = impulse;
+        m2JournalRecord(world, m2_opApplyAngularImpulse, &record, (int32_t)sizeof(record));
+    }
+    world->angularVelocities[index] += world->invInertia[index] * impulse;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
 }
 
 bool m2Body_IsAwake(m2BodyId bodyId)
@@ -2084,6 +2190,114 @@ m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def)
         m2JournalRecord(world, m2_opCreateWheelJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
+}
+
+// One journaled channel for every runtime joint parameter: replay
+// re-drives the same setters through the same records.
+void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value)
+{
+    int32_t index = jointId.index1 - 1;
+    if (index < 0 || index >= world->jointCapacity || world->jointAlive[index] == 0 ||
+        world->jointGenerations[index] != jointId.generation)
+    {
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2JointId joint;
+            float value;
+            uint8_t param;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.joint = jointId;
+        record.value = value;
+        record.param = param;
+        m2JournalRecord(world, m2_opSetJointParam, &record, (int32_t)sizeof(record));
+    }
+    switch (param)
+    {
+    case m2_jointParamMotorSpeed:
+        world->jointMotorSpeed[index] = value;
+        break;
+    case m2_jointParamMaxMotor:
+        world->jointMaxMotor[index] = value;
+        break;
+    case m2_jointParamEnableMotor:
+        world->jointFlags[index] =
+            value != 0.0f ? (world->jointFlags[index] | 1u) : (world->jointFlags[index] & ~1u);
+        break;
+    case m2_jointParamEnableLimit:
+        world->jointFlags[index] =
+            value != 0.0f ? (world->jointFlags[index] | 2u) : (world->jointFlags[index] & ~2u);
+        break;
+    case m2_jointParamLower:
+        world->jointLower[index] = value;
+        break;
+    default:
+        world->jointUpper[index] = value;
+        break;
+    }
+    // Any parameter change wakes both ends.
+    int32_t bodyA = world->jointBodyA[index];
+    int32_t bodyB = world->jointBodyB[index];
+    if (world->types[bodyA] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyA] = 0;
+        world->sleepTimes[bodyA] = 0.0f;
+    }
+    if (world->types[bodyB] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyB] = 0;
+        world->sleepTimes[bodyB] = 0.0f;
+    }
+}
+
+void m2Joint_SetMotorSpeed(m2JointId jointId, float speed)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamMotorSpeed, speed);
+    }
+}
+
+void m2Joint_SetMaxMotor(m2JointId jointId, float maxTorqueOrForce)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamMaxMotor, maxTorqueOrForce);
+    }
+}
+
+void m2Joint_EnableMotor(m2JointId jointId, bool enable)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamEnableMotor, enable ? 1.0f : 0.0f);
+    }
+}
+
+void m2Joint_EnableLimit(m2JointId jointId, bool enable)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamEnableLimit, enable ? 1.0f : 0.0f);
+    }
+}
+
+void m2Joint_SetLimits(m2JointId jointId, float lower, float upper)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamLower, lower);
+        m2SetJointParamInternal(world, jointId, m2_jointParamUpper, upper);
+    }
 }
 
 void m2DestroyJoint(m2JointId jointId)

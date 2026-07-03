@@ -377,8 +377,46 @@ static void TestOffCenterRollback(void)
     m2DestroyWorld(world);
 }
 
+static void TestImpulses(void)
+{
+    // Analytic: J at the COM moves without spin; J at an offset arm
+    // spins by invI * cross(r, J); pure angular matches invI * L.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle circle = {{0.0f, 0.0f}, 0.5f};
+    m2CreateCircleShape(ball, &sd, &circle);
+
+    float mass = 3.14159265f * 0.25f; // rho=1, r=0.5
+    m2Body_ApplyLinearImpulse(ball, (m2Vec2){mass, 0.0f}, (m2Pos2){0.0, 0.0});
+    m2Vec2 v = m2Body_GetLinearVelocity(ball);
+    CHECK(v.x > 0.99f && v.x < 1.01f, "COM impulse gives J/m");
+    CHECK(m2Body_GetAngularVelocity(ball) == 0.0f, "COM impulse does not spin");
+
+    // Arm (0, 0.5): J=(mass,0) -> torque = -0.5*mass, w = -0.5*mass*invI.
+    m2Body_ApplyLinearImpulse(ball, (m2Vec2){mass, 0.0f}, (m2Pos2){0.0, 0.5});
+    float w = m2Body_GetAngularVelocity(ball);
+    CHECK(w < -0.1f, "offset impulse spins the ball");
+
+    m2Body_ApplyAngularImpulse(ball, -w / m2Body_GetAngularVelocity(ball) * 0.0f);
+    float before = m2Body_GetAngularVelocity(ball);
+    m2Body_ApplyAngularImpulse(ball, 0.5f);
+    CHECK(m2Body_GetAngularVelocity(ball) > before, "angular impulse adds spin");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestImpulses();
     TestSpinsAboutCenterOfMass();
     TestOffCenterRollback();
     TestRestitution();

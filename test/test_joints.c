@@ -633,6 +633,62 @@ static void TestWheelCar(void)
     m2DestroyWorld(world);
 }
 
+static void TestJointRuntimeTuning(void)
+{
+    // Setters retarget a running motor, toggle limits, and wake
+    // sleeping machines.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 3.0};
+    m2BodyId base = m2CreateBody(world, &ad);
+    m2BodyId wheel = AddBall(world, 0.0, 3.0, 0.5f);
+    m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+    jd.bodyIdA = base;
+    jd.bodyIdB = wheel;
+    jd.enableMotor = true;
+    jd.motorSpeed = 3.0f;
+    jd.maxMotorTorque = 50.0f;
+    m2JointId motor = m2CreateRevoluteJoint(world, &jd);
+
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float w1 = m2Body_GetAngularVelocity(wheel);
+    CHECK(w1 > 2.9f && w1 < 3.1f, "initial motor speed reached");
+
+    m2Joint_SetMotorSpeed(motor, -5.0f);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float w2 = m2Body_GetAngularVelocity(wheel);
+    CHECK(w2 > -5.1f && w2 < -4.9f, "retargeted motor speed reached");
+
+    m2Joint_EnableMotor(motor, false);
+    m2Joint_EnableLimit(motor, true);
+    m2Joint_SetLimits(motor, -0.2f, 0.2f);
+    bool settled = false;
+    for (int32_t i = 0; i < 300 && !settled; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        settled = !m2Body_IsAwake(wheel);
+    }
+    CHECK(settled, "limited free wheel eventually sleeps inside its limits");
+
+    // A setter on a sleeping machine wakes it.
+    m2Joint_SetMotorSpeed(motor, 1.0f);
+    m2Joint_EnableMotor(motor, true);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_IsAwake(wheel), "runtime tuning wakes the machine");
+
+    m2DestroyWorld(world);
+}
+
 static uint64_t JointSweepHash(void)
 {
     // A bridge of revolute links with cargo dropped on it, far from the
@@ -805,6 +861,7 @@ int main(void)
     TestWeldRigid();
     TestWheelSuspension();
     TestWheelCar();
+    TestJointRuntimeTuning();
 
     uint64_t hash = JointSweepHash();
     printf("M2_JOINT_HASH=%016llx\n", (unsigned long long)hash);

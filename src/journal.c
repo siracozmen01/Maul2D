@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 3u
+#define M2_JOURNAL_VERSION 4u
 
 typedef struct m2JournalHeader
 {
@@ -151,6 +151,20 @@ typedef struct m2OpCreateWheelJoint
     m2WheelJointDef def;
     m2JointId expected;
 } m2OpCreateWheelJoint;
+
+typedef struct m2OpLinearImpulse
+{
+    m2BodyId body;
+    m2Vec2 impulse;
+    m2Pos2 point;
+} m2OpLinearImpulse;
+
+typedef struct m2OpJointParam
+{
+    m2JointId joint;
+    float value;
+    uint8_t param;
+} m2OpJointParam;
 
 typedef struct m2OpBodyVec
 {
@@ -324,6 +338,39 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_READ_OP(m2JointId, id);
             id.world0 = here;
             m2DestroyJoint(id);
+            break;
+        }
+        case m2_opDestroyShape:
+        {
+            M2_READ_OP(m2ShapeId, id);
+            id.world0 = here;
+            m2DestroyShape(id);
+            break;
+        }
+        case m2_opApplyLinearImpulse:
+        {
+            M2_READ_OP(m2OpLinearImpulse, li);
+            li.body.world0 = here;
+            m2Body_ApplyLinearImpulse(li.body, li.impulse, li.point);
+            break;
+        }
+        case m2_opApplyAngularImpulse:
+        {
+            M2_READ_OP(m2OpBodyFloat, ai);
+            ai.body.world0 = here;
+            m2Body_ApplyAngularImpulse(ai.body, ai.value);
+            break;
+        }
+        case m2_opSetJointParam:
+        {
+            M2_READ_OP(m2OpJointParam, jp);
+            jp.joint.world0 = here;
+            m2World* target = m2World_GetInternal(worldId);
+            if (target == NULL)
+            {
+                return false;
+            }
+            m2SetJointParamInternal(target, jp.joint, jp.param, jp.value);
             break;
         }
         default:

@@ -71,6 +71,12 @@ extern "C"
     void m2Body_SetLinearVelocity(m2BodyId bodyId, m2Vec2 velocity);
     void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity);
 
+    /// Impulses act instantly on the velocity; the world point's arm
+    /// is measured from the center of mass. Dynamic bodies only; the
+    /// body wakes. Thread class: writer.
+    void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint);
+    void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse);
+
     static const m2BodyId m2_nullBodyId = {0, 0, 0};
 
 #ifdef __cplusplus

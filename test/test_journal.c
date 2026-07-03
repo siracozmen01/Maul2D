@@ -117,7 +117,7 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     press.enableLimit = true;
     press.lowerTranslation = -0.8f;
     press.upperTranslation = 0.3f;
-    m2CreatePrismaticJoint(world, &press);
+    m2JointId pressJoint = m2CreatePrismaticJoint(world, &press);
 
     // Weld and wheel creates put ops 11 and 12 into the gated bytes.
     m2BodyDef sideDef = m2DefaultBodyDef();
@@ -125,6 +125,8 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     sideDef.position = (m2Pos2){9.6, 2.0};
     m2BodyId sidecar = m2CreateBody(world, &sideDef);
     m2CreateCircleShape(sidecar, &bs, &bc);
+    m2Circle spare = {{0.3f, 0.2f}, 0.1f};
+    m2ShapeId sacrificial = m2CreateCircleShape(sidecar, &bs, &spare);
     m2WeldJointDef weld = m2DefaultWeldJointDef();
     weld.bodyIdA = ram;
     weld.bodyIdB = sidecar;
@@ -138,6 +140,16 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2CreateWheelJoint(world, &ride);
 
     for (int32_t i = 0; i < 45; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    // Ops 13-16: shape destruction, impulses and joint tuning all ride
+    // the journal too.
+    m2Body_ApplyLinearImpulse(ram, (m2Vec2){0.4f, 0.9f}, (m2Pos2){9.1, 2.0});
+    m2Body_ApplyAngularImpulse(ram, 0.3f);
+    m2Joint_SetMotorSpeed(pressJoint, 0.7f);
+    m2DestroyShape(sacrificial);
+    for (int32_t i = 0; i < 15; ++i)
     {
         m2World_Step(world, 1.0f / 60.0f, 4);
     }

@@ -88,6 +88,11 @@ extern "C"
                                    const m2Segment* segment);
 
     bool m2Shape_IsValid(m2ShapeId shapeId);
+
+    /// Destroys one shape: touching contacts end (bookended into the
+    /// next step's events), pairs are pruned, and the owning body's
+    /// mass and center of mass are recomputed. Thread class: writer.
+    void m2DestroyShape(m2ShapeId shapeId);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 

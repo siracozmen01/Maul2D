@@ -125,6 +125,16 @@ extern "C"
     m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def);
     m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def);
     void m2DestroyJoint(m2JointId jointId);
+
+    /// Runtime joint tuning. Motor speed is rad/s on revolute and
+    /// wheel joints, m/s on prismatic; max motor is a torque or force
+    /// budget accordingly. Every change wakes both bodies and is
+    /// journaled. Distance joints ignore motor and limit parameters.
+    void m2Joint_SetMotorSpeed(m2JointId jointId, float speed);
+    void m2Joint_SetMaxMotor(m2JointId jointId, float maxTorqueOrForce);
+    void m2Joint_EnableMotor(m2JointId jointId, bool enable);
+    void m2Joint_EnableLimit(m2JointId jointId, bool enable);
+    void m2Joint_SetLimits(m2JointId jointId, float lower, float upper);
     bool m2Joint_IsValid(m2JointId jointId);
 
     static const m2JointId m2_nullJointId = {0, 0, 0};

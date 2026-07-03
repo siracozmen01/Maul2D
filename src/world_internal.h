@@ -159,6 +159,7 @@ typedef struct m2World
 
 // Journal recording hook (src/journal.c): appends op + payload.
 void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t bytes);
+void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
 
 // Journal ops (fixed-size payloads, little-endian raw structs).
 enum
@@ -175,6 +176,21 @@ enum
     m2_opCreatePrismaticJoint = 10,
     m2_opCreateWeldJoint = 11,
     m2_opCreateWheelJoint = 12,
+    m2_opDestroyShape = 13,
+    m2_opApplyLinearImpulse = 14,
+    m2_opApplyAngularImpulse = 15,
+    m2_opSetJointParam = 16,
+};
+
+// Journaled joint parameter channel (op 16).
+enum
+{
+    m2_jointParamMotorSpeed = 0,
+    m2_jointParamMaxMotor = 1,
+    m2_jointParamEnableMotor = 2,
+    m2_jointParamEnableLimit = 3,
+    m2_jointParamLower = 4,
+    m2_jointParamUpper = 5,
 };
 
 // Islands & sleep (src/island.c).
