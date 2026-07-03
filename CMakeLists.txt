@@ -96,6 +96,12 @@ target_include_directories(test_queries PRIVATE src)
 maul2d_apply_flags(test_queries)
 add_test(NAME queries COMMAND test_queries)
 
+add_executable(test_redteam test/test_redteam.c)
+target_link_libraries(test_redteam PRIVATE maul2d)
+target_include_directories(test_redteam PRIVATE src)
+maul2d_apply_flags(test_redteam)
+add_test(NAME redteam COMMAND test_redteam)
+
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)
