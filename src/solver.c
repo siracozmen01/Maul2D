@@ -269,10 +269,13 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
         for (int32_t k = 0; k < c->pointCount; ++k)
         {
             m2ConstraintPoint* cp = &c->points[k];
-            m2Vec2 drB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
-            m2Vec2 drA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
-            m2Vec2 ds = {dp.x + drB.x - cp->rB.x - (drA.x - cp->rA.x),
-                         dp.y + drB.y - cp->rB.y - (drA.y - cp->rA.y)};
+            // Current anchors, re-rotated by the substep deltas exactly
+            // like the reference: stale arms accumulate torque error
+            // that the color-partitioned order can no longer hide.
+            m2Vec2 rA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
+            m2Vec2 rB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
+            m2Vec2 ds = {dp.x + rB.x - cp->rB.x - (rA.x - cp->rA.x),
+                         dp.y + rB.y - cp->rB.y - (rA.y - cp->rA.y)};
             float s = cp->baseSeparation + ds.x * normal.x + ds.y * normal.y;
 
             float velocityBias = 0.0f;
@@ -290,8 +293,8 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
                 impulseScale = c->softness.impulseScale;
             }
 
-            m2Vec2 vrA = {vA.x - wA * cp->rA.y, vA.y + wA * cp->rA.x};
-            m2Vec2 vrB = {vB.x - wB * cp->rB.y, vB.y + wB * cp->rB.x};
+            m2Vec2 vrA = {vA.x - wA * rA.y, vA.y + wA * rA.x};
+            m2Vec2 vrB = {vB.x - wB * rB.y, vB.y + wB * rB.x};
             float vn = (vrB.x - vrA.x) * normal.x + (vrB.y - vrA.y) * normal.y;
 
             float impulse = -cp->normalMass * (massScale * vn + velocityBias) -
@@ -303,10 +306,10 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
             m2Vec2 P = {impulse * normal.x, impulse * normal.y};
             vA.x -= mA * P.x;
             vA.y -= mA * P.y;
-            wA -= iA * Cross(cp->rA, P);
+            wA -= iA * Cross(rA, P);
             vB.x += mB * P.x;
             vB.y += mB * P.y;
-            wB += iB * Cross(cp->rB, P);
+            wB += iB * Cross(rB, P);
         }
 
         if (!useBias)
@@ -315,8 +318,10 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
             for (int32_t k = 0; k < c->pointCount; ++k)
             {
                 m2ConstraintPoint* cp = &c->points[k];
-                m2Vec2 vrA = {vA.x - wA * cp->rA.y, vA.y + wA * cp->rA.x};
-                m2Vec2 vrB = {vB.x - wB * cp->rB.y, vB.y + wB * cp->rB.x};
+                m2Vec2 rA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
+                m2Vec2 rB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
+                m2Vec2 vrA = {vA.x - wA * rA.y, vA.y + wA * rA.x};
+                m2Vec2 vrB = {vB.x - wB * rB.y, vB.y + wB * rB.x};
                 float vt = (vrB.x - vrA.x) * tangent.x + (vrB.y - vrA.y) * tangent.y;
                 float impulse = -cp->tangentMass * vt;
                 float maxFriction = c->friction * cp->normalImpulse;
@@ -328,10 +333,10 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
                 m2Vec2 P = {impulse * tangent.x, impulse * tangent.y};
                 vA.x -= mA * P.x;
                 vA.y -= mA * P.y;
-                wA -= iA * Cross(cp->rA, P);
+                wA -= iA * Cross(rA, P);
                 vB.x += mB * P.x;
                 vB.y += mB * P.y;
-                wB += iB * Cross(cp->rB, P);
+                wB += iB * Cross(rB, P);
             }
         }
 
@@ -508,8 +513,17 @@ static void RunContactStage(m2World* world, m2ContactConstraint* constraints,
     ctx.stage = stage;
     ctx.invH = invH;
     ctx.useBias = useBias;
-    for (int32_t color = 0; color <= M2_GRAPH_COLORS; ++color)
+    // Symmetric sweep: the bias pass walks colors forward, the relax
+    // pass walks them backward. Color-parallel Gauss-Seidel loses
+    // within-color propagation; a one-directional sweep then feeds a
+    // checkerboard limit cycle that keeps stacks micro-jittering above
+    // the sleep tolerance for hundreds of steps (pyramid15 settled at
+    // 635 instead of ~65). The forward/backward pair restores the
+    // propagation both ways and is just as deterministic.
+    bool forward = stage != m2_stageSolve || useBias;
+    for (int32_t step = 0; step <= M2_GRAPH_COLORS; ++step)
     {
+        int32_t color = forward ? step : M2_GRAPH_COLORS - step;
         int32_t begin = colorStart[color];
         int32_t end = colorStart[color + 1];
         if (begin == end)
