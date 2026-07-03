@@ -56,6 +56,7 @@ jobs:
           "$BIN/test_events$SUFFIX" | tee -a out.txt
           "$BIN/test_joints$SUFFIX" | tee -a out.txt
           "$BIN/test_journal$SUFFIX" | tee -a out.txt
+          "$BIN/test_queries$SUFFIX" | tee -a out.txt
           grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
@@ -110,6 +111,7 @@ jobs:
           ./build/test_events
           ./build/test_joints
           ./build/test_journal
+          ./build/test_queries
 
   format:
     name: clang-format
