@@ -17,6 +17,12 @@
 
 #define M2_TREE_COUNT 3 // one per body type (topic-02 D1)
 
+// Wide-lane contact solving (topic-08 phase 2). Lane width is a
+// layout constant, never a semantics knob: every lane runs the same
+// scalar IEEE sequence, so lane packing cannot move a bit.
+#define M2_LANES 8
+int32_t m2ContactBlockScratchBytes(int32_t pairCapacity);
+
 typedef struct m2World
 {
     // World-global mutable block (snapshot state).
@@ -124,6 +130,7 @@ typedef struct m2World
     m2Vec2* deltaPositions; // f32 position deltas within the step
     m2Rot* deltaRotations;
     void* constraintScratch;  // m2ContactConstraint[pairCapacity]
+    void* contactBlocks;      // wide SoA blocks (step-transient)
     int32_t* islandParent;    // union-find scratch (step-transient)
     uint8_t* islandDisturbed; // island flags scratch (step-transient)
     m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)

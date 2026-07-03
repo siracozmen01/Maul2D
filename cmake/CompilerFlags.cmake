@@ -23,7 +23,7 @@ function(maul2d_apply_flags target)
         target_compile_options(${target} PRIVATE /W4 /WX /fp:precise /fp:contract-)
     else()
         target_compile_options(${target} PRIVATE
-            -ffp-contract=off -fno-fast-math -fno-unsafe-math-optimizations
+            -ffp-contract=off -fno-trapping-math -fno-fast-math -fno-unsafe-math-optimizations
             -Wall -Wextra -Werror -Wshadow -Wdouble-promotion)
     endif()
 

@@ -716,11 +716,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         ok = ok && world->field != NULL;                                                           \
     } while (0)
     M2_ALLOC(transforms, cap, m2Transform);
-    M2_ALLOC(linearVelocities, cap, m2Vec2);
-    M2_ALLOC(angularVelocities, cap, float);
+    M2_ALLOC(linearVelocities, cap + 1, m2Vec2); // +1: wide-lane dummy slot
+    M2_ALLOC(angularVelocities, cap + 1, float); // +1: wide-lane dummy slot
     M2_ALLOC(gravityScales, cap, float);
     M2_ALLOC(userData, cap, uint64_t);
-    M2_ALLOC(types, cap, uint8_t);
+    M2_ALLOC(types, cap + 1, uint8_t); // +1: wide-lane dummy slot
     M2_ALLOC(alive, cap, uint8_t);
     M2_ALLOC(bodyShapeHead, cap, int32_t);
     M2_ALLOC(invMass, cap, float);
@@ -786,10 +786,12 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
     M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
     M2_ALLOC(manifoldScratch, world->pairCapacity, m2Manifold);
-    M2_ALLOC(deltaPositions, cap, m2Vec2);
-    M2_ALLOC(deltaRotations, cap, m2Rot);
+    M2_ALLOC(deltaPositions, cap + 1, m2Vec2); // +1: wide-lane dummy slot
+    M2_ALLOC(deltaRotations, cap + 1, m2Rot);  // +1: wide-lane dummy slot
     world->constraintScratch =
         m2AllocZeroed((size_t)world->pairCapacity * (size_t)m2ContactConstraintSize());
+    world->contactBlocks = m2AllocZeroed((size_t)m2ContactBlockScratchBytes(world->pairCapacity));
+    ok = ok && world->contactBlocks != NULL;
     ok = ok && world->constraintScratch != NULL;
 #undef M2_ALLOC
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
@@ -925,6 +927,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->deltaPositions);
     m2Free(world->deltaRotations);
     m2Free(world->constraintScratch);
+    m2Free(world->contactBlocks);
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
         m2Free(world->treeNodes[t]);

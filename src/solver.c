@@ -440,6 +440,10 @@ static void ColorConstraints(m2World* world, m2ContactConstraint* constraints, i
         {
             color += 1;
         }
+        if (color < M2_GRAPH_COLORS && counts[color] >= 256)
+        {
+            color = M2_GRAPH_COLORS; // full color: spill to the scalar bucket
+        }
         if (color < M2_GRAPH_COLORS)
         {
             if (dynA)
@@ -523,39 +527,498 @@ static void ContactStageRange(int32_t begin, int32_t end, void* userCtx)
     }
 }
 
-static void RunContactStage(m2World* world, m2ContactConstraint* constraints,
-                            const int32_t* colorStart, m2ContactStage stage, float invH,
-                            float minBiasVel, bool useBias)
+// --- Wide-lane contact solving (topic-08 phase 2) --------------------------
+//
+// Blocks are SoA bundles of M2_LANES constraints from one graph color,
+// homogeneous in point count. Every lane executes the same scalar IEEE
+// sequence as the per-item path - the kernels below are transliterations
+// of WarmStartOne/SolveContactOne/RestitutionOne - so the lane layout is
+// pure mechanical sympathy: compilers vectorize the lane loops, and the
+// bits cannot move. Padding lanes point at the dummy body slot
+// (index bodyCapacity, zero mass, never scattered).
+
+typedef struct m2ContactBlock
 {
-    m2ContactStageCtx ctx;
+    int32_t lanes;      // live lanes; the rest are dummy-padded
+    int32_t pointCount; // homogeneous: 1 or 2 for every live lane
+    int32_t bodyA[M2_LANES];
+    int32_t bodyB[M2_LANES];
+    int32_t pairIndex[M2_LANES];
+    float invMassA[M2_LANES];
+    float invIA[M2_LANES];
+    float invMassB[M2_LANES];
+    float invIB[M2_LANES];
+    float normalX[M2_LANES];
+    float normalY[M2_LANES];
+    float friction[M2_LANES];
+    float restitution[M2_LANES];
+    float biasRate[M2_LANES];
+    float massScale[M2_LANES];
+    float impulseScale[M2_LANES];
+    float rAX[2][M2_LANES];
+    float rAY[2][M2_LANES];
+    float rBX[2][M2_LANES];
+    float rBY[2][M2_LANES];
+    float baseSep[2][M2_LANES];
+    float relVel[2][M2_LANES];
+    float normalMass[2][M2_LANES];
+    float tangentMass[2][M2_LANES];
+    float normalImp[2][M2_LANES];
+    float tangentImp[2][M2_LANES];
+} m2ContactBlock;
+
+int32_t m2ContactBlockScratchBytes(int32_t pairCapacity)
+{
+    // Worst case: every block half-full plus two partial blocks per
+    // color (one per point-count class).
+    int32_t blocks = pairCapacity / M2_LANES + 2 * (M2_GRAPH_COLORS + 1) + 2;
+    return blocks * (int32_t)sizeof(m2ContactBlock);
+}
+
+// Pack one color's constraints (already partitioned by point count)
+// into blocks. Returns the new block count.
+static int32_t PackRun(m2World* world, m2ContactConstraint* constraints, const int32_t* order,
+                       int32_t count, int32_t pointCount, int32_t blockCount)
+{
+    m2ContactBlock* blocks = (m2ContactBlock*)world->contactBlocks;
+    int32_t dummy = world->bodyCapacity;
+    for (int32_t base = 0; base < count; base += M2_LANES)
+    {
+        m2ContactBlock* block = blocks + blockCount;
+        blockCount += 1;
+        int32_t lanes = count - base < M2_LANES ? count - base : M2_LANES;
+        block->lanes = lanes;
+        block->pointCount = pointCount;
+        for (int32_t lane = 0; lane < M2_LANES; ++lane)
+        {
+            if (lane >= lanes)
+            {
+                block->bodyA[lane] = dummy;
+                block->bodyB[lane] = dummy;
+                block->pairIndex[lane] = -1;
+                block->invMassA[lane] = 0.0f;
+                block->invIA[lane] = 0.0f;
+                block->invMassB[lane] = 0.0f;
+                block->invIB[lane] = 0.0f;
+                block->normalX[lane] = 0.0f;
+                block->normalY[lane] = 1.0f;
+                block->friction[lane] = 0.0f;
+                block->restitution[lane] = 0.0f;
+                block->biasRate[lane] = 0.0f;
+                block->massScale[lane] = 1.0f;
+                block->impulseScale[lane] = 0.0f;
+                for (int32_t k = 0; k < 2; ++k)
+                {
+                    block->rAX[k][lane] = 0.0f;
+                    block->rAY[k][lane] = 0.0f;
+                    block->rBX[k][lane] = 0.0f;
+                    block->rBY[k][lane] = 0.0f;
+                    block->baseSep[k][lane] = 1.0f; // separated: speculative no-op
+                    block->relVel[k][lane] = 0.0f;
+                    block->normalMass[k][lane] = 0.0f;
+                    block->tangentMass[k][lane] = 0.0f;
+                    block->normalImp[k][lane] = 0.0f;
+                    block->tangentImp[k][lane] = 0.0f;
+                }
+                continue;
+            }
+            m2ContactConstraint* c = constraints + order[base + lane];
+            block->bodyA[lane] = c->bodyA;
+            block->bodyB[lane] = c->bodyB;
+            block->pairIndex[lane] = c->pairIndex;
+            block->invMassA[lane] = world->invMass[c->bodyA];
+            block->invIA[lane] = world->invInertia[c->bodyA];
+            block->invMassB[lane] = world->invMass[c->bodyB];
+            block->invIB[lane] = world->invInertia[c->bodyB];
+            block->normalX[lane] = c->normal.x;
+            block->normalY[lane] = c->normal.y;
+            block->friction[lane] = c->friction;
+            block->restitution[lane] = c->restitution;
+            block->biasRate[lane] = c->softness.biasRate;
+            block->massScale[lane] = c->softness.massScale;
+            block->impulseScale[lane] = c->softness.impulseScale;
+            for (int32_t k = 0; k < 2; ++k)
+            {
+                const m2ConstraintPoint* cp = &c->points[k < c->pointCount ? k : 0];
+                bool live = k < c->pointCount;
+                block->rAX[k][lane] = live ? cp->rA.x : 0.0f;
+                block->rAY[k][lane] = live ? cp->rA.y : 0.0f;
+                block->rBX[k][lane] = live ? cp->rB.x : 0.0f;
+                block->rBY[k][lane] = live ? cp->rB.y : 0.0f;
+                block->baseSep[k][lane] = live ? cp->baseSeparation : 1.0f;
+                block->relVel[k][lane] = live ? cp->relativeVelocity : 0.0f;
+                block->normalMass[k][lane] = live ? cp->normalMass : 0.0f;
+                block->tangentMass[k][lane] = live ? cp->tangentMass : 0.0f;
+                block->normalImp[k][lane] = live ? cp->normalImpulse : 0.0f;
+                block->tangentImp[k][lane] = live ? cp->tangentImpulse : 0.0f;
+            }
+        }
+    }
+    return blockCount;
+}
+
+// Partition each full color by point count (order within a color is
+// free: its constraints share no dynamic body), then pack. Returns
+// block count; blockStart[c]..blockStart[c+1] are color c's blocks.
+static int32_t PackContactBlocks(m2World* world, m2ContactConstraint* constraints,
+                                 const int32_t* colorStart, int32_t* blockStart)
+{
+    int32_t blockCount = 0;
+    int32_t scratch[2][256];
+    for (int32_t color = 0; color < M2_GRAPH_COLORS; ++color)
+    {
+        blockStart[color] = blockCount;
+        int32_t begin = colorStart[color];
+        int32_t end = colorStart[color + 1];
+        int32_t twos = 0;
+        int32_t ones = 0;
+        for (int32_t k = begin; k < end; ++k)
+        {
+            int32_t index = world->colorOrder[k];
+            if (constraints[index].pointCount == 2)
+            {
+                if (twos < 256)
+                {
+                    scratch[0][twos] = index;
+                }
+                twos += 1;
+            }
+            else
+            {
+                if (ones < 256)
+                {
+                    scratch[1][ones] = index;
+                }
+                ones += 1;
+            }
+            // Colors are capped by the per-body u32 mask, but a color
+            // can hold more than 256 constraints in huge worlds; spill
+            // the excess back into the overflow-style scalar path by
+            // marking it - handled below via the spill list.
+        }
+        M2_ASSERT(twos <= 256 && ones <= 256);
+        blockCount =
+            PackRun(world, constraints, scratch[0], twos <= 256 ? twos : 256, 2, blockCount);
+        blockCount =
+            PackRun(world, constraints, scratch[1], ones <= 256 ? ones : 256, 1, blockCount);
+    }
+    blockStart[M2_GRAPH_COLORS] = blockCount;
+    return blockCount;
+}
+
+typedef struct m2BlockStageCtx
+{
+    m2World* world;
+    m2ContactBlock* blocks;
+    m2ContactStage stage;
+    float invH;
+    float minBiasVel;
+    bool useBias;
+} m2BlockStageCtx;
+
+static void WarmStartBlock(m2World* world, m2ContactBlock* b)
+{
+    float vAx[M2_LANES];
+    float vAy[M2_LANES];
+    float wA[M2_LANES];
+    float vBx[M2_LANES];
+    float vBy[M2_LANES];
+    float wB[M2_LANES];
+    for (int32_t lane = 0; lane < M2_LANES; ++lane)
+    {
+        vAx[lane] = world->linearVelocities[b->bodyA[lane]].x;
+        vAy[lane] = world->linearVelocities[b->bodyA[lane]].y;
+        wA[lane] = world->angularVelocities[b->bodyA[lane]];
+        vBx[lane] = world->linearVelocities[b->bodyB[lane]].x;
+        vBy[lane] = world->linearVelocities[b->bodyB[lane]].y;
+        wB[lane] = world->angularVelocities[b->bodyB[lane]];
+    }
+    for (int32_t k = 0; k < b->pointCount; ++k)
+    {
+        for (int32_t lane = 0; lane < M2_LANES; ++lane)
+        {
+            float tangentX = -b->normalY[lane];
+            float tangentY = b->normalX[lane];
+            float Px = b->normalImp[k][lane] * b->normalX[lane] + b->tangentImp[k][lane] * tangentX;
+            float Py = b->normalImp[k][lane] * b->normalY[lane] + b->tangentImp[k][lane] * tangentY;
+            vAx[lane] -= b->invMassA[lane] * Px;
+            vAy[lane] -= b->invMassA[lane] * Py;
+            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
+            vBx[lane] += b->invMassB[lane] * Px;
+            vBy[lane] += b->invMassB[lane] * Py;
+            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
+        }
+    }
+    for (int32_t lane = 0; lane < M2_LANES; ++lane)
+    {
+        if (world->types[b->bodyA[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyA[lane]] = (m2Vec2){vAx[lane], vAy[lane]};
+            world->angularVelocities[b->bodyA[lane]] = wA[lane];
+        }
+        if (world->types[b->bodyB[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyB[lane]] = (m2Vec2){vBx[lane], vBy[lane]};
+            world->angularVelocities[b->bodyB[lane]] = wB[lane];
+        }
+    }
+}
+
+static void SolveBlock(m2World* world, m2ContactBlock* b, float invH, float minBiasVel,
+                       bool useBias)
+{
+    float vAx[M2_LANES];
+    float vAy[M2_LANES];
+    float wA[M2_LANES];
+    float vBx[M2_LANES];
+    float vBy[M2_LANES];
+    float wB[M2_LANES];
+    float dpx[M2_LANES];
+    float dpy[M2_LANES];
+    float dqAc[M2_LANES];
+    float dqAs[M2_LANES];
+    float dqBc[M2_LANES];
+    float dqBs[M2_LANES];
+    for (int32_t lane = 0; lane < M2_LANES; ++lane)
+    {
+        int32_t iA = b->bodyA[lane];
+        int32_t iB = b->bodyB[lane];
+        vAx[lane] = world->linearVelocities[iA].x;
+        vAy[lane] = world->linearVelocities[iA].y;
+        wA[lane] = world->angularVelocities[iA];
+        vBx[lane] = world->linearVelocities[iB].x;
+        vBy[lane] = world->linearVelocities[iB].y;
+        wB[lane] = world->angularVelocities[iB];
+        dpx[lane] = world->deltaPositions[iB].x - world->deltaPositions[iA].x;
+        dpy[lane] = world->deltaPositions[iB].y - world->deltaPositions[iA].y;
+        dqAc[lane] = world->deltaRotations[iA].c;
+        dqAs[lane] = world->deltaRotations[iA].s;
+        dqBc[lane] = world->deltaRotations[iB].c;
+        dqBs[lane] = world->deltaRotations[iB].s;
+    }
+
+    for (int32_t k = 0; k < b->pointCount; ++k)
+    {
+        for (int32_t lane = 0; lane < M2_LANES; ++lane)
+        {
+            float rsAx = dqAc[lane] * b->rAX[k][lane] - dqAs[lane] * b->rAY[k][lane];
+            float rsAy = dqAs[lane] * b->rAX[k][lane] + dqAc[lane] * b->rAY[k][lane];
+            float rsBx = dqBc[lane] * b->rBX[k][lane] - dqBs[lane] * b->rBY[k][lane];
+            float rsBy = dqBs[lane] * b->rBX[k][lane] + dqBc[lane] * b->rBY[k][lane];
+            float dsx = dpx[lane] + rsBx - rsAx;
+            float dsy = dpy[lane] + rsBy - rsAy;
+            float sep = b->baseSep[k][lane] + dsx * b->normalX[lane] + dsy * b->normalY[lane];
+
+            float bias = 0.0f;
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (sep > 0.0f)
+            {
+                bias = sep * invH;
+            }
+            else if (useBias)
+            {
+                bias = m2MaxF(b->biasRate[lane] * sep, minBiasVel);
+                massScale = b->massScale[lane];
+                impulseScale = b->impulseScale[lane];
+            }
+
+            float vrAx = vAx[lane] - wA[lane] * b->rAY[k][lane];
+            float vrAy = vAy[lane] + wA[lane] * b->rAX[k][lane];
+            float vrBx = vBx[lane] - wB[lane] * b->rBY[k][lane];
+            float vrBy = vBy[lane] + wB[lane] * b->rBX[k][lane];
+            float vn = (vrBx - vrAx) * b->normalX[lane] + (vrBy - vrAy) * b->normalY[lane];
+
+            float impulse = -b->normalMass[k][lane] * massScale * (vn + bias) -
+                            impulseScale * b->normalImp[k][lane];
+            float newImpulse = m2MaxF(b->normalImp[k][lane] + impulse, 0.0f);
+            impulse = newImpulse - b->normalImp[k][lane];
+            b->normalImp[k][lane] = newImpulse;
+
+            float Px = impulse * b->normalX[lane];
+            float Py = impulse * b->normalY[lane];
+            vAx[lane] -= b->invMassA[lane] * Px;
+            vAy[lane] -= b->invMassA[lane] * Py;
+            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
+            vBx[lane] += b->invMassB[lane] * Px;
+            vBy[lane] += b->invMassB[lane] * Py;
+            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
+        }
+    }
+
+    for (int32_t k = 0; k < b->pointCount; ++k)
+    {
+        for (int32_t lane = 0; lane < M2_LANES; ++lane)
+        {
+            float tangentX = -b->normalY[lane];
+            float tangentY = b->normalX[lane];
+            float vrAx = vAx[lane] - wA[lane] * b->rAY[k][lane];
+            float vrAy = vAy[lane] + wA[lane] * b->rAX[k][lane];
+            float vrBx = vBx[lane] - wB[lane] * b->rBY[k][lane];
+            float vrBy = vBy[lane] + wB[lane] * b->rBX[k][lane];
+            float vt = (vrBx - vrAx) * tangentX + (vrBy - vrAy) * tangentY;
+            float impulse = -b->tangentMass[k][lane] * vt;
+            float maxFriction = b->friction[lane] * b->normalImp[k][lane];
+            float newImpulse =
+                m2ClampF(b->tangentImp[k][lane] + impulse, -maxFriction, maxFriction);
+            impulse = newImpulse - b->tangentImp[k][lane];
+            b->tangentImp[k][lane] = newImpulse;
+
+            float Px = impulse * tangentX;
+            float Py = impulse * tangentY;
+            vAx[lane] -= b->invMassA[lane] * Px;
+            vAy[lane] -= b->invMassA[lane] * Py;
+            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
+            vBx[lane] += b->invMassB[lane] * Px;
+            vBy[lane] += b->invMassB[lane] * Py;
+            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
+        }
+    }
+
+    for (int32_t lane = 0; lane < M2_LANES; ++lane)
+    {
+        if (world->types[b->bodyA[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyA[lane]] = (m2Vec2){vAx[lane], vAy[lane]};
+            world->angularVelocities[b->bodyA[lane]] = wA[lane];
+        }
+        if (world->types[b->bodyB[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyB[lane]] = (m2Vec2){vBx[lane], vBy[lane]};
+            world->angularVelocities[b->bodyB[lane]] = wB[lane];
+        }
+    }
+}
+
+static void RestitutionBlock(m2World* world, m2ContactBlock* b)
+{
+    // Per-lane branches on purpose: the scalar path skips whole
+    // updates, and a masked add of a signed zero would move bits.
+    for (int32_t lane = 0; lane < b->lanes; ++lane)
+    {
+        if (b->restitution[lane] == 0.0f)
+        {
+            continue;
+        }
+        float vAx = world->linearVelocities[b->bodyA[lane]].x;
+        float vAy = world->linearVelocities[b->bodyA[lane]].y;
+        float wA = world->angularVelocities[b->bodyA[lane]];
+        float vBx = world->linearVelocities[b->bodyB[lane]].x;
+        float vBy = world->linearVelocities[b->bodyB[lane]].y;
+        float wB = world->angularVelocities[b->bodyB[lane]];
+        for (int32_t k = 0; k < b->pointCount; ++k)
+        {
+            if (b->relVel[k][lane] > -M2_RESTITUTION_THRESHOLD || b->normalImp[k][lane] == 0.0f)
+            {
+                continue;
+            }
+            float vrAx = vAx - wA * b->rAY[k][lane];
+            float vrAy = vAy + wA * b->rAX[k][lane];
+            float vrBx = vBx - wB * b->rBY[k][lane];
+            float vrBy = vBy + wB * b->rBX[k][lane];
+            float vn = (vrBx - vrAx) * b->normalX[lane] + (vrBy - vrAy) * b->normalY[lane];
+            float impulse =
+                -b->normalMass[k][lane] * (vn + b->restitution[lane] * b->relVel[k][lane]);
+            float newImpulse = m2MaxF(b->normalImp[k][lane] + impulse, 0.0f);
+            impulse = newImpulse - b->normalImp[k][lane];
+            b->normalImp[k][lane] = newImpulse;
+            float Px = impulse * b->normalX[lane];
+            float Py = impulse * b->normalY[lane];
+            vAx -= b->invMassA[lane] * Px;
+            vAy -= b->invMassA[lane] * Py;
+            wA -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
+            vBx += b->invMassB[lane] * Px;
+            vBy += b->invMassB[lane] * Py;
+            wB += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
+        }
+        if (world->types[b->bodyA[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyA[lane]] = (m2Vec2){vAx, vAy};
+            world->angularVelocities[b->bodyA[lane]] = wA;
+        }
+        if (world->types[b->bodyB[lane]] == (uint8_t)m2_dynamicBody)
+        {
+            world->linearVelocities[b->bodyB[lane]] = (m2Vec2){vBx, vBy};
+            world->angularVelocities[b->bodyB[lane]] = wB;
+        }
+    }
+}
+
+static void StoreBlock(m2World* world, m2ContactBlock* b)
+{
+    for (int32_t lane = 0; lane < b->lanes; ++lane)
+    {
+        m2Manifold* manifold = &world->manifolds[b->pairIndex[lane]];
+        for (int32_t k = 0; k < b->pointCount; ++k)
+        {
+            manifold->points[k].normalImpulse = b->normalImp[k][lane];
+            manifold->points[k].tangentImpulse = b->tangentImp[k][lane];
+        }
+    }
+}
+
+static void BlockStageRange(int32_t begin, int32_t end, void* userCtx)
+{
+    m2BlockStageCtx* ctx = (m2BlockStageCtx*)userCtx;
+    for (int32_t i = begin; i < end; ++i)
+    {
+        m2ContactBlock* block = ctx->blocks + i;
+        switch (ctx->stage)
+        {
+        case m2_stageWarmStart:
+            WarmStartBlock(ctx->world, block);
+            break;
+        case m2_stageSolve:
+            SolveBlock(ctx->world, block, ctx->invH, ctx->minBiasVel, ctx->useBias);
+            break;
+        case m2_stageRestitution:
+            RestitutionBlock(ctx->world, block);
+            break;
+        default:
+            StoreBlock(ctx->world, block);
+            break;
+        }
+    }
+}
+
+// Full colors run wide; the overflow bucket stays on the per-item path.
+static void RunContactStageWide(m2World* world, m2ContactConstraint* constraints,
+                                const int32_t* colorStart, const int32_t* blockStart,
+                                m2ContactStage stage, float invH, float minBiasVel, bool useBias)
+{
+    m2BlockStageCtx ctx;
     ctx.world = world;
-    ctx.constraints = constraints;
+    ctx.blocks = (m2ContactBlock*)world->contactBlocks;
     ctx.stage = stage;
     ctx.invH = invH;
     ctx.minBiasVel = minBiasVel;
     ctx.useBias = useBias;
-    // Forward sweeps in every pass, like the reference. The symmetric
-    // (backward-relax) sweep was a workaround for instability whose
-    // real cause was the scrambled pair order; with sorted pairs and
-    // both-pass friction the reference schedule wins everywhere.
-    for (int32_t step = 0; step <= M2_GRAPH_COLORS; ++step)
+    for (int32_t color = 0; color < M2_GRAPH_COLORS; ++color)
     {
-        int32_t color = step;
-        int32_t begin = colorStart[color];
-        int32_t end = colorStart[color + 1];
+        int32_t begin = blockStart[color];
+        int32_t end = blockStart[color + 1];
         if (begin == end)
         {
             continue;
         }
-        ctx.order = world->colorOrder + begin;
-        if (color == M2_GRAPH_COLORS)
-        {
-            ContactStageRange(0, end - begin, &ctx); // overflow: serial
-        }
-        else
-        {
-            m2ThreadPoolRun(world->pool, ContactStageRange, &ctx, end - begin);
-        }
+        ctx.blocks = (m2ContactBlock*)world->contactBlocks + begin;
+        m2ThreadPoolRun(world->pool, BlockStageRange, &ctx, end - begin);
+    }
+
+    // Overflow bucket: serial per-item path, canonical order.
+    int32_t begin = colorStart[M2_GRAPH_COLORS];
+    int32_t end = colorStart[M2_GRAPH_COLORS + 1];
+    if (begin != end)
+    {
+        m2ContactStageCtx overflow;
+        overflow.world = world;
+        overflow.constraints = constraints;
+        overflow.order = world->colorOrder + begin;
+        overflow.stage = stage;
+        overflow.invH = invH;
+        overflow.minBiasVel = minBiasVel;
+        overflow.useBias = useBias;
+        ContactStageRange(0, end - begin, &overflow);
     }
 }
 
@@ -1223,6 +1686,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
     m2Softness staticSoft = MakeSoft(2.0f * M2_CONTACT_HERTZ, M2_CONTACT_DAMPING_RATIO, h);
     float minBiasVel = -M2_CONTACT_PUSH_MAX_SPEED / staticSoft.massScale;
 
+    int32_t blockStart[M2_GRAPH_COLORS + 1];
+    PackContactBlocks(world, constraints, colorStart, blockStart);
+
     for (int32_t sub = 0; sub < substepCount; ++sub)
     {
         // Integrate velocities (fixed body order).
@@ -1238,9 +1704,11 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         }
 
         WarmStartJoints(world, joints, jointCount);
-        RunContactStage(world, constraints, colorStart, m2_stageWarmStart, invH, minBiasVel, true);
+        RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageWarmStart, invH,
+                            minBiasVel, true);
         SolveJoints(world, joints, jointCount, true, invH); // joints before contacts (topic-05 §5)
-        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, minBiasVel, true);
+        RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageSolve, invH,
+                            minBiasVel, true);
 
         // Bullet substep origins, captured before positions move.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
@@ -1278,10 +1746,13 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
         SolveJoints(world, joints, jointCount, false, invH);
-        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, minBiasVel, false);
+        RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageSolve, invH,
+                            minBiasVel, false);
     }
 
-    RunContactStage(world, constraints, colorStart, m2_stageRestitution, invH, minBiasVel, false);
-    RunContactStage(world, constraints, colorStart, m2_stageStore, invH, minBiasVel, false);
+    RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageRestitution, invH,
+                        minBiasVel, false);
+    RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageStore, invH, minBiasVel,
+                        false);
     StoreJointImpulses(world, joints, jointCount);
 }
