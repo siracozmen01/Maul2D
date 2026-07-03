@@ -809,19 +809,14 @@ static void SolveBlock(m2World* world, m2ContactBlock* b, float invH, float minB
             float dsy = dpy[lane] + rsBy - rsAy;
             float sep = b->baseSep[k][lane] + dsx * b->normalX[lane] + dsy * b->normalY[lane];
 
-            float bias = 0.0f;
-            float massScale = 1.0f;
-            float impulseScale = 0.0f;
-            if (sep > 0.0f)
-            {
-                bias = sep * invH;
-            }
-            else if (useBias)
-            {
-                bias = m2MaxF(b->biasRate[lane] * sep, minBiasVel);
-                massScale = b->massScale[lane];
-                impulseScale = b->impulseScale[lane];
-            }
+            // Value selects instead of branches: both candidates are pure
+            // values, the selection is bit-identical to the branchy
+            // form, and the vectorizer gets a straight-line loop.
+            bool speculative = sep > 0.0f;
+            float softBias = m2MaxF(b->biasRate[lane] * sep, minBiasVel);
+            float bias = speculative ? sep * invH : (useBias ? softBias : 0.0f);
+            float massScale = !speculative && useBias ? b->massScale[lane] : 1.0f;
+            float impulseScale = !speculative && useBias ? b->impulseScale[lane] : 0.0f;
 
             float vrAx = vAx[lane] - wA[lane] * b->rAY[k][lane];
             float vrAy = vAy[lane] + wA[lane] * b->rAX[k][lane];
