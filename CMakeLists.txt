@@ -111,6 +111,11 @@ target_include_directories(test_threads PRIVATE src)
 maul2d_apply_flags(test_threads)
 add_test(NAME threads COMMAND test_threads)
 
+option(MAUL2D_SAMPLES "Build the sample programs" ON)
+if(MAUL2D_SAMPLES)
+    add_subdirectory(samples)
+endif()
+
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)
