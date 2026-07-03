@@ -79,6 +79,16 @@ typedef struct m2World
     float* jointHertz;
     float* jointDamping;
     m2Vec2* jointImpulse; // distance uses .x only
+    uint8_t* jointFlags;  // bit0 enableMotor, bit1 enableLimit
+    float* jointMotorSpeed;
+    float* jointMaxMotor; // torque (revolute) or force (prismatic)
+    float* jointLower;
+    float* jointUpper;
+    m2Vec2* jointLocalAxisA; // prismatic
+    float* jointRefAngle;    // relative angle captured at create
+    float* jointMotorImpulse;
+    float* jointLowerImpulse;
+    float* jointUpperImpulse;
     uint16_t* jointGenerations;
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
@@ -151,6 +161,7 @@ enum
     m2_opCreateDistanceJoint = 7,
     m2_opCreateRevoluteJoint = 8,
     m2_opDestroyJoint = 9,
+    m2_opCreatePrismaticJoint = 10,
 };
 
 // Islands & sleep (src/island.c).

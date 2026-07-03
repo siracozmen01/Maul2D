@@ -21,8 +21,9 @@
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_DJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2DistanceJointDef) << 8) ^ 4)
 #define M2_RJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2RevoluteJointDef) << 8) ^ 5)
+#define M2_PJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2PrismaticJointDef) << 8) ^ 6)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 9u
+#define M2_SNAPSHOT_VERSION 10u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -671,6 +672,16 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointHertz, jointCap, float);
     M2_ALLOC(jointDamping, jointCap, float);
     M2_ALLOC(jointImpulse, jointCap, m2Vec2);
+    M2_ALLOC(jointFlags, jointCap, uint8_t);
+    M2_ALLOC(jointMotorSpeed, jointCap, float);
+    M2_ALLOC(jointMaxMotor, jointCap, float);
+    M2_ALLOC(jointLower, jointCap, float);
+    M2_ALLOC(jointUpper, jointCap, float);
+    M2_ALLOC(jointLocalAxisA, jointCap, m2Vec2);
+    M2_ALLOC(jointRefAngle, jointCap, float);
+    M2_ALLOC(jointMotorImpulse, jointCap, float);
+    M2_ALLOC(jointLowerImpulse, jointCap, float);
+    M2_ALLOC(jointUpperImpulse, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
@@ -790,6 +801,16 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->jointHertz);
     free(world->jointDamping);
     free(world->jointImpulse);
+    free(world->jointFlags);
+    free(world->jointMotorSpeed);
+    free(world->jointMaxMotor);
+    free(world->jointLower);
+    free(world->jointUpper);
+    free(world->jointLocalAxisA);
+    free(world->jointRefAngle);
+    free(world->jointMotorImpulse);
+    free(world->jointLowerImpulse);
+    free(world->jointUpperImpulse);
     free(world->jointGenerations);
     free(world->jointFreeQueue);
     free(world->pairKeys);
@@ -1020,6 +1041,16 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointHertz, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointDamping, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointImpulse, (size_t)world->jointCapacity * sizeof(m2Vec2));
+    M2_BLOCK(world->jointFlags, (size_t)world->jointCapacity * sizeof(uint8_t));
+    M2_BLOCK(world->jointMotorSpeed, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointMaxMotor, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointLower, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointUpper, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointLocalAxisA, (size_t)world->jointCapacity * sizeof(m2Vec2));
+    M2_BLOCK(world->jointRefAngle, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointMotorImpulse, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointLowerImpulse, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointUpperImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
     M2_BLOCK(world->trees, M2_TREE_COUNT * sizeof(m2DynamicTree));
@@ -1154,6 +1185,9 @@ uint64_t m2World_Hash(m2WorldId worldId)
             continue;
         }
         h = m2Hash64(h, &world->jointImpulse[i], (int32_t)sizeof(m2Vec2));
+        h = m2Hash64(h, &world->jointMotorImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointLowerImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointUpperImpulse[i], (int32_t)sizeof(float));
     }
     return h;
 }
@@ -1626,6 +1660,14 @@ static int32_t AllocateJoint(m2World* world)
     return index;
 }
 
+// Relative angle of B vs A from their rotations (own trig: ADR-0010).
+static float RelativeJointAngle(m2Rot qA, m2Rot qB)
+{
+    float sin = qA.c * qB.s - qA.s * qB.c;
+    float cos = qA.c * qB.c + qA.s * qB.s;
+    return m2Atan2(sin, cos);
+}
+
 static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, uint8_t type,
                              int32_t bodyA, int32_t bodyB, m2Vec2 anchorA, m2Vec2 anchorB,
                              float length, float hertz, float damping)
@@ -1639,6 +1681,16 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointHertz[index] = hertz;
     world->jointDamping[index] = damping;
     world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
+    world->jointFlags[index] = 0;
+    world->jointMotorSpeed[index] = 0.0f;
+    world->jointMaxMotor[index] = 0.0f;
+    world->jointLower[index] = 0.0f;
+    world->jointUpper[index] = 0.0f;
+    world->jointLocalAxisA[index] = (m2Vec2){1.0f, 0.0f};
+    world->jointRefAngle[index] = 0.0f;
+    world->jointMotorImpulse[index] = 0.0f;
+    world->jointLowerImpulse[index] = 0.0f;
+    world->jointUpperImpulse[index] = 0.0f;
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
     world->asleep[bodyA] = 0;
@@ -1738,6 +1790,13 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 1, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointFlags[index] = (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u);
+    world->jointMotorSpeed[index] = def->motorSpeed;
+    world->jointMaxMotor[index] = def->maxMotorTorque;
+    world->jointLower[index] = def->lowerAngle;
+    world->jointUpper[index] = def->upperAngle;
+    world->jointRefAngle[index] =
+        RelativeJointAngle(world->transforms[bodyA].q, world->transforms[bodyB].q);
     if (world->journalActive != 0)
     {
         struct
@@ -1749,6 +1808,68 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
         record.def = *def;
         record.expected = jointId;
         m2JournalRecord(world, m2_opCreateRevoluteJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+m2PrismaticJointDef m2DefaultPrismaticJointDef(void)
+{
+    m2PrismaticJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.localAxisA = (m2Vec2){1.0f, 0.0f};
+    def.internalValue = M2_PJOINT_COOKIE;
+    return def;
+}
+
+m2JointId m2CreatePrismaticJoint(m2WorldId worldId, const m2PrismaticJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_PJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    float axisLength =
+        sqrtf(def->localAxisA.x * def->localAxisA.x + def->localAxisA.y * def->localAxisA.y);
+    if (!(axisLength > 1.19209290e-7f))
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2JointId jointId = FinishJoint(world, worldId, index, 2, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointFlags[index] = (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u);
+    world->jointMotorSpeed[index] = def->motorSpeed;
+    world->jointMaxMotor[index] = def->maxMotorForce;
+    world->jointLower[index] = def->lowerTranslation;
+    world->jointUpper[index] = def->upperTranslation;
+    world->jointLocalAxisA[index] =
+        (m2Vec2){def->localAxisA.x / axisLength, def->localAxisA.y / axisLength};
+    world->jointRefAngle[index] =
+        RelativeJointAngle(world->transforms[bodyA].q, world->transforms[bodyB].q);
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2PrismaticJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreatePrismaticJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
 }

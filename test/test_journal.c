@@ -98,6 +98,27 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     jd.bodyIdB = bob;
     m2JointId rod = m2CreateDistanceJoint(world, &jd);
 
+    // A motorized slider exercises the prismatic create op (op 10).
+    m2BodyDef ramDef = m2DefaultBodyDef();
+    ramDef.type = m2_dynamicBody;
+    ramDef.position = (m2Pos2){9.0, 2.0};
+    m2BodyId ram = m2CreateBody(world, &ramDef);
+    m2CreateCircleShape(ram, &bs, &bc);
+    m2BodyDef cylDef = m2DefaultBodyDef();
+    cylDef.position = (m2Pos2){9.0, 2.0};
+    m2BodyId cylinder = m2CreateBody(world, &cylDef);
+    m2PrismaticJointDef press = m2DefaultPrismaticJointDef();
+    press.bodyIdA = cylinder;
+    press.bodyIdB = ram;
+    press.localAxisA = (m2Vec2){0.0f, 1.0f};
+    press.enableMotor = true;
+    press.motorSpeed = -0.5f;
+    press.maxMotorForce = 20.0f;
+    press.enableLimit = true;
+    press.lowerTranslation = -0.8f;
+    press.upperTranslation = 0.3f;
+    m2CreatePrismaticJoint(world, &press);
+
     for (int32_t i = 0; i < 45; ++i)
     {
         m2World_Step(world, 1.0f / 60.0f, 4);

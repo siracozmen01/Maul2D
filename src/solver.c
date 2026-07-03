@@ -76,16 +76,28 @@ typedef struct m2JointConstraint
     int32_t jointIndex;
     int32_t bodyA;
     int32_t bodyB;
-    uint8_t type; // 0 distance, 1 revolute
-    m2Vec2 rA;    // world-rotated anchors at prepare
+    uint8_t type;  // 0 distance, 1 revolute, 2 prismatic
+    uint8_t flags; // bit0 motor, bit1 limit
+    m2Vec2 rA;     // world-rotated anchors at prepare
     m2Vec2 rB;
-    m2Vec2 axis;         // distance: unit axis at prepare
-    float baseC;         // distance: C0; revolute uses baseCVec
-    m2Vec2 baseCVec;     // revolute: C0
-    float axialMass;     // distance
-    float k11, k12, k22; // revolute 2x2 effective mass
+    m2Vec2 axis;         // distance/prismatic: unit axis at prepare
+    m2Vec2 perp;         // prismatic: left-perp of axis
+    float baseC;         // distance: C0; prismatic: translation0
+    m2Vec2 baseCVec;     // revolute: C0; prismatic: (perpC0, unused)
+    float baseAngle;     // relative angle at prepare minus reference
+    float a1, a2;        // prismatic axial torque arms
+    float s1, s2;        // prismatic perpendicular torque arms
+    float axialMass;     // distance/prismatic axial; revolute 1/(iA+iB)
+    float k11, k12, k22; // revolute/prismatic 2x2 effective mass
+    float motorSpeed;
+    float maxMotorImpulse; // h * maxMotorTorque(Force), clamp budget
+    float lower;
+    float upper;
     m2Softness softness;
-    m2Vec2 impulse; // accumulated (x only for distance)
+    m2Vec2 impulse;     // point/axial (rev/dist) or (perp, angle) (prismatic)
+    float motorImpulse; // accumulated axial trio
+    float lowerImpulse;
+    float upperImpulse;
 } m2JointConstraint;
 
 typedef struct m2ContactConstraint
@@ -374,6 +386,14 @@ static void StoreImpulses(m2World* world, m2ContactConstraint* constraints, int3
     }
 }
 
+// Relative angle of B vs A (own trig per ADR-0010).
+static float RelativeRotAngle(m2Rot qA, m2Rot qB)
+{
+    float sin = qA.c * qB.s - qA.s * qB.c;
+    float cos = qA.c * qB.c + qA.s * qB.s;
+    return m2Atan2(sin, cos);
+}
+
 static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
 {
     // Stiff default softness for hertz==0 (F-T5-4 surface pending).
@@ -397,10 +417,18 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
         c->bodyA = bodyA;
         c->bodyB = bodyB;
         c->type = world->jointType[j];
+        c->flags = world->jointFlags[j];
         float hertz = world->jointHertz[j] > 0.0f ? world->jointHertz[j] : 60.0f;
         float damping = world->jointHertz[j] > 0.0f ? world->jointDamping[j] : 2.0f;
         c->softness = MakeSoft(hertz, damping, h);
         c->impulse = world->jointImpulse[j];
+        c->motorSpeed = world->jointMotorSpeed[j];
+        c->maxMotorImpulse = h * world->jointMaxMotor[j];
+        c->lower = world->jointLower[j];
+        c->upper = world->jointUpper[j];
+        c->motorImpulse = world->jointMotorImpulse[j];
+        c->lowerImpulse = world->jointLowerImpulse[j];
+        c->upperImpulse = world->jointUpperImpulse[j];
 
         m2Rot qA = world->transforms[bodyA].q;
         m2Rot qB = world->transforms[bodyB].q;
@@ -426,12 +454,37 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = mA + mB + iA * crA * crA + iB * crB * crB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
-        else
+        else if (c->type == 1)
         {
             c->baseCVec = (m2Vec2){dx, dy};
             c->k11 = mA + mB + iA * c->rA.y * c->rA.y + iB * c->rB.y * c->rB.y;
             c->k12 = -iA * c->rA.x * c->rA.y - iB * c->rB.x * c->rB.y;
             c->k22 = mA + mB + iA * c->rA.x * c->rA.x + iB * c->rB.x * c->rB.x;
+            float k = iA + iB;
+            c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
+            c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
+        }
+        else
+        {
+            // Prismatic frame at prepare: Jacobians frozen for the
+            // substep like the revolute point block (recorded
+            // adaptation of the reference's per-iteration re-rotation).
+            c->axis = Rotate(qA, world->jointLocalAxisA[j]);
+            c->perp = (m2Vec2){-c->axis.y, c->axis.x};
+            c->baseC = dx * c->axis.x + dy * c->axis.y; // translation0
+            c->baseCVec = (m2Vec2){dx * c->perp.x + dy * c->perp.y, 0.0f};
+            c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
+            m2Vec2 dPlusRA = {dx + c->rA.x, dy + c->rA.y};
+            c->a1 = Cross(dPlusRA, c->axis);
+            c->a2 = Cross(c->rB, c->axis);
+            c->s1 = Cross(dPlusRA, c->perp);
+            c->s2 = Cross(c->rB, c->perp);
+            float ka = mA + mB + iA * c->a1 * c->a1 + iB * c->a2 * c->a2;
+            c->axialMass = ka > 0.0f ? 1.0f / ka : 0.0f;
+            c->k11 = mA + mB + iA * c->s1 * c->s1 + iB * c->s2 * c->s2;
+            c->k12 = iA * c->s1 + iB * c->s2;
+            float k22 = iA + iB;
+            c->k22 = k22 > 0.0f ? k22 : 1.0f; // fixed-rotation guard (reference)
         }
     }
     return count;
@@ -451,18 +504,74 @@ static void ApplyJointImpulse(m2World* world, const m2JointConstraint* c, m2Vec2
     world->angularVelocities[c->bodyB] += iB * Cross(c->rB, P);
 }
 
+// Prismatic impulses act along frozen Jacobians, not through rA/rB.
+static void ApplyPrismaticImpulse(m2World* world, const m2JointConstraint* c, m2Vec2 P, float LA,
+                                  float LB)
+{
+    float mA = world->invMass[c->bodyA];
+    float iA = world->invInertia[c->bodyA];
+    float mB = world->invMass[c->bodyB];
+    float iB = world->invInertia[c->bodyB];
+    world->linearVelocities[c->bodyA].x -= mA * P.x;
+    world->linearVelocities[c->bodyA].y -= mA * P.y;
+    world->angularVelocities[c->bodyA] -= iA * LA;
+    world->linearVelocities[c->bodyB].x += mB * P.x;
+    world->linearVelocities[c->bodyB].y += mB * P.y;
+    world->angularVelocities[c->bodyB] += iB * LB;
+}
+
 static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t count)
 {
     for (int32_t i = 0; i < count; ++i)
     {
         m2JointConstraint* c = joints + i;
-        m2Vec2 P = c->type == 0 ? (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y}
-                                : c->impulse;
-        ApplyJointImpulse(world, c, P);
+        if (c->type == 0)
+        {
+            ApplyJointImpulse(world, c,
+                              (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y});
+        }
+        else if (c->type == 1)
+        {
+            ApplyJointImpulse(world, c, c->impulse);
+            float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
+            world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * axial;
+            world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * axial;
+        }
+        else
+        {
+            float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
+            m2Vec2 P = {axial * c->axis.x + c->impulse.x * c->perp.x,
+                        axial * c->axis.y + c->impulse.x * c->perp.y};
+            float LA = axial * c->a1 + c->impulse.x * c->s1 + c->impulse.y;
+            float LB = axial * c->a2 + c->impulse.x * c->s2 + c->impulse.y;
+            ApplyPrismaticImpulse(world, c, P, LA, LB);
+        }
     }
 }
 
-static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count, bool useBias)
+// One axial sub-constraint (motor or limit) on the shared axial
+// Jacobian; oneSided clamps the accumulator at zero (limits), otherwise
+// it clamps symmetrically at the motor budget. Returns the delta.
+static float SolveAxial(m2JointConstraint* c, float cdot, float bias, float massScale,
+                        float impulseScale, float* accumulated, bool oneSided)
+{
+    float old = *accumulated;
+    float impulse = -massScale * c->axialMass * (cdot + bias) - impulseScale * old;
+    float next = old + impulse;
+    if (oneSided)
+    {
+        next = m2MaxF(next, 0.0f);
+    }
+    else
+    {
+        next = m2ClampF(next, -c->maxMotorImpulse, c->maxMotorImpulse);
+    }
+    *accumulated = next;
+    return next - old;
+}
+
+static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count, bool useBias,
+                        float invH)
 {
     for (int32_t i = 0; i < count; ++i)
     {
@@ -497,8 +606,66 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             c->impulse.x += impulse;
             ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
         }
-        else
+        else if (c->type == 1)
         {
+            if ((c->flags & 1u) != 0 && c->axialMass > 0.0f)
+            {
+                // Motor: drive relative spin toward motorSpeed within
+                // the per-step torque budget (reference formulation).
+                float cdot = wB - wA - c->motorSpeed;
+                float delta = SolveAxial(c, cdot, 0.0f, 1.0f, 0.0f, &c->motorImpulse, false);
+                wA -= world->invInertia[c->bodyA] * delta;
+                wB += world->invInertia[c->bodyB] * delta;
+            }
+            if ((c->flags & 2u) != 0 && c->axialMass > 0.0f)
+            {
+                float jointAngle =
+                    m2UnwindAngle(c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                                  world->deltaRotations[c->bodyB]));
+                { // lower: open limits speculate, violated limits go soft
+                    float C = jointAngle - c->lower;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float delta = SolveAxial(c, wB - wA, bias, massScale, impulseScale,
+                                             &c->lowerImpulse, true);
+                    wA -= world->invInertia[c->bodyA] * delta;
+                    wB += world->invInertia[c->bodyB] * delta;
+                }
+                { // upper: signs flipped so C stays positive when satisfied
+                    float C = c->upper - jointAngle;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float delta = SolveAxial(c, wA - wB, bias, massScale, impulseScale,
+                                             &c->upperImpulse, true);
+                    wA += world->invInertia[c->bodyA] * delta;
+                    wB -= world->invInertia[c->bodyB] * delta;
+                }
+            }
+            world->angularVelocities[c->bodyA] = wA;
+            world->angularVelocities[c->bodyB] = wB;
+
             m2Vec2 bias = {0.0f, 0.0f};
             float massScale = 1.0f;
             float impulseScale = 0.0f;
@@ -528,6 +695,127 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             c->impulse.y += impulse.y;
             ApplyJointImpulse(world, c, impulse);
         }
+        else
+        {
+            float mA = world->invMass[c->bodyA];
+            float iA = world->invInertia[c->bodyA];
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            float translation = c->baseC + c->axis.x * ds.x + c->axis.y * ds.y;
+
+            if ((c->flags & 1u) != 0 && c->axialMass > 0.0f)
+            {
+                float cdot =
+                    c->axis.x * (vB.x - vA.x) + c->axis.y * (vB.y - vA.y) + c->a2 * wB - c->a1 * wA;
+                float delta =
+                    SolveAxial(c, cdot - c->motorSpeed, 0.0f, 1.0f, 0.0f, &c->motorImpulse, false);
+                vA.x -= mA * delta * c->axis.x;
+                vA.y -= mA * delta * c->axis.y;
+                wA -= iA * delta * c->a1;
+                vB.x += mB * delta * c->axis.x;
+                vB.y += mB * delta * c->axis.y;
+                wB += iB * delta * c->a2;
+            }
+            if ((c->flags & 2u) != 0 && c->axialMass > 0.0f)
+            {
+                { // lower translation limit
+                    float C = translation - c->lower;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float cdot = c->axis.x * (vB.x - vA.x) + c->axis.y * (vB.y - vA.y) +
+                                 c->a2 * wB - c->a1 * wA;
+                    float delta =
+                        SolveAxial(c, cdot, bias, massScale, impulseScale, &c->lowerImpulse, true);
+                    vA.x -= mA * delta * c->axis.x;
+                    vA.y -= mA * delta * c->axis.y;
+                    wA -= iA * delta * c->a1;
+                    vB.x += mB * delta * c->axis.x;
+                    vB.y += mB * delta * c->axis.y;
+                    wB += iB * delta * c->a2;
+                }
+                { // upper limit: signs flipped, impulse stays positive
+                    float C = c->upper - translation;
+                    float bias = 0.0f;
+                    float massScale = 1.0f;
+                    float impulseScale = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        bias = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        bias = c->softness.biasRate * C;
+                        massScale = c->softness.massScale;
+                        impulseScale = c->softness.impulseScale;
+                    }
+                    float cdot = c->axis.x * (vA.x - vB.x) + c->axis.y * (vA.y - vB.y) +
+                                 c->a1 * wA - c->a2 * wB;
+                    float delta =
+                        SolveAxial(c, cdot, bias, massScale, impulseScale, &c->upperImpulse, true);
+                    vA.x += mA * delta * c->axis.x;
+                    vA.y += mA * delta * c->axis.y;
+                    wA += iA * delta * c->a1;
+                    vB.x -= mB * delta * c->axis.x;
+                    vB.y -= mB * delta * c->axis.y;
+                    wB -= iB * delta * c->a2;
+                }
+            }
+            { // perpendicular + angle lock, block form (reference)
+                float cdotPerp =
+                    c->perp.x * (vB.x - vA.x) + c->perp.y * (vB.y - vA.y) + c->s2 * wB - c->s1 * wA;
+                float cdotAngle = wB - wA;
+                m2Vec2 bias = {0.0f, 0.0f};
+                float massScale = 1.0f;
+                float impulseScale = 0.0f;
+                if (useBias)
+                {
+                    float perpC = c->baseCVec.x + c->perp.x * ds.x + c->perp.y * ds.y;
+                    float angleC = m2UnwindAngle(c->baseAngle +
+                                                 RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                                  world->deltaRotations[c->bodyB]));
+                    bias.x = c->softness.biasRate * perpC;
+                    bias.y = c->softness.biasRate * angleC;
+                    massScale = c->softness.massScale;
+                    impulseScale = c->softness.impulseScale;
+                }
+                float det = c->k11 * c->k22 - c->k12 * c->k12;
+                if (det > 0.0f)
+                {
+                    float invDet = 1.0f / det;
+                    m2Vec2 b = {cdotPerp + bias.x, cdotAngle + bias.y};
+                    m2Vec2 impulse = {-massScale * invDet * (c->k22 * b.x - c->k12 * b.y) -
+                                          impulseScale * c->impulse.x,
+                                      -massScale * invDet * (c->k11 * b.y - c->k12 * b.x) -
+                                          impulseScale * c->impulse.y};
+                    c->impulse.x += impulse.x;
+                    c->impulse.y += impulse.y;
+                    m2Vec2 P = {impulse.x * c->perp.x, impulse.x * c->perp.y};
+                    float LA = impulse.x * c->s1 + impulse.y;
+                    float LB = impulse.x * c->s2 + impulse.y;
+                    vA.x -= mA * P.x;
+                    vA.y -= mA * P.y;
+                    wA -= iA * LA;
+                    vB.x += mB * P.x;
+                    vB.y += mB * P.y;
+                    wB += iB * LB;
+                }
+            }
+            world->linearVelocities[c->bodyA] = vA;
+            world->angularVelocities[c->bodyA] = wA;
+            world->linearVelocities[c->bodyB] = vB;
+            world->angularVelocities[c->bodyB] = wB;
+        }
     }
 }
 
@@ -535,7 +823,11 @@ static void StoreJointImpulses(m2World* world, m2JointConstraint* joints, int32_
 {
     for (int32_t i = 0; i < count; ++i)
     {
-        world->jointImpulse[joints[i].jointIndex] = joints[i].impulse;
+        int32_t j = joints[i].jointIndex;
+        world->jointImpulse[j] = joints[i].impulse;
+        world->jointMotorImpulse[j] = joints[i].motorImpulse;
+        world->jointLowerImpulse[j] = joints[i].lowerImpulse;
+        world->jointUpperImpulse[j] = joints[i].upperImpulse;
     }
 }
 
@@ -575,7 +867,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
         WarmStartJoints(world, joints, jointCount);
         WarmStart(world, constraints, constraintCount);
-        SolveJoints(world, joints, jointCount, true); // joints before contacts (topic-05 §5)
+        SolveJoints(world, joints, jointCount, true, invH); // joints before contacts (topic-05 §5)
         SolveContacts(world, constraints, constraintCount, invH, true);
 
         // Bullet substep origins, captured before positions move.
@@ -605,7 +897,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         }
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
-        SolveJoints(world, joints, jointCount, false);
+        SolveJoints(world, joints, jointCount, false, invH);
         SolveContacts(world, constraints, constraintCount, invH, false);
     }
 

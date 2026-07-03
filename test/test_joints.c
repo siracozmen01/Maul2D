@@ -202,6 +202,270 @@ static void TestJointRollback(void)
     m2DestroyWorld(world);
 }
 
+static float BodyAngle(m2BodyId body)
+{
+    m2Rot q = m2Body_GetRotation(body);
+    return m2Atan2(q.s, q.c);
+}
+
+static void TestRevoluteMotor(void)
+{
+    // A strong motor spins a pinned wheel up to its target speed; a
+    // starved motor cannot (the torque budget is real).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 3.0};
+    m2BodyId base = m2CreateBody(world, &ad);
+    m2BodyId wheel = AddBall(world, 0.0, 3.0, 0.5f);
+    m2BodyId starvedWheel = AddBall(world, 5.0, 3.0, 0.5f);
+    m2BodyDef ad2 = m2DefaultBodyDef();
+    ad2.position = (m2Pos2){5.0, 3.0};
+    m2BodyId base2 = m2CreateBody(world, &ad2);
+
+    m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+    jd.bodyIdA = base;
+    jd.bodyIdB = wheel;
+    jd.enableMotor = true;
+    jd.motorSpeed = 4.0f;
+    jd.maxMotorTorque = 50.0f;
+    m2CreateRevoluteJoint(world, &jd);
+
+    m2RevoluteJointDef weak = m2DefaultRevoluteJointDef();
+    weak.bodyIdA = base2;
+    weak.bodyIdB = starvedWheel;
+    weak.enableMotor = true;
+    weak.motorSpeed = 4.0f;
+    weak.maxMotorTorque = 0.0001f;
+    m2CreateRevoluteJoint(world, &weak);
+
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float w = m2Body_GetAngularVelocity(wheel);
+    CHECK(w > 3.9f && w < 4.1f, "motor reaches target speed");
+    float starved = m2Body_GetAngularVelocity(starvedWheel);
+    CHECK(starved < 1.0f, "starved motor stays under budget");
+
+    m2DestroyWorld(world);
+}
+
+static void TestRevoluteLimit(void)
+{
+    // A horizontal rod on a limited hinge: gravity swings it down, the
+    // lower limit catches it and it rests there without sagging through.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 5.0};
+    m2BodyId pivot = m2CreateBody(world, &ad);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.6, 5.0};
+    m2BodyId rod = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon bar = m2MakeBox(0.6f, 0.05f);
+    m2CreatePolygonShape(rod, &sd, &bar);
+
+    m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+    jd.bodyIdA = pivot;
+    jd.bodyIdB = rod;
+    jd.localAnchorB = (m2Vec2){-0.6f, 0.0f};
+    jd.enableLimit = true;
+    jd.lowerAngle = -0.5f;
+    jd.upperAngle = 0.5f;
+    m2CreateRevoluteJoint(world, &jd);
+
+    float minAngle = 0.0f;
+    for (int32_t i = 0; i < 400; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        float angle = BodyAngle(rod);
+        minAngle = angle < minAngle ? angle : minAngle;
+    }
+    CHECK(minAngle > -0.55f, "limit never overshoots badly");
+    float rest = BodyAngle(rod);
+    CHECK(rest > -0.55f && rest < -0.45f, "rod rests on the lower limit");
+
+    m2DestroyWorld(world);
+}
+
+static void TestPrismaticSlider(void)
+{
+    // Gravity elevator: the axis lock kills sideways drift and spin,
+    // the lower translation limit catches the fall.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 4.0};
+    m2BodyId frame = m2CreateBody(world, &ad);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId platform = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon deck = m2MakeBox(0.5f, 0.1f);
+    m2CreatePolygonShape(platform, &sd, &deck);
+
+    m2PrismaticJointDef jd = m2DefaultPrismaticJointDef();
+    jd.bodyIdA = frame;
+    jd.bodyIdB = platform;
+    jd.localAxisA = (m2Vec2){0.0f, 1.0f};
+    jd.enableLimit = true;
+    jd.lowerTranslation = -1.5f;
+    jd.upperTranslation = 2.0f;
+    m2CreatePrismaticJoint(world, &jd);
+
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 pos = m2Body_GetPosition(platform);
+    CHECK(pos.y > 4.0 - 1.55 && pos.y < 4.0 - 1.42, "platform rests on the lower stop");
+    CHECK(pos.x > -0.01 && pos.x < 0.01, "axis lock kills sideways drift");
+    m2Rot q = m2Body_GetRotation(platform);
+    CHECK(q.s > -0.01f && q.s < 0.01f, "angle lock kills spin");
+
+    m2DestroyWorld(world);
+}
+
+static void TestPrismaticMotor(void)
+{
+    // The motor hoists the platform against gravity to the upper stop
+    // and holds it there.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 1.0};
+    m2BodyId frame = m2CreateBody(world, &ad);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 1.0};
+    m2BodyId platform = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon deck = m2MakeBox(0.5f, 0.1f);
+    m2CreatePolygonShape(platform, &sd, &deck);
+
+    m2PrismaticJointDef jd = m2DefaultPrismaticJointDef();
+    jd.bodyIdA = frame;
+    jd.bodyIdB = platform;
+    jd.localAxisA = (m2Vec2){0.0f, 1.0f};
+    jd.enableMotor = true;
+    jd.motorSpeed = 1.5f;
+    jd.maxMotorForce = 50.0f;
+    jd.enableLimit = true;
+    jd.lowerTranslation = -0.5f;
+    jd.upperTranslation = 2.0f;
+    m2CreatePrismaticJoint(world, &jd);
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Vec2 vel = m2Body_GetLinearVelocity(platform);
+    CHECK(vel.y > 1.3f && vel.y < 1.7f, "elevator cruises at motor speed");
+
+    for (int32_t i = 0; i < 200; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 pos = m2Body_GetPosition(platform);
+    CHECK(pos.y > 1.0 + 1.95 && pos.y < 1.0 + 2.05, "elevator holds at the upper stop");
+
+    m2DestroyWorld(world);
+}
+
+static void TestMotorRollback(void)
+{
+    // Motors, limits and the slider all carry warm-start accumulators:
+    // snapshot mid-drive, replay, demand bit-exact hashes.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 3.0};
+    m2BodyId tower = m2CreateBody(world, &ad);
+    m2BodyDef bladeDef = m2DefaultBodyDef();
+    bladeDef.type = m2_dynamicBody;
+    bladeDef.position = (m2Pos2){0.0, 3.0};
+    m2BodyId blade = m2CreateBody(world, &bladeDef);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon bar = m2MakeBox(0.8f, 0.05f);
+    m2CreatePolygonShape(blade, &sd, &bar);
+    m2RevoluteJointDef mill = m2DefaultRevoluteJointDef();
+    mill.bodyIdA = tower;
+    mill.bodyIdB = blade;
+    mill.enableMotor = true;
+    mill.motorSpeed = 3.0f;
+    mill.maxMotorTorque = 20.0f;
+    mill.enableLimit = false;
+    m2CreateRevoluteJoint(world, &mill);
+
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){3.0, 3.0};
+    m2BodyId piston = m2CreateBody(world, &pd);
+    m2Polygon head = m2MakeBox(0.2f, 0.2f);
+    m2CreatePolygonShape(piston, &sd, &head);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){3.0, 3.0};
+    m2BodyId cylinder = m2CreateBody(world, &fd);
+    m2PrismaticJointDef rig = m2DefaultPrismaticJointDef();
+    rig.bodyIdA = cylinder;
+    rig.bodyIdB = piston;
+    rig.localAxisA = (m2Vec2){0.0f, 1.0f};
+    rig.enableMotor = true;
+    rig.motorSpeed = -0.8f;
+    rig.maxMotorForce = 30.0f;
+    rig.enableLimit = true;
+    rig.lowerTranslation = -1.0f;
+    rig.upperTranslation = 1.0f;
+    m2CreatePrismaticJoint(world, &rig);
+
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot");
+
+    uint64_t hashes[60];
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+    }
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "motorized machinery replays bit-exactly");
+    }
+
+    free(snap);
+    m2DestroyWorld(world);
+}
+
 static uint64_t JointSweepHash(void)
 {
     // A bridge of revolute links with cargo dropped on it, far from the
@@ -243,6 +507,47 @@ static uint64_t JointSweepHash(void)
     last.localAnchorB = (m2Vec2){0.0f, 0.0f};
     m2CreateRevoluteJoint(world, &last);
 
+    // A motorized windmill and a limited piston churn beside the
+    // bridge: motors, limits and the slider feed the same hash stream.
+    m2BodyDef td = m2DefaultBodyDef();
+    td.position = (m2Pos2){-9.1e5 + 12.0, 5.0};
+    m2BodyId tower = m2CreateBody(world, &td);
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.type = m2_dynamicBody;
+    wd.position = (m2Pos2){-9.1e5 + 12.0, 5.0};
+    m2BodyId blade = m2CreateBody(world, &wd);
+    m2ShapeDef ws = m2DefaultShapeDef();
+    m2Polygon bladeBox = m2MakeBox(1.0f, 0.08f);
+    m2CreatePolygonShape(blade, &ws, &bladeBox);
+    m2RevoluteJointDef mill = m2DefaultRevoluteJointDef();
+    mill.bodyIdA = tower;
+    mill.bodyIdB = blade;
+    mill.enableMotor = true;
+    mill.motorSpeed = 2.5f;
+    mill.maxMotorTorque = 30.0f;
+    m2CreateRevoluteJoint(world, &mill);
+
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){-9.1e5 - 3.0, 5.0};
+    m2BodyId cylinder = m2CreateBody(world, &cd);
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.type = m2_dynamicBody;
+    hd.position = (m2Pos2){-9.1e5 - 3.0, 5.0};
+    m2BodyId ram = m2CreateBody(world, &hd);
+    m2Polygon ramBox = m2MakeBox(0.25f, 0.25f);
+    m2CreatePolygonShape(ram, &ws, &ramBox);
+    m2PrismaticJointDef press = m2DefaultPrismaticJointDef();
+    press.bodyIdA = cylinder;
+    press.bodyIdB = ram;
+    press.localAxisA = (m2Vec2){0.0f, 1.0f};
+    press.enableMotor = true;
+    press.motorSpeed = -1.2f;
+    press.maxMotorForce = 40.0f;
+    press.enableLimit = true;
+    press.lowerTranslation = -1.2f;
+    press.upperTranslation = 0.5f;
+    m2CreatePrismaticJoint(world, &press);
+
     uint64_t h = M2_HASH_INIT;
     for (int32_t step = 0; step < 300; ++step)
     {
@@ -271,6 +576,11 @@ int main(void)
     TestRevoluteChain();
     TestJointsCoupleIslands();
     TestJointRollback();
+    TestRevoluteMotor();
+    TestRevoluteLimit();
+    TestPrismaticSlider();
+    TestPrismaticMotor();
+    TestMotorRollback();
 
     uint64_t hash = JointSweepHash();
     printf("M2_JOINT_HASH=%016llx\n", (unsigned long long)hash);

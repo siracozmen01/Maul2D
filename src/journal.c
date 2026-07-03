@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 1u
+#define M2_JOURNAL_VERSION 2u
 
 typedef struct m2JournalHeader
 {
@@ -133,6 +133,12 @@ typedef struct m2OpCreateRevoluteJoint
     m2RevoluteJointDef def;
     m2JointId expected;
 } m2OpCreateRevoluteJoint;
+
+typedef struct m2OpCreatePrismaticJoint
+{
+    m2PrismaticJointDef def;
+    m2JointId expected;
+} m2OpCreatePrismaticJoint;
 
 typedef struct m2OpBodyVec
 {
@@ -267,6 +273,16 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             create.def.bodyIdA.world0 = here;
             create.def.bodyIdB.world0 = here;
             m2JointId id = m2CreateRevoluteJoint(worldId, &create.def);
+            M2_ASSERT(id.index1 == create.expected.index1);
+            (void)id;
+            break;
+        }
+        case m2_opCreatePrismaticJoint:
+        {
+            M2_READ_OP(m2OpCreatePrismaticJoint, create);
+            create.def.bodyIdA.world0 = here;
+            create.def.bodyIdB.world0 = here;
+            m2JointId id = m2CreatePrismaticJoint(worldId, &create.def);
             M2_ASSERT(id.index1 == create.expected.index1);
             (void)id;
             break;
