@@ -13,12 +13,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64-gcc,     os: ubuntu-latest,    cc: gcc,   cxxflags: "" }
-          - { name: linux-x64-clang,   os: ubuntu-latest,    cc: clang, cxxflags: "" }
-          - { name: linux-arm64-gcc,   os: ubuntu-24.04-arm, cc: gcc,   cxxflags: "" }
-          - { name: linux-arm64-clang, os: ubuntu-24.04-arm, cc: clang, cxxflags: "" }
-          - { name: macos-arm64-clang, os: macos-latest,     cc: clang, cxxflags: "" }
-          - { name: windows-x64-msvc,  os: windows-latest,   cc: cl,    cxxflags: "" }
+          - { name: linux-x64-gcc,     os: ubuntu-latest,    cc: gcc,   config: Release }
+          - { name: linux-x64-clang,   os: ubuntu-latest,    cc: clang, config: Release }
+          - { name: linux-arm64-gcc,   os: ubuntu-24.04-arm, cc: gcc,   config: Release }
+          - { name: linux-arm64-clang, os: ubuntu-24.04-arm, cc: clang, config: Release }
+          - { name: macos-arm64-clang, os: macos-latest,     cc: clang, config: Release }
+          - { name: windows-x64-msvc,  os: windows-latest,   cc: cl,    config: Release }
+          # The seventh cell: MSVC Debug must produce the same bits as
+          # every Release cell - Debug==Release is a law, not a habit.
+          - { name: windows-x64-msvc-debug, os: windows-latest, cc: cl, config: Debug }
     steps:
       - uses: actions/checkout@v4
 
@@ -28,18 +31,18 @@ jobs:
           if [ "${{ matrix.cc }}" = "cl" ]; then
             cmake -B build
           else
-            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=${{ matrix.cc }}
+            cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.cc }}
           fi
 
       - name: Build
         shell: bash
-        run: cmake --build build --config Release
+        run: cmake --build build --config ${{ matrix.config }}
 
       - name: Run determinism gate
         shell: bash
         run: |
-          if [ -d build/Release ]; then
-            BIN=build/Release
+          if [ -d "build/${{ matrix.config }}" ]; then
+            BIN="build/${{ matrix.config }}"
             SUFFIX=.exe
           else
             BIN=build
@@ -80,7 +83,7 @@ jobs:
         shell: bash
         run: |
           grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD)_HASH=' hashes/*.txt | tee all-hashes.txt
-          CELLS=6
+          CELLS=7
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
