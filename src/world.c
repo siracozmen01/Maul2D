@@ -25,7 +25,7 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 15u
+#define M2_SNAPSHOT_VERSION 16u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -185,6 +185,28 @@ static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB)
     e->step = world->stepCount;
 }
 
+static void EmitSensorEnd(m2World* world, int32_t shapeA, int32_t shapeB)
+{
+    if (world->sensorEndCount < world->pairCapacity)
+    {
+        m2ContactEndEvent* e = &world->sensorEndEvents[world->sensorEndCount++];
+        e->shapeIdA = MakeShapeId(world, shapeA);
+        e->shapeIdB = MakeShapeId(world, shapeB);
+        e->step = world->stepCount;
+    }
+}
+
+static void EmitSensorBegin(m2World* world, int32_t shapeA, int32_t shapeB)
+{
+    if (world->sensorBeginCount < world->pairCapacity)
+    {
+        m2ContactBeginEvent* e = &world->sensorBeginEvents[world->sensorBeginCount++];
+        e->shapeIdA = MakeShapeId(world, shapeA);
+        e->shapeIdB = MakeShapeId(world, shapeB);
+        e->step = world->stepCount;
+    }
+}
+
 // Re-derive pairs touched by the moved set, then batch-merge with the
 // untouched remainder (topic-02 §4.2, RT1-PERF-3).
 static void UpdatePairs(m2World* world)
@@ -231,6 +253,10 @@ static void UpdatePairs(m2World* world)
                 if (!moverDynamic && !ShapeIsDynamic(world, other))
                 {
                     continue;
+                }
+                if (world->shapeSensor[shapeIndex] != 0 && world->shapeSensor[other] != 0)
+                {
+                    continue; // two sensors never detect each other
                 }
                 int32_t groupA = world->shapeGroup[shapeIndex];
                 if (groupA != 0 && groupA == world->shapeGroup[other])
@@ -760,6 +786,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(shapeCategory, shapeCap, uint32_t);
     M2_ALLOC(shapeMask, shapeCap, uint32_t);
     M2_ALLOC(shapeGroup, shapeCap, int32_t);
+    M2_ALLOC(shapeSensor, shapeCap, uint8_t);
     M2_ALLOC(shapeFreeQueue, shapeCap, int32_t);
     M2_ALLOC(proxyIds, shapeCap, int32_t);
     M2_ALLOC(inMoved, shapeCap, uint8_t);
@@ -803,6 +830,9 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
     M2_ALLOC(endEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pendingEndEvents, world->pairCapacity, m2ContactEndEvent);
+    M2_ALLOC(sensorBeginEvents, world->pairCapacity, m2ContactBeginEvent);
+    M2_ALLOC(sensorEndEvents, world->pairCapacity, m2ContactEndEvent);
+    M2_ALLOC(pendingSensorEnd, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pairScratch, world->pairCapacity, uint64_t);
     M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
     M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
@@ -907,6 +937,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->shapeCategory);
     m2Free(world->shapeMask);
     m2Free(world->shapeGroup);
+    m2Free(world->shapeSensor);
     m2Free(world->shapeFreeQueue);
     m2Free(world->proxyIds);
     m2Free(world->inMoved);
@@ -946,6 +977,9 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->beginEvents);
     m2Free(world->endEvents);
     m2Free(world->pendingEndEvents);
+    m2Free(world->sensorBeginEvents);
+    m2Free(world->sensorEndEvents);
+    m2Free(world->pendingSensorEnd);
     m2Free(world->pairScratch);
     m2Free(world->manifolds);
     m2Free(world->oldPairScratch);
@@ -997,6 +1031,13 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         world->endEvents[world->endEventCount++] = world->pendingEndEvents[i];
     }
     world->pendingEndCount = 0;
+    world->sensorBeginCount = 0;
+    world->sensorEndCount = 0;
+    for (int32_t i = 0; i < world->pendingSensorEndCount && i < world->pairCapacity; ++i)
+    {
+        world->sensorEndEvents[world->sensorEndCount++] = world->pendingSensorEnd[i];
+    }
+    world->pendingSensorEndCount = 0;
 
     // Wall-clock diagnostics only; never fed back into simulation.
     uint64_t tStart = m2TimeNowNs();
@@ -1082,9 +1123,21 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         {
             int32_t a = (int32_t)(world->pairKeys[i] >> 32);
             int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            bool sensor = world->shapeSensor[a] != 0 || world->shapeSensor[b] != 0;
             if (touchingNow != 0)
             {
-                EmitBegin(world, a, b);
+                if (sensor)
+                {
+                    EmitSensorBegin(world, a, b);
+                }
+                else
+                {
+                    EmitBegin(world, a, b);
+                }
+            }
+            else if (sensor)
+            {
+                EmitSensorEnd(world, a, b);
             }
             else
             {
@@ -1225,6 +1278,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->shapeCategory, (size_t)world->shapeCapacity * sizeof(uint32_t));
     M2_BLOCK(world->shapeMask, (size_t)world->shapeCapacity * sizeof(uint32_t));
     M2_BLOCK(world->shapeGroup, (size_t)world->shapeCapacity * sizeof(int32_t));
+    M2_BLOCK(world->shapeSensor, (size_t)world->shapeCapacity * sizeof(uint8_t));
     M2_BLOCK(world->shapeFreeQueue, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->proxyIds, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->inMoved, shapeCap * sizeof(uint8_t));
@@ -1354,6 +1408,9 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     world->beginEventCount = 0;
     world->endEventCount = 0;
     world->pendingEndCount = 0;
+    world->sensorBeginCount = 0;
+    world->sensorEndCount = 0;
+    world->pendingSensorEndCount = 0;
     return true;
 }
 
@@ -1493,9 +1550,12 @@ static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
         {
             continue;
         }
-        if (world->pendingEndCount < world->pairCapacity)
+        bool sensor = world->shapeSensor[a] != 0 || world->shapeSensor[b] != 0;
+        m2ContactEndEvent* queue = sensor ? world->pendingSensorEnd : world->pendingEndEvents;
+        int32_t* queueCount = sensor ? &world->pendingSensorEndCount : &world->pendingEndCount;
+        if (*queueCount < world->pairCapacity)
         {
-            m2ContactEndEvent* e = &world->pendingEndEvents[world->pendingEndCount++];
+            m2ContactEndEvent* e = &queue[(*queueCount)++];
             e->shapeIdA = MakeShapeId(world, a);
             e->shapeIdB = MakeShapeId(world, b);
             e->step = world->stepCount;
@@ -1993,6 +2053,7 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     world->shapeCategory[index] = def->categoryBits;
     world->shapeMask[index] = def->maskBits;
     world->shapeGroup[index] = def->groupIndex;
+    world->shapeSensor[index] = def->isSensor ? 1 : 0;
     world->shapeBody[index] = bodyIndex;
     world->shapeNext[index] = world->bodyShapeHead[bodyIndex];
     world->bodyShapeHead[bodyIndex] = index;
@@ -2116,6 +2177,21 @@ m2ContactEvents m2World_GetContactEvents(m2WorldId worldId)
     return events;
 }
 
+m2SensorEvents m2World_GetSensorEvents(m2WorldId worldId)
+{
+    m2SensorEvents events = {NULL, NULL, 0, 0};
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return events;
+    }
+    events.beginEvents = world->sensorBeginEvents;
+    events.beginCount = world->sensorBeginCount;
+    events.endEvents = world->sensorEndEvents;
+    events.endCount = world->sensorEndCount;
+    return events;
+}
+
 int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t capacity)
 {
     m2World* world = GetWorld(worldId);
@@ -2129,6 +2205,14 @@ int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t c
         if (world->pairTouching[i] == 0)
         {
             continue;
+        }
+        {
+            int32_t sa = (int32_t)(world->pairKeys[i] >> 32);
+            int32_t sb = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            if (world->shapeSensor[sa] != 0 || world->shapeSensor[sb] != 0)
+            {
+                continue; // sensors carry no physical contact
+            }
         }
         if (total < capacity)
         {

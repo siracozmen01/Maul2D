@@ -74,6 +74,11 @@ extern "C"
         /// positive always collides, negative never does. Zero defers
         /// to categories and masks. Queries ignore groups.
         int32_t groupIndex;
+        /// Sensors detect overlap without ever pushing back: no solver
+        /// response, no bullet blocking, no effect on sleep or islands.
+        /// Overlaps arrive through m2World_GetSensorEvents. Two sensors
+        /// never detect each other.
+        bool isSensor;
         uint64_t userData;
         int32_t internalValue;
     } m2ShapeDef;

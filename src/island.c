@@ -75,8 +75,14 @@ void m2UpdateIslandsAndWake(m2World* world)
         {
             continue;
         }
-        int32_t bodyA = world->shapeBody[(int32_t)(world->pairKeys[i] >> 32)];
-        int32_t bodyB = world->shapeBody[(int32_t)(world->pairKeys[i] & 0xFFFFFFFFu)];
+        int32_t sa = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t sb = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (world->shapeSensor[sa] != 0 || world->shapeSensor[sb] != 0)
+        {
+            continue; // sensors never couple islands or disturb sleep
+        }
+        int32_t bodyA = world->shapeBody[sa];
+        int32_t bodyB = world->shapeBody[sb];
         bool dynA = world->types[bodyA] == (uint8_t)m2_dynamicBody;
         bool dynB = world->types[bodyB] == (uint8_t)m2_dynamicBody;
         if (dynA && dynB)

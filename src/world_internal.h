@@ -70,6 +70,7 @@ typedef struct m2World
     uint32_t* shapeCategory; // collision filter (snapshot state)
     uint32_t* shapeMask;
     int32_t* shapeGroup;
+    uint8_t* shapeSensor; // overlap-only shapes (snapshot state)
     uint16_t* shapeGenerations;
     int32_t* shapeFreeQueue;
     int32_t shapeFreeHead;
@@ -157,6 +158,12 @@ typedef struct m2World
     m2ContactEndEvent* endEvents;
     int32_t endEventCount;
     m2ContactEndEvent* pendingEndEvents; // between-step destroys, flushed at Step
+    m2ContactBeginEvent* sensorBeginEvents;
+    int32_t sensorBeginCount;
+    m2ContactEndEvent* sensorEndEvents;
+    int32_t sensorEndCount;
+    m2ContactEndEvent* pendingSensorEnd;
+    int32_t pendingSensorEndCount;
     int32_t pendingEndCount;
 
     // Journal recorder (observer state; never snapshot state).

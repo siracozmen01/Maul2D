@@ -336,8 +336,110 @@ static void TestTypeChangeBookends(void)
     m2DestroyWorld(world);
 }
 
+static void TestSensors(void)
+{
+    // A checkpoint zone: the runner falls through it (no response),
+    // the zone reports enter and exit on the SENSOR stream only, the
+    // contact stream never hears about it, and a body parked inside a
+    // sensor still earns its sleep.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyDef zd = m2DefaultBodyDef();
+    zd.position = (m2Pos2){0.0, 3.0};
+    m2BodyId zoneBody = m2CreateBody(world, &zd);
+    m2ShapeDef zs = m2DefaultShapeDef();
+    zs.isSensor = true;
+    m2Polygon zone = m2MakeBox(1.5f, 0.5f);
+    m2ShapeId zoneId = m2CreatePolygonShape(zoneBody, &zs, &zone);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 6.0};
+    m2BodyId runner = m2CreateBody(world, &bd);
+    m2ShapeDef rs = m2DefaultShapeDef();
+    m2Circle ball = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(runner, &rs, &ball);
+
+    bool sawEnter = false;
+    bool sawExit = false;
+    bool contactStreamPolluted = false;
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2SensorEvents sensor = m2World_GetSensorEvents(world);
+        for (int32_t k = 0; k < sensor.beginCount; ++k)
+        {
+            sawEnter = sawEnter || sensor.beginEvents[k].shapeIdA.index1 == zoneId.index1 ||
+                       sensor.beginEvents[k].shapeIdB.index1 == zoneId.index1;
+        }
+        for (int32_t k = 0; k < sensor.endCount; ++k)
+        {
+            sawExit = sawExit || sensor.endEvents[k].shapeIdA.index1 == zoneId.index1 ||
+                      sensor.endEvents[k].shapeIdB.index1 == zoneId.index1;
+        }
+        m2ContactEvents contact = m2World_GetContactEvents(world);
+        for (int32_t k = 0; k < contact.beginCount; ++k)
+        {
+            contactStreamPolluted = contactStreamPolluted ||
+                                    contact.beginEvents[k].shapeIdA.index1 == zoneId.index1 ||
+                                    contact.beginEvents[k].shapeIdB.index1 == zoneId.index1;
+        }
+    }
+    CHECK(sawEnter, "the zone reports the runner entering");
+    CHECK(sawExit, "and leaving out the bottom");
+    CHECK(!contactStreamPolluted, "the contact stream never hears about sensors");
+    CHECK(m2Body_GetPosition(runner).y < 1.0, "the runner fell straight through the zone");
+
+    // A box parked inside a sensor zone still sleeps (sensors never
+    // hold anyone awake).
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.position = (m2Pos2){5.0, 0.6};
+    m2BodyId parkZoneBody = m2CreateBody(world, &pd);
+    m2ShapeDef ps = m2DefaultShapeDef();
+    ps.isSensor = true;
+    m2Polygon parkZone = m2MakeBox(1.0f, 1.0f);
+    m2CreatePolygonShape(parkZoneBody, &ps, &parkZone);
+    bd.position = (m2Pos2){5.0, 0.45};
+    m2BodyId parked = m2CreateBody(world, &bd);
+    m2ShapeDef qs = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(parked, &qs, &unit);
+    bool slept = false;
+    for (int32_t i = 0; i < 300 && !slept; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        slept = !m2Body_IsAwake(parked);
+    }
+    CHECK(slept, "a body parked inside a sensor still sleeps");
+
+    // M19 for sensors: destroy the park zone while overlapped - the
+    // sensor end must be witnessed in the next window.
+    m2DestroyBody(parkZoneBody);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2SensorEvents after = m2World_GetSensorEvents(world);
+    bool sawDestroyEnd = false;
+    for (int32_t k = 0; k < after.endCount; ++k)
+    {
+        sawDestroyEnd = true;
+    }
+    CHECK(sawDestroyEnd, "destroying an overlapped sensor emits its end (M19)");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestSensors();
     TestTypeChangeBookends();
     TestDestroyShapeBookends();
     TestLifecycleSymmetry();

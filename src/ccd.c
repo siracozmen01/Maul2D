@@ -104,6 +104,10 @@ static void SweepBullet(m2World* world, int32_t body, m2Pos2 p0)
         for (int32_t h = 0; h < hits && candidateCount < M2_TOI_CANDIDATES; ++h)
         {
             int32_t shape = results[h];
+            if (world->shapeSensor[shape] != 0)
+            {
+                continue; // sensors never block a bullet
+            }
             int32_t other = world->shapeBody[shape];
             if (other == body || world->bullets[other] != 0)
             {

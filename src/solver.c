@@ -142,6 +142,10 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         }
         int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
         int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (world->shapeSensor[shapeA] != 0 || world->shapeSensor[shapeB] != 0)
+        {
+            continue; // sensors observe, never push
+        }
         int32_t bodyA = world->shapeBody[shapeA];
         int32_t bodyB = world->shapeBody[shapeB];
         float mA = world->invMass[bodyA];
