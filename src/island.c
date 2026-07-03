@@ -110,6 +110,14 @@ void m2UpdateIslandsAndWake(m2World* world)
         }
     }
 
+#ifndef NDEBUG
+    // Min-root union: every path must lead downward in index space.
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        M2_ASSERT(Find(parent, i) <= i);
+    }
+#endif
+
     // Fold member-awake and disturbance flags up to the roots.
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
     {

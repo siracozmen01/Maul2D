@@ -301,6 +301,15 @@ static void UpdatePairs(m2World* world)
     }
     world->pairCount = outCount;
 
+#ifndef NDEBUG
+    // The invariant that hid a reversed read-back for twenty slices:
+    // the pair list must be strictly ascending after every rebuild.
+    for (int32_t v = 1; v < world->pairCount; ++v)
+    {
+        M2_ASSERT(world->pairKeys[v - 1] < world->pairKeys[v]);
+    }
+#endif
+
     // Diff old vs new (both sorted): vanished-and-touching pairs emit
     // their end events here (M19: pair loss is a contact-killing path);
     // surviving pairs carry their touching flag to the new slot.

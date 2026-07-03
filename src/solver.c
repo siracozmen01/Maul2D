@@ -329,12 +329,13 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
             wB += iB * Cross(cp->rB, P);
         }
 
-        if (!useBias)
         {
-            // Friction rides the relax pass. NOTE: the reference solves
-            // friction in both passes; in our pipeline that destabilizes
-            // stacks even with static stiffening (recorded finding
-            // F-T8-FRICTION) - the structural cause is still open.
+            // Friction solves in BOTH passes, like the reference. This
+            // was unstable for twenty slices - because the scrambled
+            // pair order was silently dropping warm-start carries and
+            // amplifying bias contamination in the accumulators. With
+            // the sort fixed, the reference schedule is strictly best
+            // (F-T8 closed: pyramid settles 74 vs the reference's 69).
             for (int32_t k = 0; k < c->pointCount; ++k)
             {
                 m2ConstraintPoint* cp = &c->points[k];
@@ -533,17 +534,13 @@ static void RunContactStage(m2World* world, m2ContactConstraint* constraints,
     ctx.invH = invH;
     ctx.minBiasVel = minBiasVel;
     ctx.useBias = useBias;
-    // Symmetric sweep: the bias pass walks colors forward, the relax
-    // pass walks them backward. Color-parallel Gauss-Seidel loses
-    // within-color propagation; a one-directional sweep then feeds a
-    // checkerboard limit cycle that keeps stacks micro-jittering above
-    // the sleep tolerance for hundreds of steps (pyramid15 settled at
-    // 635 instead of ~65). The forward/backward pair restores the
-    // propagation both ways and is just as deterministic.
-    bool forward = stage != m2_stageSolve || useBias;
+    // Forward sweeps in every pass, like the reference. The symmetric
+    // (backward-relax) sweep was a workaround for instability whose
+    // real cause was the scrambled pair order; with sorted pairs and
+    // both-pass friction the reference schedule wins everywhere.
     for (int32_t step = 0; step <= M2_GRAPH_COLORS; ++step)
     {
-        int32_t color = forward ? step : M2_GRAPH_COLORS - step;
+        int32_t color = step;
         int32_t begin = colorStart[color];
         int32_t end = colorStart[color + 1];
         if (begin == end)
