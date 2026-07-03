@@ -397,6 +397,61 @@ static void TestCollisionFilters(void)
     m2DestroyWorld(world);
 }
 
+static void TestGroupIndex(void)
+{
+    // Same negative group never collides even when the masks agree;
+    // same positive group always collides even when the masks refuse.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(12.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // Two squad-mates (group -3) dropped onto the same spot: they pass
+    // through each other and both land on the floor.
+    m2ShapeDef mate = m2DefaultShapeDef();
+    mate.groupIndex = -3;
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 1.2};
+    m2BodyId one = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(one, &mate, &unit);
+    bd.position = (m2Pos2){0.05, 2.4};
+    m2BodyId two = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(two, &mate, &unit);
+
+    // Two forced-friends (group +5) whose masks refuse each other:
+    // they still stack.
+    m2ShapeDef friendA = m2DefaultShapeDef();
+    friendA.groupIndex = 5;
+    friendA.categoryBits = 0x10;
+    friendA.maskBits = 0x1; // floor only
+    bd.position = (m2Pos2){4.0, 0.55};
+    m2BodyId base = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(base, &friendA, &unit);
+    bd.position = (m2Pos2){4.0, 1.6};
+    m2BodyId rider = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(rider, &friendA, &unit);
+
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double y1 = m2Body_GetPosition(one).y;
+    double y2 = m2Body_GetPosition(two).y;
+    CHECK(y1 < 0.6 && y2 < 0.6, "negative group mates pass through each other");
+    CHECK(m2Body_GetPosition(rider).y > 1.0, "positive group forces the stack");
+
+    m2DestroyWorld(world);
+}
+
 static void TestFilterRollback(void)
 {
     // Filters are snapshot state: a mixed-filter scene must replay
@@ -450,6 +505,7 @@ static void TestFilterRollback(void)
 int main(void)
 {
     TestCollisionFilters();
+    TestGroupIndex();
     TestFilterRollback();
     TestCircleKernels();
     TestPolygonCircleRegions();

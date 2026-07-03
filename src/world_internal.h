@@ -69,6 +69,7 @@ typedef struct m2World
     uint8_t* shapeAlive;
     uint32_t* shapeCategory; // collision filter (snapshot state)
     uint32_t* shapeMask;
+    int32_t* shapeGroup;
     uint16_t* shapeGenerations;
     int32_t* shapeFreeQueue;
     int32_t shapeFreeHead;

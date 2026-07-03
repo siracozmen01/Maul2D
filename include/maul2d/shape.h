@@ -70,6 +70,10 @@ extern "C"
         /// a recorded pending).
         uint32_t categoryBits;
         uint32_t maskBits;
+        /// Same non-zero group on both shapes overrides the mask rule:
+        /// positive always collides, negative never does. Zero defers
+        /// to categories and masks. Queries ignore groups.
+        int32_t groupIndex;
         uint64_t userData;
         int32_t internalValue;
     } m2ShapeDef;

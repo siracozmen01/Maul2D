@@ -114,6 +114,12 @@ static void SweepBullet(m2World* world, int32_t body, m2Pos2 p0)
             bool mayCollide = false;
             for (int32_t bs = world->bodyShapeHead[body]; bs != -1; bs = world->shapeNext[bs])
             {
+                int32_t group = world->shapeGroup[bs];
+                if (group != 0 && group == world->shapeGroup[shape])
+                {
+                    mayCollide = mayCollide || group > 0;
+                    continue;
+                }
                 mayCollide =
                     mayCollide || ((world->shapeCategory[bs] & world->shapeMask[shape]) != 0 &&
                                    (world->shapeCategory[shape] & world->shapeMask[bs]) != 0);
