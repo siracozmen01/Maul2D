@@ -25,7 +25,7 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 12u
+#define M2_SNAPSHOT_VERSION 13u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -231,6 +231,11 @@ static void UpdatePairs(m2World* world)
                 if (!moverDynamic && !ShapeIsDynamic(world, other))
                 {
                     continue;
+                }
+                if ((world->shapeCategory[shapeIndex] & world->shapeMask[other]) == 0 ||
+                    (world->shapeCategory[other] & world->shapeMask[shapeIndex]) == 0)
+                {
+                    continue; // filtered out (category/mask, both ways)
                 }
                 if (collected < world->pairCapacity)
                 {
@@ -744,6 +749,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(shapeNext, shapeCap, int32_t);
     M2_ALLOC(shapeAlive, shapeCap, uint8_t);
     M2_ALLOC(shapeGenerations, shapeCap, uint16_t);
+    M2_ALLOC(shapeCategory, shapeCap, uint32_t);
+    M2_ALLOC(shapeMask, shapeCap, uint32_t);
     M2_ALLOC(shapeFreeQueue, shapeCap, int32_t);
     M2_ALLOC(proxyIds, shapeCap, int32_t);
     M2_ALLOC(inMoved, shapeCap, uint8_t);
@@ -883,6 +890,8 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->shapeNext);
     m2Free(world->shapeAlive);
     m2Free(world->shapeGenerations);
+    m2Free(world->shapeCategory);
+    m2Free(world->shapeMask);
     m2Free(world->shapeFreeQueue);
     m2Free(world->proxyIds);
     m2Free(world->inMoved);
@@ -1155,6 +1164,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->shapeNext, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->shapeAlive, shapeCap * sizeof(uint8_t));
     M2_BLOCK(world->shapeGenerations, shapeCap * sizeof(uint16_t));
+    M2_BLOCK(world->shapeCategory, (size_t)world->shapeCapacity * sizeof(uint32_t));
+    M2_BLOCK(world->shapeMask, (size_t)world->shapeCapacity * sizeof(uint32_t));
     M2_BLOCK(world->shapeFreeQueue, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->proxyIds, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->inMoved, shapeCap * sizeof(uint8_t));
@@ -1804,6 +1815,8 @@ m2ShapeDef m2DefaultShapeDef(void)
     def.density = 1.0f;
     def.friction = 0.6f;
     def.restitution = 0.0f;
+    def.categoryBits = 1;
+    def.maskBits = 0xFFFFFFFFu;
     def.internalValue = M2_SHAPE_COOKIE;
     return def;
 }
@@ -1836,6 +1849,8 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     world->shapeFriction[index] = def->friction;
     world->shapeRestitution[index] = def->restitution;
     world->shapeUserData[index] = def->userData;
+    world->shapeCategory[index] = def->categoryBits;
+    world->shapeMask[index] = def->maskBits;
     world->shapeBody[index] = bodyIndex;
     world->shapeNext[index] = world->bodyShapeHead[bodyIndex];
     world->bodyShapeHead[bodyIndex] = index;

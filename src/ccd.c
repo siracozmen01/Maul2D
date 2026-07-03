@@ -109,6 +109,19 @@ static void SweepBullet(m2World* world, int32_t body, m2Pos2 p0)
             {
                 continue; // self, or bullet-vs-bullet (excluded, F-T7-1)
             }
+            // Collision filters apply to bullets too: keep the
+            // candidate only if some bullet shape may hit it.
+            bool mayCollide = false;
+            for (int32_t bs = world->bodyShapeHead[body]; bs != -1; bs = world->shapeNext[bs])
+            {
+                mayCollide =
+                    mayCollide || ((world->shapeCategory[bs] & world->shapeMask[shape]) != 0 &&
+                                   (world->shapeCategory[shape] & world->shapeMask[bs]) != 0);
+            }
+            if (!mayCollide)
+            {
+                continue;
+            }
             candidates[candidateCount++] = shape;
         }
     }

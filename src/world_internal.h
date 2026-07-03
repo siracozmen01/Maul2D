@@ -67,6 +67,8 @@ typedef struct m2World
     int32_t* shapeBody; // owning body index
     int32_t* shapeNext; // body's shape list linkage (-1 = end)
     uint8_t* shapeAlive;
+    uint32_t* shapeCategory; // collision filter (snapshot state)
+    uint32_t* shapeMask;
     uint16_t* shapeGenerations;
     int32_t* shapeFreeQueue;
     int32_t shapeFreeHead;

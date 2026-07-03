@@ -64,6 +64,12 @@ extern "C"
         float density;     // kg/m^2; dynamic bodies get a minimum-mass floor
         float friction;    // Coulomb; pairs mix by geometric mean
         float restitution; // bounce in [0,1]; pairs mix by maximum
+        /// Collision filtering: shapes collide when each one's category
+        /// intersects the other's mask. Defaults: category 1, mask all.
+        /// Queries ignore filters for now (a query filter parameter is
+        /// a recorded pending).
+        uint32_t categoryBits;
+        uint32_t maskBits;
         uint64_t userData;
         int32_t internalValue;
     } m2ShapeDef;

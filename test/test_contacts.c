@@ -343,8 +343,114 @@ static void TestBoxStackPersistence(void)
     m2DestroyWorld(worldId);
 }
 
+static void TestCollisionFilters(void)
+{
+    // Category/mask filtering: a "ghost" box falls straight through a
+    // floor it is masked against, a one-way mismatch also blocks (the
+    // rule is AND), and the filter survives rollback.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef floorShape = m2DefaultShapeDef();
+    floorShape.categoryBits = 0x1;
+    floorShape.maskBits = 0x2; // floor only talks to category 2
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &floorShape, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 2.0};
+    m2BodyId solid = m2CreateBody(world, &bd);
+    m2ShapeDef solidShape = m2DefaultShapeDef();
+    solidShape.categoryBits = 0x2;
+    solidShape.maskBits = 0x1;
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(solid, &solidShape, &unit);
+
+    bd.position = (m2Pos2){3.0, 2.0};
+    m2BodyId ghost = m2CreateBody(world, &bd);
+    m2ShapeDef ghostShape = m2DefaultShapeDef();
+    ghostShape.categoryBits = 0x4; // floor's mask does not include 4
+    ghostShape.maskBits = 0xFFFFFFFFu;
+    m2CreatePolygonShape(ghost, &ghostShape, &unit);
+
+    bd.position = (m2Pos2){-3.0, 2.0};
+    m2BodyId oneWay = m2CreateBody(world, &bd);
+    m2ShapeDef oneWayShape = m2DefaultShapeDef();
+    oneWayShape.categoryBits = 0x2; // floor would accept it...
+    oneWayShape.maskBits = 0x8;     // ...but it refuses the floor
+    m2CreatePolygonShape(oneWay, &oneWayShape, &unit);
+
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(solid).y > 0.3, "matching filters collide and rest");
+    CHECK(m2Body_GetPosition(ghost).y < -3.0, "mismatched category falls through");
+    CHECK(m2Body_GetPosition(oneWay).y < -3.0, "one-way mismatch also falls (AND rule)");
+
+    m2DestroyWorld(world);
+}
+
+static void TestFilterRollback(void)
+{
+    // Filters are snapshot state: a mixed-filter scene must replay
+    // bit-exactly through restore.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-1.5 + (double)i, 1.5 + 0.4 * (double)i};
+        m2BodyId body = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.categoryBits = i % 2 == 0 ? 0x1u : 0x4u; // half of them ghosts
+        m2Polygon unit = m2MakeBox(0.3f, 0.3f);
+        m2CreatePolygonShape(body, &sd, &unit);
+    }
+
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot");
+    uint64_t hashes[60];
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+    }
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "filtered scene replays bit-exactly");
+    }
+    free(snap);
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestCollisionFilters();
+    TestFilterRollback();
     TestCircleKernels();
     TestPolygonCircleRegions();
     TestPolygonKernels();
