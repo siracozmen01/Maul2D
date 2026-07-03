@@ -5,7 +5,7 @@
 // emits behavioral metrics. The Maul2D backend plugs into the same scene
 // functions once it exists; until then this establishes the reference bands.
 
-#include "maul2d/base.h"
+#include "maul2d/maul2d.h"
 
 #include "box2d/box2d.h"
 
@@ -232,30 +232,222 @@ static SceneResult RunScene(const char* name, SceneWorld (*create)(void), int re
     return result;
 }
 
+// --- Maul2D side: the same scenes through the m2 API -----------------------
+
+typedef struct MaulScene
+{
+    m2WorldId world;
+    m2BodyId bodies[MAX_BODIES];
+    int32_t bodyCount;
+} MaulScene;
+
+static MaulScene MaulPyramid(void)
+{
+    MaulScene s = {0};
+    m2WorldDef def = m2DefaultWorldDef();
+    s.world = m2CreateWorld(&def);
+
+    m2BodyDef groundDef = m2DefaultBodyDef();
+    groundDef.position = (m2Pos2){0.0, -1.0};
+    m2BodyId ground = m2CreateBody(s.world, &groundDef);
+    m2ShapeDef groundShape = m2DefaultShapeDef();
+    m2Polygon groundBox = m2MakeBox(50.0f, 1.0f);
+    m2CreatePolygonShape(ground, &groundShape, &groundBox);
+
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2ShapeDef shapeDef = m2DefaultShapeDef();
+    shapeDef.density = 1.0f;
+    shapeDef.friction = 0.6f;
+    int32_t rows = 15;
+    for (int32_t i = 0; i < rows; ++i)
+    {
+        for (int32_t j = i; j < rows; ++j)
+        {
+            m2BodyDef bd = m2DefaultBodyDef();
+            bd.type = m2_dynamicBody;
+            bd.position = (m2Pos2){(double)j - 0.5 * (double)(rows + i), 0.55 + 1.05 * (double)i};
+            m2BodyId body = m2CreateBody(s.world, &bd);
+            m2CreatePolygonShape(body, &shapeDef, &box);
+            s.bodies[s.bodyCount++] = body;
+        }
+    }
+    return s;
+}
+
+static MaulScene MaulHingeChain(void)
+{
+    MaulScene s = {0};
+    m2WorldDef def = m2DefaultWorldDef();
+    s.world = m2CreateWorld(&def);
+
+    m2BodyDef anchorDef = m2DefaultBodyDef();
+    anchorDef.position = (m2Pos2){0.0, 20.0};
+    m2BodyId prev = m2CreateBody(s.world, &anchorDef);
+
+    m2Polygon link = m2MakeBox(0.5f, 0.125f);
+    m2ShapeDef shapeDef = m2DefaultShapeDef();
+    shapeDef.density = 20.0f;
+    shapeDef.friction = 0.2f;
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){0.5 + 1.0 * (double)i, 20.0};
+        m2BodyId body = m2CreateBody(s.world, &bd);
+        m2CreatePolygonShape(body, &shapeDef, &link);
+
+        m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+        jd.bodyIdA = prev;
+        jd.bodyIdB = body;
+        jd.localAnchorA = i == 0 ? (m2Vec2){0.0f, 0.0f} : (m2Vec2){0.5f, 0.0f};
+        jd.localAnchorB = (m2Vec2){-0.5f, 0.0f};
+        m2CreateRevoluteJoint(s.world, &jd);
+
+        s.bodies[s.bodyCount++] = body;
+        prev = body;
+    }
+    return s;
+}
+
+static SceneResult RunMaulScene(const char* name, MaulScene (*create)(void), int requireSettle,
+                                int32_t horizon)
+{
+    MaulScene s = create();
+    SceneResult result = {0};
+    result.name = name;
+    result.bodyCount = s.bodyCount;
+    result.settleStep = -1;
+
+    static double stepTimes[MAX_STEPS];
+    m2Pos2 settledPos[MAX_BODIES];
+    double jitter = 0.0;
+    int32_t settleAge = -1;
+
+    int32_t step = 0;
+    for (; step < MAX_STEPS; ++step)
+    {
+        double t0 = NowMs();
+        m2World_Step(s.world, 1.0f / 60.0f, 4);
+        stepTimes[step] = NowMs() - t0;
+
+        if (requireSettle && result.settleStep < 0)
+        {
+            bool allAsleep = true;
+            for (int32_t i = 0; i < s.bodyCount; ++i)
+            {
+                allAsleep = allAsleep && !m2Body_IsAwake(s.bodies[i]);
+            }
+            if (allAsleep)
+            {
+                result.settleStep = step;
+                result.endHash = m2World_Hash(s.world);
+                for (int32_t i = 0; i < s.bodyCount; ++i)
+                {
+                    settledPos[i] = m2Body_GetPosition(s.bodies[i]);
+                }
+                settleAge = 0;
+            }
+        }
+        else if (settleAge >= 0 && settleAge < SETTLE_WINDOW)
+        {
+            for (int32_t i = 0; i < s.bodyCount; ++i)
+            {
+                m2Pos2 p = m2Body_GetPosition(s.bodies[i]);
+                double dx = p.x - settledPos[i].x;
+                double dy = p.y - settledPos[i].y;
+                double d2 = dx * dx + dy * dy;
+                if (d2 > jitter * jitter)
+                {
+                    jitter = sqrt(d2);
+                }
+            }
+            settleAge += 1;
+        }
+        if (requireSettle && settleAge >= SETTLE_WINDOW)
+        {
+            break;
+        }
+        if (!requireSettle && step + 1 >= horizon)
+        {
+            break;
+        }
+    }
+
+    step += 1;
+    if (!requireSettle)
+    {
+        result.endHash = m2World_Hash(s.world);
+        for (int32_t i = 0; i < s.bodyCount; ++i)
+        {
+            m2Vec2 vel = m2Body_GetLinearVelocity(s.bodies[i]);
+            double speed = sqrt((double)vel.x * (double)vel.x + (double)vel.y * (double)vel.y);
+            if (speed > result.maxEndSpeed)
+            {
+                result.maxEndSpeed = speed;
+            }
+        }
+    }
+
+    qsort(stepTimes, (size_t)step, sizeof(double), CompareDouble);
+    result.stepMsMedian = stepTimes[step / 2];
+    result.stepMsP99 = stepTimes[(int32_t)((double)step * 0.99)];
+    result.jitter = jitter;
+
+    m2DestroyWorld(s.world);
+    return result;
+}
+
 int main(void)
 {
     b2Version v = b2GetVersion();
-    printf("harness backend=box2d-%d.%d.%d\n", v.major, v.minor, v.revision);
+    printf("harness backends=box2d-%d.%d.%d,maul2d-%d.%d.%d\n", v.major, v.minor, v.revision,
+           M2_VERSION_MAJOR, M2_VERSION_MINOR, M2_VERSION_PATCH);
 
-    SceneResult results[2];
+    SceneResult results[4];
     // Pyramid must sleep; the chain is a fixed-horizon stability scene
     // (an undamped pendulum chain legitimately swings for minutes).
-    results[0] = RunScene("pyramid15", ScenePyramid, 1, MAX_STEPS);
-    results[1] = RunScene("hinge_chain30", SceneHingeChain, 0, 1200);
+    results[0] = RunScene("b2:pyramid15", ScenePyramid, 1, MAX_STEPS);
+    results[1] = RunScene("b2:hinge_chain30", SceneHingeChain, 0, 1200);
+    results[2] = RunMaulScene("m2:pyramid15", MaulPyramid, 1, MAX_STEPS);
+    results[3] = RunMaulScene("m2:hinge_chain30", MaulHingeChain, 0, 1200);
 
     printf("scene,bodies,settle_step,end_hash,jitter,max_end_speed,step_ms_median,step_ms_p99\n");
     int failures = 0;
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 4; ++i)
     {
         SceneResult* r = &results[i];
         printf("%s,%d,%d,%016llx,%.6e,%.6e,%.3f,%.3f\n", r->name, r->bodyCount, r->settleStep,
                (unsigned long long)r->endHash, r->jitter, r->maxEndSpeed, r->stepMsMedian,
                r->stepMsP99);
-        int settleFailed = i == 0 && r->settleStep < 0;
+        int settleFailed = (i % 2) == 0 && r->settleStep < 0;
         int exploded = r->maxEndSpeed > 50.0;
         if (settleFailed || exploded)
         {
             printf("FAIL: %s %s\n", r->name, settleFailed ? "never settled" : "exploded");
+            failures += 1;
+        }
+    }
+    // The two-sided referee (risk R4): Maul must land inside behavior
+    // bands anchored to the reference. Loose v1 bands; the point is a
+    // tripwire, not a beauty contest.
+    {
+        SceneResult* b2p = &results[0];
+        SceneResult* m2p = &results[2];
+        if (m2p->settleStep < 0 || m2p->settleStep > 3 * b2p->settleStep + 240)
+        {
+            printf("BAND FAIL: maul pyramid settle %d vs b2 %d\n", m2p->settleStep,
+                   b2p->settleStep);
+            failures += 1;
+        }
+        if (m2p->jitter > 1.0e-3)
+        {
+            printf("BAND FAIL: maul pyramid jitter %.3e\n", m2p->jitter);
+            failures += 1;
+        }
+        SceneResult* m2c = &results[3];
+        if (m2c->maxEndSpeed > 50.0)
+        {
+            printf("BAND FAIL: maul chain exploded (%.2f m/s)\n", m2c->maxEndSpeed);
             failures += 1;
         }
     }
