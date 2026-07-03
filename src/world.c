@@ -997,6 +997,47 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     // Wall-clock diagnostics only; never fed back into simulation.
     uint64_t tStart = m2TimeNowNs();
 
+    // Hibernation: when every dynamic body sleeps, no kinematic is
+    // moving and nothing was teleported, the full pipeline provably
+    // changes no state at all (frozen pairs copy themselves, islands
+    // rebuild to the same roots, the solver has no constraints). Skip
+    // it wholesale - bit-identical by construction, and a sleeping
+    // city costs what a sleeping city should.
+    if (world->movedCount == 0)
+    {
+        bool anyoneStirring = false;
+        for (int32_t i = 0; i < world->maxBodyIndex && !anyoneStirring; ++i)
+        {
+            if (world->alive[i] == 0)
+            {
+                continue;
+            }
+            if (world->types[i] == (uint8_t)m2_dynamicBody)
+            {
+                // A body that JUST fell asleep still owes one manifold
+                // refresh (its stash can be one solve stale - the same
+                // freshness rule the frozen-pair skip lives by).
+                anyoneStirring = world->asleep[i] == 0 || world->sleepStreak[i] < 2;
+            }
+            else if (world->types[i] == (uint8_t)m2_kinematicBody)
+            {
+                anyoneStirring = world->linearVelocities[i].x != 0.0f ||
+                                 world->linearVelocities[i].y != 0.0f ||
+                                 world->angularVelocities[i] != 0.0f;
+            }
+        }
+        if (!anyoneStirring)
+        {
+            world->profile.stepMs = (float)((double)(m2TimeNowNs() - tStart) * 1.0e-6);
+            world->profile.pairsMs = 0.0f;
+            world->profile.contactsMs = 0.0f;
+            world->profile.solveMs = 0.0f;
+            world->profile.sleepMs = 0.0f;
+            world->stepCount += 1;
+            return;
+        }
+    }
+
     // Collide first (reference order): broadphase + narrowphase produce
     // fresh manifolds from current positions, then the solver moves the
     // world. Warm-start impulses arrive via the manifold carry.
