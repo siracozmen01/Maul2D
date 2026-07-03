@@ -11,6 +11,7 @@
 
 #include "maul2d/base.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -825,6 +826,15 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         M2_ASSERT(world != NULL && dt > 0.0f && substepCount >= 1);
         return;
     }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            float dt;
+            int32_t substepCount;
+        } marker = {dt, substepCount};
+        m2JournalRecord(world, m2_opStep, &marker, (int32_t)sizeof(marker));
+    }
 
     // Fresh event window: clear the public buffers, then flush ends
     // queued by between-step destroys (they belong to this window).
@@ -1095,6 +1105,9 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     M2_ASSERT(cursor == size);
     (void)cursor;
 
+    // Restore during recording stops the journal (recorded limitation).
+    world->journalActive = 0;
+
     // Events are an observer stream from an abandoned timeline: cleared
     // on restore, re-emitted by re-simulation (RT1-ROLL-3 / RT1-API-3).
     world->beginEventCount = 0;
@@ -1192,6 +1205,23 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     }
 
     m2BodyId id = {index + 1, worldId.index1, world->generations[index]};
+
+    if (world->journalActive != 0)
+
+    {
+
+        struct
+
+        {
+
+            m2BodyDef def;
+
+            m2BodyId expected;
+
+        } record = {*def, id};
+
+        m2JournalRecord(world, m2_opCreateBody, &record, (int32_t)sizeof(record));
+    }
     return id;
 }
 
@@ -1253,6 +1283,7 @@ void m2DestroyBody(m2BodyId bodyId)
     {
         return;
     }
+    m2JournalRecord(world, m2_opDestroyBody, &bodyId, (int32_t)sizeof(bodyId));
 
     // Joints attached to this body die with it; the counterpart body
     // wakes (a support vanished).
@@ -1358,6 +1389,15 @@ void m2Body_SetLinearVelocity(m2BodyId bodyId, m2Vec2 velocity)
     world->linearVelocities[index] = velocity;
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            m2Vec2 value;
+        } record = {bodyId, velocity};
+        m2JournalRecord(world, m2_opSetLinearVelocity, &record, (int32_t)sizeof(record));
+    }
 }
 
 void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
@@ -1372,6 +1412,15 @@ void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
     world->angularVelocities[index] = velocity;
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            float value;
+        } record = {bodyId, velocity};
+        m2JournalRecord(world, m2_opSetAngularVelocity, &record, (int32_t)sizeof(record));
+    }
 }
 
 bool m2Body_IsAwake(m2BodyId bodyId)
@@ -1453,6 +1502,27 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     RecomputeMass(world, bodyIndex);
 
     m2ShapeId id = {index + 1, bodyId.world0, world->shapeGenerations[index]};
+
+    if (world->journalActive != 0)
+
+    {
+
+        struct
+
+        {
+
+            m2BodyId body;
+
+            m2ShapeDef def;
+
+            m2ShapeGeometry geometry;
+
+            m2ShapeId expected;
+
+        } record = {bodyId, *def, *geometry, id};
+
+        m2JournalRecord(world, m2_opCreateShape, &record, (int32_t)sizeof(record));
+    }
     return id;
 }
 
@@ -1612,8 +1682,18 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
         float dy = (float)(xfB.p.y - xfA.p.y) + wB.y - wA.y;
         length = sqrtf(dx * dx + dy * dy);
     }
-    return FinishJoint(world, worldId, index, 0, bodyA, bodyB, def->localAnchorA, def->localAnchorB,
-                       length, def->hertz, def->dampingRatio);
+    m2JointId jointId = FinishJoint(world, worldId, index, 0, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, length, def->hertz, def->dampingRatio);
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2DistanceJointDef def;
+            m2JointId expected;
+        } record = {*def, jointId};
+        m2JournalRecord(world, m2_opCreateDistanceJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
 }
 
 m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def)
@@ -1636,8 +1716,18 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
     {
         return m2_nullJointId;
     }
-    return FinishJoint(world, worldId, index, 1, bodyA, bodyB, def->localAnchorA, def->localAnchorB,
-                       0.0f, def->hertz, def->dampingRatio);
+    m2JointId jointId = FinishJoint(world, worldId, index, 1, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2RevoluteJointDef def;
+            m2JointId expected;
+        } record = {*def, jointId};
+        m2JournalRecord(world, m2_opCreateRevoluteJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
 }
 
 void m2DestroyJoint(m2JointId jointId)
@@ -1653,6 +1743,7 @@ void m2DestroyJoint(m2JointId jointId)
     {
         return;
     }
+    m2JournalRecord(world, m2_opDestroyJoint, &jointId, (int32_t)sizeof(jointId));
     // Both ends wake: a constraint vanished.
     int32_t bodyA = world->jointBodyA[index];
     int32_t bodyB = world->jointBodyB[index];

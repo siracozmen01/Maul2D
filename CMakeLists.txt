@@ -10,6 +10,7 @@ add_library(maul2d STATIC
     src/ccd.c
     src/dynamic_tree.c
     src/island.c
+    src/journal.c
     src/manifold.c
     src/math_functions.c
     src/shape.c
@@ -81,6 +82,12 @@ target_link_libraries(test_joints PRIVATE maul2d)
 target_include_directories(test_joints PRIVATE src)
 maul2d_apply_flags(test_joints)
 add_test(NAME joints COMMAND test_joints)
+
+add_executable(test_journal test/test_journal.c)
+target_link_libraries(test_journal PRIVATE maul2d)
+target_include_directories(test_journal PRIVATE src)
+maul2d_apply_flags(test_journal)
+add_test(NAME journal COMMAND test_journal)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)

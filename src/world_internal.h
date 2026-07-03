@@ -125,9 +125,33 @@ typedef struct m2World
     m2ContactEndEvent* pendingEndEvents; // between-step destroys, flushed at Step
     int32_t pendingEndCount;
 
+    // Journal recorder (observer state; never snapshot state).
+    uint8_t* journal;
+    int32_t journalCapacity;
+    int32_t journalCursor;
+    uint8_t journalActive;
+    uint8_t journalOverflow;
+
     uint16_t worldGeneration;
     uint16_t worldIndex0; // registry slot + 1, for building public ids
 } m2World;
+
+// Journal recording hook (src/journal.c): appends op + payload.
+void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t bytes);
+
+// Journal ops (fixed-size payloads, little-endian raw structs).
+enum
+{
+    m2_opStep = 1,
+    m2_opCreateBody = 2,
+    m2_opDestroyBody = 3,
+    m2_opSetLinearVelocity = 4,
+    m2_opSetAngularVelocity = 5,
+    m2_opCreateShape = 6,
+    m2_opCreateDistanceJoint = 7,
+    m2_opCreateRevoluteJoint = 8,
+    m2_opDestroyJoint = 9,
+};
 
 // Islands & sleep (src/island.c).
 void m2UpdateIslandsAndWake(m2World* world);

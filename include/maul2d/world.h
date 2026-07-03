@@ -77,6 +77,18 @@ extern "C"
     /// Thread class: reader.
     uint64_t m2World_Hash(m2WorldId worldId);
 
+    /// Command journal (the replay primitive). StartJournal embeds a
+    /// full snapshot into the caller's buffer, then records every
+    /// mutating call and step marker with raw IEEE-754 bit encoding.
+    /// StopJournal returns the byte size (0 = overflow or not recording:
+    /// loud, never truncated-silent). ReplayJournal restores the
+    /// embedded snapshot and re-applies the stream; deterministic id
+    /// re-minting is asserted along the way. Restore during recording
+    /// stops the journal (recorded limitation). Thread class: writer.
+    bool m2World_StartJournal(m2WorldId worldId, void* buffer, int32_t capacity);
+    int32_t m2World_StopJournal(m2WorldId worldId);
+    bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size);
+
     static const m2WorldId m2_nullWorldId = {0, 0};
 
 #ifdef __cplusplus
