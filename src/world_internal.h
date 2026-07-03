@@ -35,6 +35,7 @@ typedef struct m2World
     float* invInertia;      // about the body origin; 0 = no rotation response
     uint8_t* asleep;        // sleep flag (snapshot + hashed: the sleep law)
     float* sleepTimes;      // seconds under tolerance (snapshot + hashed)
+    uint8_t* bullets;       // isBullet flag (snapshot + hashed)
 
     // Body id pool: FIFO free queue + generations; saturated slots retire.
     uint16_t* generations;
@@ -88,6 +89,7 @@ typedef struct m2World
     void* constraintScratch;  // m2ContactConstraint[pairCapacity]
     int32_t* islandParent;    // union-find scratch (step-transient)
     uint8_t* islandDisturbed; // island flags scratch (step-transient)
+    m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)
 
     uint16_t worldGeneration;
 } m2World;
@@ -95,6 +97,9 @@ typedef struct m2World
 // Islands & sleep (src/island.c).
 void m2UpdateIslandsAndWake(m2World* world);
 void m2UpdateSleep(m2World* world, float dt);
+
+// Bullet continuous collision, after each substep (src/ccd.c).
+void m2SolveContinuous(m2World* world);
 
 // Soft-step solve for one step (src/solver.c).
 void m2SolveStep(m2World* world, float dt, int32_t substepCount);

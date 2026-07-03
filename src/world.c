@@ -19,7 +19,7 @@
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 6u
+#define M2_SNAPSHOT_VERSION 7u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -562,6 +562,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(invInertia, cap, float);
     M2_ALLOC(asleep, cap, uint8_t);
     M2_ALLOC(sleepTimes, cap, float);
+    M2_ALLOC(bullets, cap, uint8_t);
+    M2_ALLOC(ccdPrevPositions, cap, m2Pos2);
     M2_ALLOC(islandParent, cap, int32_t);
     M2_ALLOC(islandDisturbed, cap, uint8_t);
     M2_ALLOC(generations, cap, uint16_t);
@@ -656,6 +658,8 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->invInertia);
     free(world->asleep);
     free(world->sleepTimes);
+    free(world->bullets);
+    free(world->ccdPrevPositions);
     free(world->islandParent);
     free(world->islandDisturbed);
     free(world->generations);
@@ -818,6 +822,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->invInertia, cap * sizeof(float));
     M2_BLOCK(world->asleep, cap * sizeof(uint8_t));
     M2_BLOCK(world->sleepTimes, cap * sizeof(float));
+    M2_BLOCK(world->bullets, cap * sizeof(uint8_t));
     M2_BLOCK(world->userData, cap * sizeof(uint64_t));
     M2_BLOCK(world->types, cap * sizeof(uint8_t));
     M2_BLOCK(world->alive, cap * sizeof(uint8_t));
@@ -948,6 +953,7 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->asleep[i], (int32_t)sizeof(uint8_t));
         h = m2Hash64(h, &world->sleepTimes[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->bullets[i], (int32_t)sizeof(uint8_t));
     }
     h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
     h = m2Hash64(h, world->manifolds, world->pairCount * (int32_t)sizeof(m2Manifold));
@@ -997,6 +1003,7 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->invInertia[index] = 0.0f;
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;
+    world->bullets[index] = def->isBullet ? 1 : 0;
     if (index + 1 > world->maxBodyIndex)
     {
         world->maxBodyIndex = index + 1;

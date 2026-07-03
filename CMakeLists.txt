@@ -7,6 +7,7 @@ include(cmake/CompilerFlags.cmake)
 
 add_library(maul2d STATIC
     src/core.c
+    src/ccd.c
     src/dynamic_tree.c
     src/island.c
     src/manifold.c
@@ -62,6 +63,12 @@ target_link_libraries(test_islands PRIVATE maul2d)
 target_include_directories(test_islands PRIVATE src)
 maul2d_apply_flags(test_islands)
 add_test(NAME islands COMMAND test_islands)
+
+add_executable(test_ccd test/test_ccd.c)
+target_link_libraries(test_ccd PRIVATE maul2d)
+target_include_directories(test_ccd PRIVATE src)
+maul2d_apply_flags(test_ccd)
+add_test(NAME ccd COMMAND test_ccd)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)

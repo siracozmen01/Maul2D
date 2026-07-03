@@ -33,6 +33,7 @@ extern "C"
         m2Vec2 linearVelocity;
         float angularVelocity; // radians/s
         float gravityScale;
+        bool isBullet;     // continuous collision vs non-bullets (topic-07)
         uint64_t userData; // opaque, copied verbatim through snapshots
         int32_t internalValue;
     } m2BodyDef;

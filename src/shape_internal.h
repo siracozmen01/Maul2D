@@ -93,4 +93,9 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
 // polygons (the Box2D v3 model): one kernel table, fewer edge cases.
 m2Polygon m2MakeSegmentProxy(m2Vec2 p1, m2Vec2 p2, float radius);
 
+// Signed-ish distance from a point (in the shape's body frame) to the
+// shape surface: positive outside, <= 0 inside. Conservative-advancement
+// kernel for bullet CCD (topic-07).
+float m2PointShapeDistance(const m2ShapeGeometry* geometry, m2Vec2 point);
+
 #endif // MAUL2D_SHAPE_INTERNAL_H

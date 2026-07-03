@@ -389,6 +389,15 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         WarmStart(world, constraints, constraintCount);
         SolveContacts(world, constraints, constraintCount, invH, true);
 
+        // Bullet substep origins, captured before positions move.
+        for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+        {
+            if (world->bullets[i] != 0)
+            {
+                world->ccdPrevPositions[i] = world->transforms[i].p;
+            }
+        }
+
         // Integrate positions: f64 positions advance, f32 deltas track.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
@@ -406,6 +415,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             world->deltaRotations[i] = m2MulRot(world->deltaRotations[i], dq);
         }
 
+        m2SolveContinuous(world); // the last transform-mutating pass (M13)
         SolveContacts(world, constraints, constraintCount, invH, false);
     }
 

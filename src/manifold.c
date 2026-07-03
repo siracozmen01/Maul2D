@@ -480,3 +480,59 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
     }
     return manifold;
 }
+
+// --- Point-to-shape distance (bullet CCD kernel) ------------------------------
+
+static float PointSegmentDistance(m2Vec2 p, m2Vec2 a, m2Vec2 b)
+{
+    m2Vec2 d = {b.x - a.x, b.y - a.y};
+    m2Vec2 r = {p.x - a.x, p.y - a.y};
+    float dd = d.x * d.x + d.y * d.y;
+    float t = dd > 0.0f ? m2ClampF((r.x * d.x + r.y * d.y) / dd, 0.0f, 1.0f) : 0.0f;
+    m2Vec2 c = {a.x + t * d.x - p.x, a.y + t * d.y - p.y};
+    return sqrtf(c.x * c.x + c.y * c.y);
+}
+
+float m2PointShapeDistance(const m2ShapeGeometry* geometry, m2Vec2 point)
+{
+    switch (geometry->type)
+    {
+    case m2_circleShape:
+    {
+        m2Vec2 d = {point.x - geometry->circle.center.x, point.y - geometry->circle.center.y};
+        return sqrtf(d.x * d.x + d.y * d.y) - geometry->circle.radius;
+    }
+    case m2_capsuleShape:
+    {
+        return PointSegmentDistance(point, geometry->capsule.point1, geometry->capsule.point2) -
+               geometry->capsule.radius;
+    }
+    case m2_segmentShape:
+    {
+        return PointSegmentDistance(point, geometry->segment.point1, geometry->segment.point2);
+    }
+    default:
+    {
+        const m2Polygon* poly = &geometry->polygon;
+        float maxSeparation = -3.4e38f;
+        for (int32_t i = 0; i < poly->count; ++i)
+        {
+            float sep = poly->normals[i].x * (point.x - poly->vertices[i].x) +
+                        poly->normals[i].y * (point.y - poly->vertices[i].y);
+            maxSeparation = m2MaxF(maxSeparation, sep);
+        }
+        if (maxSeparation <= 0.0f)
+        {
+            return maxSeparation - poly->radius; // inside the core
+        }
+        float best = 3.4e38f;
+        for (int32_t i = 0; i < poly->count; ++i)
+        {
+            float d = PointSegmentDistance(point, poly->vertices[i],
+                                           poly->vertices[(i + 1) % poly->count]);
+            best = m2MinF(best, d);
+        }
+        return best - poly->radius;
+    }
+    }
+}
