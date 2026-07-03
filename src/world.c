@@ -1813,6 +1813,33 @@ m2Profile m2World_GetProfile(m2WorldId worldId)
     return world->profile;
 }
 
+double m2World_GetKineticEnergy(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0.0;
+    }
+    double energy = 0.0;
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody ||
+            world->invMass[i] == 0.0f)
+        {
+            continue;
+        }
+        double vx = (double)world->linearVelocities[i].x;
+        double vy = (double)world->linearVelocities[i].y;
+        energy += 0.5 * (1.0 / (double)world->invMass[i]) * (vx * vx + vy * vy);
+        if (world->invInertia[i] > 0.0f)
+        {
+            double w = (double)world->angularVelocities[i];
+            energy += 0.5 * (1.0 / (double)world->invInertia[i]) * w * w;
+        }
+    }
+    return energy;
+}
+
 m2Counters m2World_GetCounters(m2WorldId worldId)
 {
     m2Counters counters;

@@ -249,8 +249,79 @@ static void TestCountersAndProfile(void)
     m2DestroyWorld(world);
 }
 
+static void TestKineticEnergy(void)
+{
+    // Analytic: one ball, known mass, known velocity. Then the energy
+    // must be twin-identical and vanish with sleep.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle circle = {{0.0f, 0.0f}, 0.5f};
+    m2CreateCircleShape(ball, &sd, &circle);
+    m2Body_SetLinearVelocity(ball, (m2Vec2){3.0f, 4.0f}); // speed 5
+
+    double mass = 3.14159265358979 * 0.25; // rho=1, r=0.5
+    double expected = 0.5 * mass * 25.0;
+    double energy = m2World_GetKineticEnergy(world);
+    double err = energy - expected;
+    CHECK(err > -1.0e-4 && err < 1.0e-4, "kinetic energy matches the hand computation");
+
+    m2DestroyWorld(world);
+
+    // A settling stack: energy decays to exactly zero once asleep,
+    // and twin worlds agree to the bit the whole way down.
+    m2WorldDef def2 = m2DefaultWorldDef();
+    def2.bodyCapacity = 16;
+    def2.shapeCapacity = 16;
+    m2WorldId a = m2CreateWorld(&def2);
+    m2WorldId b = m2CreateWorld(&def2);
+    for (int32_t twin = 0; twin < 2; ++twin)
+    {
+        m2WorldId w = twin == 0 ? a : b;
+        m2BodyDef fd = m2DefaultBodyDef();
+        fd.position = (m2Pos2){0.0, -0.5};
+        m2BodyId floor = m2CreateBody(w, &fd);
+        m2ShapeDef fs = m2DefaultShapeDef();
+        m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+        m2CreatePolygonShape(floor, &fs, &slab);
+        for (int32_t i = 0; i < 4; ++i)
+        {
+            m2BodyDef box = m2DefaultBodyDef();
+            box.type = m2_dynamicBody;
+            box.position = (m2Pos2){0.0, 0.7 + 1.05 * (double)i};
+            m2BodyId body = m2CreateBody(w, &box);
+            m2ShapeDef bs = m2DefaultShapeDef();
+            m2Polygon unit = m2MakeBox(0.45f, 0.45f);
+            m2CreatePolygonShape(body, &bs, &unit);
+        }
+    }
+    bool everAwake = false;
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(a, 1.0f / 60.0f, 4);
+        m2World_Step(b, 1.0f / 60.0f, 4);
+        double ea = m2World_GetKineticEnergy(a);
+        double eb = m2World_GetKineticEnergy(b);
+        CHECK(ea == eb, "twin worlds agree on energy to the bit");
+        everAwake = everAwake || ea > 0.0;
+    }
+    CHECK(everAwake, "the stack had energy while falling");
+    CHECK(m2World_GetKineticEnergy(a) == 0.0, "sleep zeroes the ledger");
+    m2DestroyWorld(a);
+    m2DestroyWorld(b);
+}
+
 int main(void)
 {
+    TestKineticEnergy();
     TestCountersAndProfile();
     TestDefCookies();
     TestRollbackIdentity();

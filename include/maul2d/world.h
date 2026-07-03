@@ -89,6 +89,12 @@ extern "C"
     } m2Counters;
 
     /// Snapshot of the last completed Step. Thread class: reader.
+    /// Total kinetic energy of awake dynamic bodies, in joules.
+    /// State-derived and deterministic (f64 accumulation in canonical
+    /// body order) - twin worlds report identical bits. Sleeping
+    /// bodies contribute zero by construction. Thread class: reader.
+    double m2World_GetKineticEnergy(m2WorldId worldId);
+
     m2Profile m2World_GetProfile(m2WorldId worldId);
     m2Counters m2World_GetCounters(m2WorldId worldId);
 
