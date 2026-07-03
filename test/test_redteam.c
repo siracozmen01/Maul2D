@@ -288,6 +288,195 @@ static void TestMultiWorldIsolation(void)
     m2DestroyWorld(w2);
 }
 
+static int32_t s_failAfter = -1; // -1 = never fail
+static int32_t s_liveBlocks = 0;
+static int32_t s_allocCalls = 0;
+
+static void* FlakyAlloc(size_t bytes)
+{
+    s_allocCalls += 1;
+    if (s_failAfter >= 0 && s_allocCalls > s_failAfter)
+    {
+        return NULL;
+    }
+    s_liveBlocks += 1;
+    return calloc(1, bytes);
+}
+
+static void FlakyFree(void* memory)
+{
+    if (memory != NULL)
+    {
+        s_liveBlocks -= 1;
+    }
+    free(memory);
+}
+
+static void TestAllocationFailure(void)
+{
+    // The allocator fails mid-creation at several depths: the world
+    // must come back null, and every block taken must be returned.
+    m2SetAllocator(FlakyAlloc, FlakyFree);
+    int32_t depths[4] = {1, 5, 20, 50};
+    for (int32_t d = 0; d < 4; ++d)
+    {
+        s_allocCalls = 0;
+        s_liveBlocks = 0;
+        s_failAfter = depths[d];
+        m2WorldDef def = m2DefaultWorldDef();
+        def.bodyCapacity = 32;
+        def.shapeCapacity = 32;
+        m2WorldId world = m2CreateWorld(&def);
+        CHECK(world.index1 == 0, "starved creation returns the null world");
+        CHECK(s_liveBlocks == 0, "starved creation leaks nothing");
+    }
+    s_failAfter = -1;
+    m2SetAllocator(NULL, NULL);
+}
+
+static void TestFrozenEraRollback(void)
+{
+    // A long-asleep stack runs the frozen-pair fast path; snapshot and
+    // replay inside that era must still be bit-exact (sleepStreak is
+    // snapshot state, and the skip is a pure function of it).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    for (int32_t i = 0; i < 5; ++i)
+    {
+        AddBox(world, 0.0, 0.5 + 0.9 * (double)i);
+    }
+    for (int32_t i = 0; i < 160; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // settle deep into the frozen era
+    }
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot");
+    uint64_t hashes[50];
+    for (int32_t i = 0; i < 50; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+    }
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    for (int32_t i = 0; i < 50; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "frozen era replays bit-exactly");
+    }
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+static void TestWakeAfterFrozenEra(void)
+{
+    // No stale-manifold ghosts: a body that slept through many frozen
+    // steps must move immediately when shoved, then earn sleep again.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyId box = AddBox(world, 0.0, 0.5);
+    for (int32_t i = 0; i < 150; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(box), "asleep deep in the frozen era");
+    double x0 = m2Body_GetPosition(box).x;
+
+    m2Body_ApplyLinearImpulse(box, (m2Vec2){2.0f, 0.0f}, m2Body_GetPosition(box));
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(box).x > x0 + 0.5, "the shoved sleeper actually moves");
+
+    bool sleptAgain = false;
+    for (int32_t i = 0; i < 300 && !sleptAgain; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        sleptAgain = !m2Body_IsAwake(box);
+    }
+    CHECK(sleptAgain, "and earns its sleep back");
+    m2DestroyWorld(world);
+}
+
+static uint64_t ChurnTrajectory(int32_t workerCount)
+{
+    // Lifecycle churn + joints + sleep phases under a worker count:
+    // the thread law must hold beyond static scenes.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 32;
+    def.shapeCapacity = 32;
+    def.jointCapacity = 16;
+    def.workerCount = workerCount;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){2.2e5, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyId ring[8] = {0};
+    int32_t head = 0;
+    int32_t count = 0;
+    uint64_t h = M2_HASH_INIT;
+    for (int32_t step = 0; step < 240; ++step)
+    {
+        if (step % 9 == 0 && count < 8)
+        {
+            m2BodyId body = AddBox(world, 2.2e5 - 3.0 + 0.8 * (double)((step / 9) % 9),
+                                   1.0 + 0.4 * (double)(step % 3));
+            if (body.index1 != 0)
+            {
+                ring[(head + count) % 8] = body;
+                count += 1;
+            }
+        }
+        if (step % 23 == 11 && count > 3)
+        {
+            m2DestroyBody(ring[head]);
+            head = (head + 1) % 8;
+            count -= 1;
+        }
+        if (step == 120 && count >= 2)
+        {
+            m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+            jd.bodyIdA = ring[head];
+            jd.bodyIdB = ring[(head + 1) % 8];
+            m2CreateDistanceJoint(world, &jd);
+        }
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        uint64_t worldHash = m2World_Hash(world);
+        h = m2Hash64(h, &worldHash, (int32_t)sizeof(worldHash));
+    }
+    m2DestroyWorld(world);
+    return h;
+}
+
+static void TestThreadedChurnParity(void)
+{
+    uint64_t one = ChurnTrajectory(1);
+    uint64_t four = ChurnTrajectory(4);
+    CHECK(one == four, "the thread law survives lifecycle churn");
+}
+
 static uint64_t ChaosHash(void)
 {
     // Lifecycle churn far from the origin: bodies and joints created
@@ -419,6 +608,10 @@ int main(void)
     TestJournalSlotReuse();
     TestQueryEdges();
     TestMultiWorldIsolation();
+    TestAllocationFailure();
+    TestFrozenEraRollback();
+    TestWakeAfterFrozenEra();
+    TestThreadedChurnParity();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
