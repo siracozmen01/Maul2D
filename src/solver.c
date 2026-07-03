@@ -125,7 +125,10 @@ int32_t m2ContactConstraintSize(void)
 
 static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints, float h)
 {
+    // Stiffer for static contacts, exactly like the reference: a soft
+    // ground row is an energy reservoir under a tall stack.
     m2Softness soft = MakeSoft(M2_CONTACT_HERTZ, M2_CONTACT_DAMPING_RATIO, h);
+    m2Softness staticSoft = MakeSoft(2.0f * M2_CONTACT_HERTZ, M2_CONTACT_DAMPING_RATIO, h);
     int32_t count = 0;
     for (int32_t i = 0; i < world->pairCount; ++i)
     {
@@ -163,7 +166,10 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         float restA = world->shapeRestitution[shapeA];
         float restB = world->shapeRestitution[shapeB];
         c->restitution = m2MaxF(restA, restB);
-        c->softness = soft;
+        c->softness = world->types[bodyA] != (uint8_t)m2_dynamicBody ||
+                              world->types[bodyB] != (uint8_t)m2_dynamicBody
+                          ? staticSoft
+                          : soft;
         c->pointCount = manifold->pointCount;
 
         m2Rot qA = world->transforms[bodyA].q;
@@ -247,7 +253,8 @@ static void WarmStartOne(m2World* world, m2ContactConstraint* c)
     StoreBodyVelocities(world, c, vA, wA, vB, wB);
 }
 
-static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, bool useBias)
+static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, float minBiasVel,
+                            bool useBias)
 {
     {
         float mA = world->invMass[c->bodyA];
@@ -269,36 +276,37 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
         for (int32_t k = 0; k < c->pointCount; ++k)
         {
             m2ConstraintPoint* cp = &c->points[k];
-            // Current anchors, re-rotated by the substep deltas exactly
-            // like the reference: stale arms accumulate torque error
-            // that the color-partitioned order can no longer hide.
-            m2Vec2 rA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
-            m2Vec2 rB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
-            m2Vec2 ds = {dp.x + rB.x - cp->rB.x - (rA.x - cp->rA.x),
-                         dp.y + rB.y - cp->rB.y - (rA.y - cp->rA.y)};
+            // Reference discipline: FIXED prepare-time anchors for the
+            // Jacobian and the applied torque; anchors re-rotated by
+            // the substep deltas only measure the current separation.
+            m2Vec2 rsA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
+            m2Vec2 rsB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
+            m2Vec2 ds = {dp.x + rsB.x - cp->rB.x - (rsA.x - cp->rA.x),
+                         dp.y + rsB.y - cp->rB.y - (rsA.y - cp->rA.y)};
             float s = cp->baseSeparation + ds.x * normal.x + ds.y * normal.y;
 
-            float velocityBias = 0.0f;
+            // Reference bias selection: the push clamp lands BEFORE the
+            // mass scale, and the whole (vn + bias) is scaled together.
+            float bias = 0.0f;
             float massScale = 1.0f;
             float impulseScale = 0.0f;
             if (s > 0.0f)
             {
-                velocityBias = s * invH; // speculative: prevent crossing
+                bias = s * invH; // speculative: prevent crossing
             }
             else if (useBias)
             {
-                velocityBias = m2MaxF(c->softness.massScale * c->softness.biasRate * s,
-                                      -M2_CONTACT_PUSH_MAX_SPEED);
+                bias = m2MaxF(c->softness.biasRate * s, minBiasVel);
                 massScale = c->softness.massScale;
                 impulseScale = c->softness.impulseScale;
             }
 
-            m2Vec2 vrA = {vA.x - wA * rA.y, vA.y + wA * rA.x};
-            m2Vec2 vrB = {vB.x - wB * rB.y, vB.y + wB * rB.x};
+            m2Vec2 vrA = {vA.x - wA * cp->rA.y, vA.y + wA * cp->rA.x};
+            m2Vec2 vrB = {vB.x - wB * cp->rB.y, vB.y + wB * cp->rB.x};
             float vn = (vrB.x - vrA.x) * normal.x + (vrB.y - vrA.y) * normal.y;
 
-            float impulse = -cp->normalMass * (massScale * vn + velocityBias) -
-                            impulseScale * cp->normalImpulse;
+            float impulse =
+                -cp->normalMass * massScale * (vn + bias) - impulseScale * cp->normalImpulse;
             float newImpulse = m2MaxF(cp->normalImpulse + impulse, 0.0f);
             impulse = newImpulse - cp->normalImpulse;
             cp->normalImpulse = newImpulse;
@@ -306,22 +314,23 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
             m2Vec2 P = {impulse * normal.x, impulse * normal.y};
             vA.x -= mA * P.x;
             vA.y -= mA * P.y;
-            wA -= iA * Cross(rA, P);
+            wA -= iA * Cross(cp->rA, P);
             vB.x += mB * P.x;
             vB.y += mB * P.y;
-            wB += iB * Cross(rB, P);
+            wB += iB * Cross(cp->rB, P);
         }
 
         if (!useBias)
         {
-            // Friction rides the relax pass, exactly like the reference.
+            // Friction rides the relax pass. NOTE: the reference solves
+            // friction in both passes; in our pipeline that destabilizes
+            // stacks (recorded finding) - the structural cause is still
+            // open, revisit with the COM work.
             for (int32_t k = 0; k < c->pointCount; ++k)
             {
                 m2ConstraintPoint* cp = &c->points[k];
-                m2Vec2 rA = Rotate(world->deltaRotations[c->bodyA], cp->rA);
-                m2Vec2 rB = Rotate(world->deltaRotations[c->bodyB], cp->rB);
-                m2Vec2 vrA = {vA.x - wA * rA.y, vA.y + wA * rA.x};
-                m2Vec2 vrB = {vB.x - wB * rB.y, vB.y + wB * rB.x};
+                m2Vec2 vrA = {vA.x - wA * cp->rA.y, vA.y + wA * cp->rA.x};
+                m2Vec2 vrB = {vB.x - wB * cp->rB.y, vB.y + wB * cp->rB.x};
                 float vt = (vrB.x - vrA.x) * tangent.x + (vrB.y - vrA.y) * tangent.y;
                 float impulse = -cp->tangentMass * vt;
                 float maxFriction = c->friction * cp->normalImpulse;
@@ -333,10 +342,10 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
                 m2Vec2 P = {impulse * tangent.x, impulse * tangent.y};
                 vA.x -= mA * P.x;
                 vA.y -= mA * P.y;
-                wA -= iA * Cross(rA, P);
+                wA -= iA * Cross(cp->rA, P);
                 vB.x += mB * P.x;
                 vB.y += mB * P.y;
-                wB += iB * Cross(rB, P);
+                wB += iB * Cross(cp->rB, P);
             }
         }
 
@@ -469,6 +478,7 @@ typedef struct m2ContactStageCtx
     const int32_t* order;
     m2ContactStage stage;
     float invH;
+    float minBiasVel;
     bool useBias;
 } m2ContactStageCtx;
 
@@ -484,7 +494,7 @@ static void ContactStageRange(int32_t begin, int32_t end, void* userCtx)
             WarmStartOne(ctx->world, c);
             break;
         case m2_stageSolve:
-            SolveContactOne(ctx->world, c, ctx->invH, ctx->useBias);
+            SolveContactOne(ctx->world, c, ctx->invH, ctx->minBiasVel, ctx->useBias);
             break;
         case m2_stageRestitution:
             RestitutionOne(ctx->world, c);
@@ -505,13 +515,14 @@ static void ContactStageRange(int32_t begin, int32_t end, void* userCtx)
 
 static void RunContactStage(m2World* world, m2ContactConstraint* constraints,
                             const int32_t* colorStart, m2ContactStage stage, float invH,
-                            bool useBias)
+                            float minBiasVel, bool useBias)
 {
     m2ContactStageCtx ctx;
     ctx.world = world;
     ctx.constraints = constraints;
     ctx.stage = stage;
     ctx.invH = invH;
+    ctx.minBiasVel = minBiasVel;
     ctx.useBias = useBias;
     // Symmetric sweep: the bias pass walks colors forward, the relax
     // pass walks them backward. Color-parallel Gauss-Seidel loses
@@ -1188,6 +1199,11 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
     int32_t colorStart[M2_GRAPH_COLORS + 2];
     ColorConstraints(world, constraints, constraintCount, colorStart);
 
+    // The push clamp is pre-divided by the static mass scale so the
+    // later massScale multiply cannot weaken it (reference detail).
+    m2Softness staticSoft = MakeSoft(2.0f * M2_CONTACT_HERTZ, M2_CONTACT_DAMPING_RATIO, h);
+    float minBiasVel = -M2_CONTACT_PUSH_MAX_SPEED / staticSoft.massScale;
+
     for (int32_t sub = 0; sub < substepCount; ++sub)
     {
         // Integrate velocities (fixed body order).
@@ -1203,9 +1219,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         }
 
         WarmStartJoints(world, joints, jointCount);
-        RunContactStage(world, constraints, colorStart, m2_stageWarmStart, invH, true);
+        RunContactStage(world, constraints, colorStart, m2_stageWarmStart, invH, minBiasVel, true);
         SolveJoints(world, joints, jointCount, true, invH); // joints before contacts (topic-05 §5)
-        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, true);
+        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, minBiasVel, true);
 
         // Bullet substep origins, captured before positions move.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
@@ -1235,10 +1251,10 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
         SolveJoints(world, joints, jointCount, false, invH);
-        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, false);
+        RunContactStage(world, constraints, colorStart, m2_stageSolve, invH, minBiasVel, false);
     }
 
-    RunContactStage(world, constraints, colorStart, m2_stageRestitution, invH, false);
-    RunContactStage(world, constraints, colorStart, m2_stageStore, invH, false);
+    RunContactStage(world, constraints, colorStart, m2_stageRestitution, invH, minBiasVel, false);
+    RunContactStage(world, constraints, colorStart, m2_stageStore, invH, minBiasVel, false);
     StoreJointImpulses(world, joints, jointCount);
 }
