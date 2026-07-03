@@ -1283,8 +1283,10 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     M2_ASSERT(cursor == size);
     (void)cursor;
 
-    // Restore during recording stops the journal (recorded limitation).
-    world->journalActive = 0;
+    // Restores are first-class journal citizens: the tape carries the
+    // snapshot itself, so rollback-heavy sessions replay bit-exactly.
+    // The price is tape size, and that is the caller's tradeoff.
+    m2JournalRecordRestore(world, buffer, size);
 
     // Events are an observer stream from an abandoned timeline: cleared
     // on restore, re-emitted by re-simulation (RT1-ROLL-3 / RT1-API-3).

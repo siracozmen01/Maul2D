@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 7u
+#define M2_JOURNAL_VERSION 8u
 
 typedef struct m2JournalHeader
 {
@@ -45,6 +45,24 @@ void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t by
     world->journal[world->journalCursor] = op;
     memcpy(world->journal + world->journalCursor + 1, payload, (size_t)bytes);
     world->journalCursor += 1 + bytes;
+}
+
+void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size)
+{
+    if (world->journalActive == 0 || world->journalOverflow != 0)
+    {
+        return;
+    }
+    int32_t needed = 1 + (int32_t)sizeof(int32_t) + size;
+    if (world->journalCursor + needed > world->journalCapacity)
+    {
+        world->journalOverflow = 1;
+        return;
+    }
+    world->journal[world->journalCursor] = (uint8_t)m2_opRestore;
+    memcpy(world->journal + world->journalCursor + 1, &size, sizeof(int32_t));
+    memcpy(world->journal + world->journalCursor + 1 + sizeof(int32_t), snapshot, (size_t)size);
+    world->journalCursor += needed;
 }
 
 int32_t m2World_JournalBaseSize(m2WorldId worldId)
@@ -394,6 +412,20 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
                 return false;
             }
             m2SetJointParamInternal(target, jp.joint, jp.param, jp.value);
+            break;
+        }
+        case m2_opRestore:
+        {
+            M2_READ_OP(int32_t, restoreSize);
+            if (restoreSize <= 0 || cursor + restoreSize > size)
+            {
+                return false; // truncated restore payload: loud
+            }
+            if (!m2World_Restore(worldId, in + cursor, restoreSize))
+            {
+                return false;
+            }
+            cursor += restoreSize;
             break;
         }
         case m2_opSetType:

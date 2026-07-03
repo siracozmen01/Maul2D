@@ -251,8 +251,72 @@ static uint64_t JournalSweepHash(void)
     return h;
 }
 
+static void TestRollbackWhileRecording(void)
+{
+    // The rollback-netcode flow, now first class: record, snapshot,
+    // mispredict, RESTORE while the tape is still rolling, continue.
+    // The tape carries the restore and the whole timeline replays.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 32;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    int32_t tapeCapacity = 2 * m2World_JournalBaseSize(world) + (1 << 16);
+    unsigned char* tape = malloc((size_t)tapeCapacity);
+    CHECK(m2World_StartJournal(world, tape, tapeCapacity), "tape starts");
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(12.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef ballDef = m2DefaultBodyDef();
+    ballDef.type = m2_dynamicBody;
+    ballDef.position = (m2Pos2){0.0, 3.0};
+    m2BodyId ball = m2CreateBody(world, &ballDef);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.restitution = 0.5f;
+    m2Circle circle = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(ball, &bs, &circle);
+
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t snapSize = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)snapSize);
+    CHECK(m2World_Snapshot(world, snap, snapSize) == snapSize, "mid-recording snapshot");
+
+    // The misprediction: a shove that will be rolled back.
+    m2Body_ApplyLinearImpulse(ball, (m2Vec2){2.0f, 1.0f}, m2Body_GetPosition(ball));
+    for (int32_t i = 0; i < 25; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    CHECK(m2World_Restore(world, snap, snapSize), "rollback with the tape still rolling");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // the corrected timeline
+    }
+
+    int32_t bytes = m2World_StopJournal(world);
+    CHECK(bytes > snapSize, "the tape survived the rollback and kept recording");
+    uint64_t recorded = m2World_Hash(world);
+
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, tape, bytes), "the rollback-bearing tape replays");
+    CHECK(m2World_Hash(fresh) == recorded, "the whole timeline lands on the same bits");
+
+    m2DestroyWorld(fresh);
+    m2DestroyWorld(world);
+    free(snap);
+    free(tape);
+}
+
 int main(void)
 {
+    TestRollbackWhileRecording();
     TestRecordReplay();
     TestOverflowIsLoud();
 

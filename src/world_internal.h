@@ -173,6 +173,7 @@ void* m2AllocZeroed(size_t bytes);
 void m2Free(void* memory);
 
 void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t bytes);
+void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size);
 void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
 
 // Journal ops (fixed-size payloads, little-endian raw structs).
@@ -196,6 +197,7 @@ enum
     m2_opSetJointParam = 16,
     m2_opSetTransform = 17,
     m2_opSetType = 18,
+    m2_opRestore = 19, // variable length: i32 size + snapshot bytes
 };
 
 // Journaled joint parameter channel (op 16).
