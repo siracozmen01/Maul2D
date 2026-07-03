@@ -87,5 +87,10 @@ typedef struct m2RelativePose
 
 m2Manifold m2CollideCircles(const m2Circle* a, const m2Circle* b, m2RelativePose pose);
 m2Manifold m2CollidePolygonAndCircle(const m2Polygon* a, const m2Circle* b, m2RelativePose pose);
+m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativePose pose);
+
+// Capsules and segments enter the polygon kernels as 2-vertex rounded
+// polygons (the Box2D v3 model): one kernel table, fewer edge cases.
+m2Polygon m2MakeSegmentProxy(m2Vec2 p1, m2Vec2 p2, float radius);
 
 #endif // MAUL2D_SHAPE_INTERNAL_H

@@ -289,3 +289,22 @@ m2MassData m2ComputeShapeMass(const m2ShapeGeometry* geometry, float density)
     }
     }
 }
+
+m2Polygon m2MakeSegmentProxy(m2Vec2 p1, m2Vec2 p2, float radius)
+{
+    m2Polygon proxy;
+    memset(&proxy, 0, sizeof(proxy));
+    float dx = p2.x - p1.x;
+    float dy = p2.y - p1.y;
+    float length = sqrtf(dx * dx + dy * dy);
+    M2_ASSERT(length >= M2_MIN_EDGE_LENGTH); // shape validation guarantees
+    float inv = 1.0f / length;
+    m2Vec2 axis = {dx * inv, dy * inv};
+    proxy.vertices[0] = p1;
+    proxy.vertices[1] = p2;
+    proxy.normals[0] = (m2Vec2){axis.y, -axis.x};
+    proxy.normals[1] = (m2Vec2){-axis.y, axis.x};
+    proxy.count = 2;
+    proxy.radius = radius;
+    return proxy;
+}

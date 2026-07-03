@@ -384,12 +384,52 @@ static m2Manifold ComputeManifold(const m2World* world, int32_t shapeA, int32_t 
         return FlipManifold(m, pose);
     }
 
-    // Remaining combinations (capsule/segment/polygon-polygon) land in
-    // slice 3b with the SAT+clip kernel; until then those pairs carry an
-    // empty manifold - a recorded partial, not a silent one.
-    m2Manifold empty;
-    memset(&empty, 0, sizeof(empty));
-    return empty;
+    // Capsules and segments become 2-vertex rounded polygons; every
+    // remaining combination goes through the SAT+clip kernel.
+    m2Polygon proxyA;
+    m2Polygon proxyB;
+    const m2Polygon* pa = NULL;
+    const m2Polygon* pb = NULL;
+    if (ga->type == m2_polygonShape)
+    {
+        pa = &ga->polygon;
+    }
+    else if (ga->type == m2_capsuleShape)
+    {
+        proxyA = m2MakeSegmentProxy(ga->capsule.point1, ga->capsule.point2, ga->capsule.radius);
+        pa = &proxyA;
+    }
+    else if (ga->type == m2_segmentShape)
+    {
+        proxyA = m2MakeSegmentProxy(ga->segment.point1, ga->segment.point2, 0.0f);
+        pa = &proxyA;
+    }
+    if (gb->type == m2_polygonShape)
+    {
+        pb = &gb->polygon;
+    }
+    else if (gb->type == m2_capsuleShape)
+    {
+        proxyB = m2MakeSegmentProxy(gb->capsule.point1, gb->capsule.point2, gb->capsule.radius);
+        pb = &proxyB;
+    }
+    else if (gb->type == m2_segmentShape)
+    {
+        proxyB = m2MakeSegmentProxy(gb->segment.point1, gb->segment.point2, 0.0f);
+        pb = &proxyB;
+    }
+
+    if (pa != NULL && gb->type == m2_circleShape)
+    {
+        return m2CollidePolygonAndCircle(pa, &gb->circle, pose);
+    }
+    if (ga->type == m2_circleShape && pb != NULL)
+    {
+        m2Manifold m = m2CollidePolygonAndCircle(pb, &ga->circle, InvertPose(pose));
+        return FlipManifold(m, pose);
+    }
+    M2_ASSERT(pa != NULL && pb != NULL);
+    return m2CollidePolygons(pa, pb, pose);
 }
 
 // Stash old (key, manifold) rows, then rebuild aligned to the new pair

@@ -216,8 +216,27 @@ static uint64_t ContactSweepHash(void)
             bd.position = (m2Pos2){2.0e5 - 15.0 + 1.03 * (double)(step / 5), 4.0};
             bd.linearVelocity = (m2Vec2){0.5f * (float)(step % 3) - 0.5f, -2.0f};
             m2BodyId body = m2CreateBody(worldId, &bd);
-            m2Circle circle = {{0.0f, 0.0f}, 0.3f + 0.04f * (float)(step % 4)};
-            m2CreateCircleShape(body, &sd, &circle);
+            switch (step % 3)
+            {
+            case 0:
+            {
+                m2Circle circle = {{0.0f, 0.0f}, 0.3f + 0.04f * (float)(step % 4)};
+                m2CreateCircleShape(body, &sd, &circle);
+                break;
+            }
+            case 1:
+            {
+                m2Polygon smallBox = m2MakeBox(0.3f, 0.25f);
+                m2CreatePolygonShape(body, &sd, &smallBox);
+                break;
+            }
+            default:
+            {
+                m2Capsule cap = {{-0.25f, 0.0f}, {0.25f, 0.0f}, 0.15f};
+                m2CreateCapsuleShape(body, &sd, &cap);
+                break;
+            }
+            }
         }
         m2World_Step(worldId, 1.0f / 60.0f, 4);
         uint64_t worldHash = m2World_Hash(worldId);
@@ -227,10 +246,105 @@ static uint64_t ContactSweepHash(void)
     return h;
 }
 
+static void TestPolygonKernels(void)
+{
+    // Face-face: box resting overlapped on a wide slab: two points, both
+    // penetrating, normal up, distinct stable ids.
+    m2Polygon slab = m2MakeBox(4.0f, 0.5f);
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2RelativePose pose = {{0.0f, 0.95f}, {1.0f, 0.0f}}; // box above slab
+    m2Manifold m = m2CollidePolygons(&slab, &box, pose);
+    CHECK(m.pointCount == 2, "face-face gives two points");
+    CHECK_NEAR(m.normal.y, 1.0f, 1.0e-4f, "face-face normal up");
+    CHECK(m.points[0].separation < 0.0f && m.points[1].separation < 0.0f, "both points penetrate");
+    CHECK(m.points[0].id != m.points[1].id, "distinct feature ids");
+
+    // Speculative face-face: within margin, positive separations.
+    pose.p.y = 1.01f;
+    m = m2CollidePolygons(&slab, &box, pose);
+    CHECK(m.pointCount == 2 && m.points[0].separation > 0.0f, "speculative face-face");
+
+    // Beyond margin: none.
+    pose.p.y = 1.05f;
+    CHECK(m2CollidePolygons(&slab, &box, pose).pointCount == 0, "face-face beyond margin");
+
+    // Vertex-vertex: two boxes corner to corner along the diagonal with a
+    // sub-margin gap - the single-point path with a diagonal normal.
+    m2Polygon boxA = m2MakeBox(0.5f, 0.5f);
+    m2Polygon boxB = m2MakeBox(0.5f, 0.5f);
+    m2RelativePose corner = {{1.01f, 1.01f}, {1.0f, 0.0f}};
+    m = m2CollidePolygons(&boxA, &boxB, corner);
+    CHECK(m.pointCount == 1, "vertex-vertex single point");
+    CHECK_NEAR(m.normal.x, 0.7071f, 5.0e-2f, "vertex-vertex diagonal normal");
+
+    // Capsule lying on a slab (via the 2-vertex proxy): two points.
+    m2Polygon capsule = m2MakeSegmentProxy((m2Vec2){-0.4f, 0.0f}, (m2Vec2){0.4f, 0.0f}, 0.2f);
+    m2RelativePose lying = {{0.0f, 0.65f}, {1.0f, 0.0f}};
+    m = m2CollidePolygons(&slab, &capsule, lying);
+    CHECK(m.pointCount == 2, "capsule on slab gives two points");
+    CHECK(m.points[0].separation < 0.0f, "capsule rests in contact");
+
+    // Rotated box (45 deg) over a slab: no NaN, at least one point.
+    m2Rot rot45 = m2MakeRot(0.25f * M2_PI);
+    m2RelativePose tilted = {{0.0f, 1.15f}, rot45};
+    m = m2CollidePolygons(&slab, &box, tilted);
+    CHECK(m.pointCount >= 1, "tilted box makes contact");
+    for (int32_t i = 0; i < m.pointCount; ++i)
+    {
+        CHECK(m.points[i].separation == m.points[i].separation, "no NaN separations");
+    }
+}
+
+static void TestBoxStackPersistence(void)
+{
+    // A box overlapping a static slab in a zero-gravity world: the two
+    // manifold points must keep their ids across 30 steps and carry
+    // injected impulses (the solver precondition).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId worldId = m2CreateWorld(&def);
+    m2World* world = m2World_GetInternal(worldId);
+
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    m2BodyId floorBody = m2CreateBody(worldId, &floorDef);
+    m2Polygon slab = m2MakeBox(3.0f, 0.5f);
+    m2CreatePolygonShape(floorBody, &sd, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.95};
+    m2BodyId box = m2CreateBody(worldId, &bd);
+    m2Polygon unit = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(box, &sd, &unit);
+
+    m2World_Step(worldId, 1.0f / 60.0f, 4);
+    CHECK(world->pairCount == 1 && world->manifolds[0].pointCount == 2, "stack contact");
+    uint16_t id0 = world->manifolds[0].points[0].id;
+    uint16_t id1 = world->manifolds[0].points[1].id;
+    world->manifolds[0].points[0].normalImpulse = 1.25f;
+    world->manifolds[0].points[1].tangentImpulse = -0.75f;
+
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(worldId, 1.0f / 60.0f, 4);
+    }
+    CHECK(world->manifolds[0].points[0].id == id0 && world->manifolds[0].points[1].id == id1,
+          "box-slab ids stable over 30 steps");
+    CHECK(world->manifolds[0].points[0].normalImpulse == 1.25f, "normal impulse carried");
+    CHECK(world->manifolds[0].points[1].tangentImpulse == -0.75f, "tangent impulse carried");
+
+    m2DestroyWorld(worldId);
+}
+
 int main(void)
 {
     TestCircleKernels();
     TestPolygonCircleRegions();
+    TestPolygonKernels();
+    TestBoxStackPersistence();
     TestPersistenceAndCarry();
     TestContactRollback();
 
