@@ -85,10 +85,21 @@ extern "C"
 #endif
     }
 
-    /// Absolute value without libm.
+    /// Absolute value, pinned to IEEE |x| semantics: the sign bit is
+    /// cleared, so m2AbsF(-0.0f) == +0.0f on every platform. Implemented
+    /// as a bit mask because a ternary abs is compiler-foldable into
+    /// divergent ±0 behavior (MSVC emits a sign-mask, GCC/Clang keep the
+    /// branch - a real cross-cell hash break, caught by the gate).
     static inline float m2AbsF(float a)
     {
-        return a < 0.0f ? -a : a;
+        union
+        {
+            float f;
+            uint32_t u;
+        } bits;
+        bits.f = a;
+        bits.u &= 0x7FFFFFFFu;
+        return bits.f;
     }
 
     /// Clamp to [lo, hi] using the pinned min/max.

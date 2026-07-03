@@ -161,6 +161,12 @@ static void TestMinMaxSemantics(void)
     CHECK(m2ClampF(-2.0f, -1.0f, 1.0f) == -1.0f, "m2ClampF low");
     CHECK(m2ClampF(2.0f, -1.0f, 1.0f) == 1.0f, "m2ClampF high");
     CHECK(m2ClampF(0.0f, 1.0f, -1.0f) == 1.0f, "m2ClampF(lo>hi) resolves to lo by definition");
+
+    // Pinned abs: IEEE sign-clear, bit-verified (MSVC folded the ternary form).
+    CHECK(FloatBits(m2AbsF(nz)) == 0u, "m2AbsF(-0) must be +0 (sign cleared)");
+    CHECK(FloatBits(m2AbsF(-1.5f)) == FloatBits(1.5f), "m2AbsF(-1.5) must be 1.5");
+    CHECK(FloatBits(m2AbsF(qnan)) == (nanBits & 0x7FFFFFFFu),
+          "m2AbsF(NaN) clears only the sign bit");
 }
 
 // --- 3. Determinism hash ----------------------------------------------------
