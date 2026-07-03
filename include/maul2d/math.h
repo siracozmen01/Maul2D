@@ -63,6 +63,13 @@ extern "C"
     {
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_min_ss(_mm_set_ss(a), _mm_set_ss(b)));
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    // Compare-select (fcmp + fcsel). Proof of the pinned semantics
+    // is empirical and permanent: the windows-arm64 CI cell runs
+    // the +-0/NaN semantics tests and its hashes must match every
+    // other cell. If MSVC ever folds this to fminnm, that cell
+    // turns red before the change can land.
+    return a < b ? a : b;
 #elif defined(_MSC_VER)
 #error                                                                                             \
     "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"
@@ -77,6 +84,9 @@ extern "C"
     {
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(a), _mm_set_ss(b)));
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    // See m2MinF: fcsel path, proven by the windows-arm64 cell.
+    return a > b ? a : b;
 #elif defined(_MSC_VER)
 #error                                                                                             \
     "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"

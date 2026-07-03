@@ -22,6 +22,9 @@ jobs:
           # The seventh cell: MSVC Debug must produce the same bits as
           # every Release cell - Debug==Release is a law, not a habit.
           - { name: windows-x64-msvc-debug, os: windows-latest, cc: cl, config: Debug }
+          # Eighth cell: ARM64 Windows. The compare-select carve-out in
+          # math.h is proven here, not assumed.
+          - { name: windows-arm64-msvc, os: windows-11-arm, cc: cl, config: Release }
     steps:
       - uses: actions/checkout@v4
 
@@ -83,7 +86,7 @@ jobs:
         shell: bash
         run: |
           grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD)_HASH=' hashes/*.txt | tee all-hashes.txt
-          CELLS=7
+          CELLS=8
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
