@@ -59,17 +59,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: hashes
+          pattern: hash-*
           merge-multiple: true
       - name: Compare
         shell: bash
         run: |
-          cat hashes/*.txt
-          COUNT=$(cat hashes/*.txt | sort -u | wc -l)
-          if [ "$COUNT" != "1" ]; then
-            echo "DETERMINISM FAILURE: hashes differ across platforms"
+          grep -h '^M2_DET_HASH=' hashes/*.txt | tee all-hashes.txt
+          COUNT=$(sort -u all-hashes.txt | wc -l)
+          CELLS=$(wc -l < all-hashes.txt)
+          if [ "$CELLS" -lt 6 ] || [ "$COUNT" != "1" ]; then
+            echo "DETERMINISM FAILURE: $CELLS cells, $COUNT distinct hashes"
             exit 1
           fi
-          echo "all platform cells produced identical bits"
+          echo "all $CELLS platform cells produced identical bits"
 
   sanitize:
     name: asan+ubsan
