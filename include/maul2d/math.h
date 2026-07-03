@@ -51,6 +51,8 @@ extern "C"
 
 #if defined(_MSC_VER) && defined(_M_X64)
 #include <xmmintrin.h>
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+#include <arm_neon.h>
 #endif
 
     /// Pinned minimum: exactly (a < b ? a : b), in this operand order —
@@ -64,12 +66,13 @@ extern "C"
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_min_ss(_mm_set_ss(a), _mm_set_ss(b)));
 #elif defined(_MSC_VER) && defined(_M_ARM64)
-    // Compare-select (fcmp + fcsel). Proof of the pinned semantics
-    // is empirical and permanent: the windows-arm64 CI cell runs
-    // the +-0/NaN semantics tests and its hashes must match every
-    // other cell. If MSVC ever folds this to fminnm, that cell
-    // turns red before the change can land.
-    return a < b ? a : b;
+    // The plain ternary got folded away from the pinned zero-sign
+    // semantics (the arm64 cell caught it on its first run), so the
+    // select is explicit NEON: compare into a mask, bit-select the
+    // lanes - never fminnm.
+    float32x2_t va = vdup_n_f32(a);
+    float32x2_t vb = vdup_n_f32(b);
+    return vget_lane_f32(vbsl_f32(vclt_f32(va, vb), va, vb), 0);
 #elif defined(_MSC_VER)
 #error                                                                                             \
     "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"
@@ -85,8 +88,10 @@ extern "C"
 #if defined(_MSC_VER) && defined(_M_X64)
         return _mm_cvtss_f32(_mm_max_ss(_mm_set_ss(a), _mm_set_ss(b)));
 #elif defined(_MSC_VER) && defined(_M_ARM64)
-    // See m2MinF: fcsel path, proven by the windows-arm64 cell.
-    return a > b ? a : b;
+    // See m2MinF: explicit NEON compare + bit-select.
+    float32x2_t va = vdup_n_f32(a);
+    float32x2_t vb = vdup_n_f32(b);
+    return vget_lane_f32(vbsl_f32(vcgt_f32(va, vb), va, vb), 0);
 #elif defined(_MSC_VER)
 #error                                                                                             \
     "MSVC on this target: pinned min/max semantics unproven; implement with verified intrinsics first"
