@@ -47,7 +47,8 @@ jobs:
           fi
           "$BIN/test_core$SUFFIX" | tee out.txt
           "$BIN/test_world$SUFFIX" | tee -a out.txt
-          grep -E '^M2_(DET|WORLD)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          "$BIN/test_broadphase$SUFFIX" | tee -a out.txt
+          grep -E '^M2_(DET|WORLD|BP)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -67,13 +68,13 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -hE '^M2_(DET|WORLD)_HASH=' hashes/*.txt | tee all-hashes.txt
+          grep -hE '^M2_(DET|WORLD|BP)_HASH=' hashes/*.txt | tee all-hashes.txt
           CELLS=6
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
           DISTINCT=$(sort -u all-hashes.txt | wc -l)
-          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "2" ]; then
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "3" ]; then
             echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi
@@ -92,6 +93,7 @@ jobs:
         run: |
           ./build/test_core
           ./build/test_world
+          ./build/test_broadphase
 
   format:
     name: clang-format

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sirac Ozmen
 //
-// Slice 0: world/body storage, gravity integration, snapshot/restore/hash.
-// Every array here is POD and lives in the snapshot; the rollback gate
-// byte-compares all of it. Allocation goes through malloc for now - the
-// world-def allocator hooks are a recorded pending item, due before any
-// public release (topic-10).
+// World core: body storage, gravity integration, broadphase update, and
+// snapshot/restore/hash. Every array is POD and lives in the snapshot;
+// the rollback gate byte-compares all of it. Allocation goes through
+// malloc for now - the world-def allocator hooks are a recorded pending
+// item, due before any public release (topic-10).
 
-#include "maul2d/world.h"
-#include "maul2d/body.h"
+#include "world_internal.h"
 
 #include "maul2d/base.h"
 
@@ -19,35 +18,15 @@
 #define M2_WORLD_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2WorldDef) << 8) ^ 1)
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 1u
+#define M2_SNAPSHOT_VERSION 2u
 
-typedef struct m2World
-{
-    // World-global mutable block (snapshot state).
-    m2Vec2 gravity;
-    uint64_t stepCount;
+// Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
+#define M2_AABB_MARGIN 0.1
 
-    // Body storage: parallel POD arrays, fixed capacity (slice 0).
-    int32_t bodyCapacity;
-    int32_t maxBodyIndex; // high-water mark of used slots
-    m2Transform* transforms;
-    m2Vec2* linearVelocities;
-    float* angularVelocities;
-    float* gravityScales;
-    uint64_t* userData;
-    uint8_t* types;
-    uint8_t* alive;
-
-    // Id pool: FIFO free queue + generations. Saturated slots retire.
-    uint16_t* generations;
-    int32_t* freeQueue;
-    int32_t freeHead;
-    int32_t freeTail;
-    int32_t freeCount;
-    int32_t retiredCount;
-
-    uint16_t worldGeneration;
-} m2World;
+// Placeholder body extent until shapes land (topic-03): every body is a
+// half-extent-0.5 box around its position, rotation ignored. Replaced by
+// per-shape AABBs in the next slice; clearly throwaway, deliberately so.
+#define M2_PLACEHOLDER_EXTENT 0.5
 
 // The world registry is the single sanctioned process-global (ADR-0011
 // amendment): it maps id.world0 to a world and is not simulation state -
@@ -67,6 +46,11 @@ static m2World* GetWorld(m2WorldId id)
         return NULL;
     }
     return world;
+}
+
+m2World* m2World_GetInternal(m2WorldId worldId)
+{
+    return GetWorld(worldId);
 }
 
 static m2World* GetBodyWorld(m2BodyId id)
@@ -93,6 +77,180 @@ static int32_t BodySlot(const m2World* world, m2BodyId id)
     }
     return index;
 }
+
+// --- Broadphase helpers ------------------------------------------------------
+
+static m2AABB TightAABB(const m2World* world, int32_t index)
+{
+    m2Pos2 p = world->transforms[index].p;
+    m2AABB aabb;
+    aabb.lowerBound = (m2Pos2){p.x - M2_PLACEHOLDER_EXTENT, p.y - M2_PLACEHOLDER_EXTENT};
+    aabb.upperBound = (m2Pos2){p.x + M2_PLACEHOLDER_EXTENT, p.y + M2_PLACEHOLDER_EXTENT};
+    return aabb;
+}
+
+static m2AABB Fatten(m2AABB aabb)
+{
+    aabb.lowerBound.x -= M2_AABB_MARGIN;
+    aabb.lowerBound.y -= M2_AABB_MARGIN;
+    aabb.upperBound.x += M2_AABB_MARGIN;
+    aabb.upperBound.y += M2_AABB_MARGIN;
+    return aabb;
+}
+
+// ALL moved proxies enter the moved set - dynamic, kinematic, and static
+// alike (topic-02 §4.2: this is the mechanism that lets a moved kinematic
+// or static body wake and pair against everything it now touches).
+static void PushMoved(m2World* world, int32_t index)
+{
+    if (world->inMoved[index] != 0)
+    {
+        return;
+    }
+    world->inMoved[index] = 1;
+    world->moved[world->movedCount] = index;
+    world->movedCount += 1;
+}
+
+static uint64_t PairKey(int32_t a, int32_t b)
+{
+    uint64_t lo = (uint64_t)(a < b ? a : b);
+    uint64_t hi = (uint64_t)(a < b ? b : a);
+    return (lo << 32) | hi;
+}
+
+static int CompareU64(const void* a, const void* b)
+{
+    uint64_t ua = *(const uint64_t*)a;
+    uint64_t ub = *(const uint64_t*)b;
+    return ua < ub ? -1 : (ua > ub ? 1 : 0);
+}
+
+static int CompareI32(const void* a, const void* b)
+{
+    int32_t ia = *(const int32_t*)a;
+    int32_t ib = *(const int32_t*)b;
+    return ia < ib ? -1 : (ia > ib ? 1 : 0);
+}
+
+// Re-derive pairs touched by the moved set, then batch-merge with the
+// untouched remainder (topic-02 §4.2, RT1-PERF-3: never per-item inserts).
+static void UpdatePairs(m2World* world)
+{
+    if (world->movedCount == 0)
+    {
+        return;
+    }
+
+    // Canonical consumption order: ascending body index, not insertion order.
+    qsort(world->moved, (size_t)world->movedCount, sizeof(int32_t), CompareI32);
+
+    int32_t collected = 0;
+    int32_t queryResults[256];
+    for (int32_t m = 0; m < world->movedCount; ++m)
+    {
+        int32_t index = world->moved[m];
+        if (world->alive[index] == 0 || world->proxyIds[index] == M2_NULL_NODE)
+        {
+            continue;
+        }
+        m2AABB fat = world->treeNodes[world->types[index]][world->proxyIds[index]].aabb;
+
+        // Dynamic bodies pair against everything; non-dynamic movers pair
+        // against dynamics only (a static-static overlap is not a pair).
+        int32_t firstTree = world->types[index] == (uint8_t)m2_dynamicBody ? 0 : m2_dynamicBody;
+        int32_t lastTree =
+            world->types[index] == (uint8_t)m2_dynamicBody ? M2_TREE_COUNT - 1 : m2_dynamicBody;
+        for (int32_t t = firstTree; t <= lastTree; ++t)
+        {
+            int32_t hits =
+                m2Tree_Query(&world->trees[t], world->treeNodes[t], fat, queryResults, 256);
+            M2_ASSERT(hits <= 256);
+            hits = hits <= 256 ? hits : 256;
+            for (int32_t h = 0; h < hits; ++h)
+            {
+                int32_t other = queryResults[h];
+                if (other == index || world->alive[other] == 0)
+                {
+                    continue;
+                }
+                if (world->types[index] != (uint8_t)m2_dynamicBody &&
+                    world->types[other] != (uint8_t)m2_dynamicBody)
+                {
+                    continue;
+                }
+                if (collected < world->pairCapacity)
+                {
+                    world->pairScratch[collected] = PairKey(index, other);
+                }
+                collected += 1;
+            }
+        }
+    }
+    M2_ASSERT(collected <= world->pairCapacity);
+    collected = collected <= world->pairCapacity ? collected : world->pairCapacity;
+
+    qsort(world->pairScratch, (size_t)collected, sizeof(uint64_t), CompareU64);
+
+    // Keep pairs with no moved endpoint; every moved-endpoint pair is
+    // re-derived above if it still overlaps.
+    int32_t kept = 0;
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (world->inMoved[a] == 0 && world->inMoved[b] == 0 && world->alive[a] != 0 &&
+            world->alive[b] != 0)
+        {
+            world->pairKeys[kept] = world->pairKeys[i];
+            kept += 1;
+        }
+    }
+
+    // Merge (kept is sorted; scratch is sorted): classic two-way merge with
+    // dedup into the tail scratch space, then copy back.
+    int32_t i = 0;
+    int32_t j = 0;
+    int32_t outCount = 0;
+    uint64_t previous = 0;
+    bool hasPrevious = false;
+    while ((i < kept || j < collected) && outCount < world->pairCapacity)
+    {
+        uint64_t next;
+        if (i < kept && (j >= collected || world->pairKeys[i] <= world->pairScratch[j]))
+        {
+            next = world->pairKeys[i];
+            i += 1;
+        }
+        else
+        {
+            next = world->pairScratch[j];
+            j += 1;
+        }
+        if (hasPrevious && next == previous)
+        {
+            continue;
+        }
+        world->pairScratch[world->pairCapacity - 1 - outCount] = next; // build in tail
+        previous = next;
+        hasPrevious = true;
+        outCount += 1;
+    }
+    for (int32_t k = 0; k < outCount; ++k)
+    {
+        world->pairKeys[k] = world->pairScratch[world->pairCapacity - 1 - (outCount - 1 - k)];
+    }
+    world->pairCount = outCount;
+
+    // Consume the moved set.
+    for (int32_t m = 0; m < world->movedCount; ++m)
+    {
+        world->inMoved[world->moved[m]] = 0;
+    }
+    world->movedCount = 0;
+}
+
+// --- Defs & world lifecycle --------------------------------------------------
 
 m2WorldDef m2DefaultWorldDef(void)
 {
@@ -135,6 +293,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     int32_t cap = def->bodyCapacity;
     world->gravity = def->gravity;
     world->bodyCapacity = cap;
+    world->treeNodeCapacity = 2 * cap;
+    world->pairCapacity = 8 * cap;
     world->transforms = calloc((size_t)cap, sizeof(m2Transform));
     world->linearVelocities = calloc((size_t)cap, sizeof(m2Vec2));
     world->angularVelocities = calloc((size_t)cap, sizeof(float));
@@ -144,10 +304,23 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->alive = calloc((size_t)cap, sizeof(uint8_t));
     world->generations = calloc((size_t)cap, sizeof(uint16_t));
     world->freeQueue = calloc((size_t)cap, sizeof(int32_t));
+    world->proxyIds = calloc((size_t)cap, sizeof(int32_t));
+    world->inMoved = calloc((size_t)cap, sizeof(uint8_t));
+    world->moved = calloc((size_t)cap, sizeof(int32_t));
+    world->pairKeys = calloc((size_t)world->pairCapacity, sizeof(uint64_t));
+    world->pairScratch = calloc((size_t)world->pairCapacity, sizeof(uint64_t));
+    bool treesOk = true;
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        world->treeNodes[t] = calloc((size_t)world->treeNodeCapacity, sizeof(m2TreeNode));
+        treesOk = treesOk && world->treeNodes[t] != NULL;
+    }
     if (world->transforms == NULL || world->linearVelocities == NULL ||
         world->angularVelocities == NULL || world->gravityScales == NULL ||
         world->userData == NULL || world->types == NULL || world->alive == NULL ||
-        world->generations == NULL || world->freeQueue == NULL)
+        world->generations == NULL || world->freeQueue == NULL || world->proxyIds == NULL ||
+        world->inMoved == NULL || world->moved == NULL || world->pairKeys == NULL ||
+        world->pairScratch == NULL || !treesOk)
     {
         m2WorldId failed = {(uint16_t)(slot + 1), s_worldGenerations[slot]};
         s_worlds[slot] = world;
@@ -155,14 +328,17 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         return m2_nullWorldId;
     }
 
-    // FIFO free queue starts holding every slot in index order -
-    // deterministic id minting from the first create (topic-09 contract).
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        m2Tree_Init(&world->trees[t], world->treeNodes[t], world->treeNodeCapacity);
+    }
     for (int32_t i = 0; i < cap; ++i)
     {
         world->freeQueue[i] = i;
+        world->proxyIds[i] = M2_NULL_NODE;
     }
     world->freeHead = 0;
-    world->freeTail = 0; // tail == head with full count means "all free"
+    world->freeTail = 0;
     world->freeCount = cap;
 
     s_worldGenerations[slot] += 1;
@@ -194,6 +370,15 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->alive);
     free(world->generations);
     free(world->freeQueue);
+    free(world->proxyIds);
+    free(world->inMoved);
+    free(world->moved);
+    free(world->pairKeys);
+    free(world->pairScratch);
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        free(world->treeNodes[t]);
+    }
     free(world);
     s_worlds[worldId.index1 - 1] = NULL;
 }
@@ -239,6 +424,27 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
             world->transforms[i].q = m2MulRot(world->transforms[i].q, m2MakeRot(dAngle));
         }
     }
+
+    // Broadphase update: single-threaded, fixed body-index order. A proxy
+    // is re-inserted only when its tight AABB escapes its fat one.
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0 || world->proxyIds[i] == M2_NULL_NODE ||
+            world->types[i] == (uint8_t)m2_staticBody)
+        {
+            continue;
+        }
+        m2AABB tight = TightAABB(world, i);
+        int32_t tree = world->types[i];
+        if (!m2AABB_Contains(world->treeNodes[tree][world->proxyIds[i]].aabb, tight))
+        {
+            m2Tree_Move(&world->trees[tree], world->treeNodes[tree], world->proxyIds[i],
+                        Fatten(tight));
+            PushMoved(world, i);
+        }
+    }
+    UpdatePairs(world);
+
     world->stepCount += 1;
 }
 
@@ -262,16 +468,25 @@ typedef struct m2SnapshotHeader
     int32_t freeTail;
     int32_t freeCount;
     int32_t retiredCount;
+    int32_t movedCount;
+    int32_t pairCount;
 } m2SnapshotHeader;
 
-_Static_assert(sizeof(m2SnapshotHeader) == 48, "snapshot header must be padding-free");
+_Static_assert(sizeof(m2SnapshotHeader) == 56, "snapshot header must be padding-free");
 
 static int32_t BlockBytes(const m2World* world)
 {
     int32_t cap = world->bodyCapacity;
-    return (int32_t)(cap * sizeof(m2Transform) + cap * sizeof(m2Vec2) + cap * sizeof(float) +
-                     cap * sizeof(float) + cap * sizeof(uint64_t) + cap * sizeof(uint8_t) +
-                     cap * sizeof(uint8_t) + cap * sizeof(uint16_t) + cap * sizeof(int32_t));
+    int32_t bodyBlocks =
+        (int32_t)(cap * sizeof(m2Transform) + cap * sizeof(m2Vec2) + cap * sizeof(float) +
+                  cap * sizeof(float) + cap * sizeof(uint64_t) + cap * sizeof(uint8_t) +
+                  cap * sizeof(uint8_t) + cap * sizeof(uint16_t) + cap * sizeof(int32_t));
+    int32_t broadphaseBlocks =
+        (int32_t)(M2_TREE_COUNT * sizeof(m2DynamicTree) +
+                  M2_TREE_COUNT * (size_t)world->treeNodeCapacity * sizeof(m2TreeNode) +
+                  cap * sizeof(int32_t) + cap * sizeof(uint8_t) + cap * sizeof(int32_t) +
+                  (size_t)world->pairCapacity * sizeof(uint64_t));
+    return bodyBlocks + broadphaseBlocks;
 }
 
 int32_t m2World_SnapshotSize(m2WorldId worldId)
@@ -283,13 +498,6 @@ int32_t m2World_SnapshotSize(m2WorldId worldId)
     }
     return (int32_t)sizeof(m2SnapshotHeader) + BlockBytes(world);
 }
-
-#define M2_COPY_BLOCK(dst, src, bytes)                                                             \
-    do                                                                                             \
-    {                                                                                              \
-        memcpy(dst, src, (size_t)(bytes));                                                         \
-        cursor += (bytes);                                                                         \
-    } while (0)
 
 int32_t m2World_Snapshot(m2WorldId worldId, void* buffer, int32_t capacity)
 {
@@ -312,20 +520,38 @@ int32_t m2World_Snapshot(m2WorldId worldId, void* buffer, int32_t capacity)
     header.freeTail = world->freeTail;
     header.freeCount = world->freeCount;
     header.retiredCount = world->retiredCount;
+    header.movedCount = world->movedCount;
+    header.pairCount = world->pairCount;
 
     uint8_t* out = buffer;
     int32_t cursor = 0;
     int32_t cap = world->bodyCapacity;
-    M2_COPY_BLOCK(out + cursor, &header, (int32_t)sizeof(header));
-    M2_COPY_BLOCK(out + cursor, world->transforms, cap * (int32_t)sizeof(m2Transform));
-    M2_COPY_BLOCK(out + cursor, world->linearVelocities, cap * (int32_t)sizeof(m2Vec2));
-    M2_COPY_BLOCK(out + cursor, world->angularVelocities, cap * (int32_t)sizeof(float));
-    M2_COPY_BLOCK(out + cursor, world->gravityScales, cap * (int32_t)sizeof(float));
-    M2_COPY_BLOCK(out + cursor, world->userData, cap * (int32_t)sizeof(uint64_t));
-    M2_COPY_BLOCK(out + cursor, world->types, cap * (int32_t)sizeof(uint8_t));
-    M2_COPY_BLOCK(out + cursor, world->alive, cap * (int32_t)sizeof(uint8_t));
-    M2_COPY_BLOCK(out + cursor, world->generations, cap * (int32_t)sizeof(uint16_t));
-    M2_COPY_BLOCK(out + cursor, world->freeQueue, cap * (int32_t)sizeof(int32_t));
+#define M2_COPY(src, bytes)                                                                        \
+    do                                                                                             \
+    {                                                                                              \
+        memcpy(out + cursor, src, (size_t)(bytes));                                                \
+        cursor += (int32_t)(bytes);                                                                \
+    } while (0)
+    M2_COPY(&header, sizeof(header));
+    M2_COPY(world->transforms, cap * sizeof(m2Transform));
+    M2_COPY(world->linearVelocities, cap * sizeof(m2Vec2));
+    M2_COPY(world->angularVelocities, cap * sizeof(float));
+    M2_COPY(world->gravityScales, cap * sizeof(float));
+    M2_COPY(world->userData, cap * sizeof(uint64_t));
+    M2_COPY(world->types, cap * sizeof(uint8_t));
+    M2_COPY(world->alive, cap * sizeof(uint8_t));
+    M2_COPY(world->generations, cap * sizeof(uint16_t));
+    M2_COPY(world->freeQueue, cap * sizeof(int32_t));
+    M2_COPY(world->trees, M2_TREE_COUNT * sizeof(m2DynamicTree));
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        M2_COPY(world->treeNodes[t], (size_t)world->treeNodeCapacity * sizeof(m2TreeNode));
+    }
+    M2_COPY(world->proxyIds, cap * sizeof(int32_t));
+    M2_COPY(world->inMoved, cap * sizeof(uint8_t));
+    M2_COPY(world->moved, cap * sizeof(int32_t));
+    M2_COPY(world->pairKeys, (size_t)world->pairCapacity * sizeof(uint64_t));
+#undef M2_COPY
     M2_ASSERT(cursor == size);
     return cursor;
 }
@@ -353,26 +579,37 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     world->freeTail = header.freeTail;
     world->freeCount = header.freeCount;
     world->retiredCount = header.retiredCount;
+    world->movedCount = header.movedCount;
+    world->pairCount = header.pairCount;
 
     const uint8_t* in = buffer;
     int32_t cursor = (int32_t)sizeof(header);
     int32_t cap = world->bodyCapacity;
-#define M2_READ_BLOCK(dst, bytes)                                                                  \
+#define M2_READ(dst, bytes)                                                                        \
     do                                                                                             \
     {                                                                                              \
         memcpy(dst, in + cursor, (size_t)(bytes));                                                 \
-        cursor += (bytes);                                                                         \
+        cursor += (int32_t)(bytes);                                                                \
     } while (0)
-    M2_READ_BLOCK(world->transforms, cap * (int32_t)sizeof(m2Transform));
-    M2_READ_BLOCK(world->linearVelocities, cap * (int32_t)sizeof(m2Vec2));
-    M2_READ_BLOCK(world->angularVelocities, cap * (int32_t)sizeof(float));
-    M2_READ_BLOCK(world->gravityScales, cap * (int32_t)sizeof(float));
-    M2_READ_BLOCK(world->userData, cap * (int32_t)sizeof(uint64_t));
-    M2_READ_BLOCK(world->types, cap * (int32_t)sizeof(uint8_t));
-    M2_READ_BLOCK(world->alive, cap * (int32_t)sizeof(uint8_t));
-    M2_READ_BLOCK(world->generations, cap * (int32_t)sizeof(uint16_t));
-    M2_READ_BLOCK(world->freeQueue, cap * (int32_t)sizeof(int32_t));
-#undef M2_READ_BLOCK
+    M2_READ(world->transforms, cap * sizeof(m2Transform));
+    M2_READ(world->linearVelocities, cap * sizeof(m2Vec2));
+    M2_READ(world->angularVelocities, cap * sizeof(float));
+    M2_READ(world->gravityScales, cap * sizeof(float));
+    M2_READ(world->userData, cap * sizeof(uint64_t));
+    M2_READ(world->types, cap * sizeof(uint8_t));
+    M2_READ(world->alive, cap * sizeof(uint8_t));
+    M2_READ(world->generations, cap * sizeof(uint16_t));
+    M2_READ(world->freeQueue, cap * sizeof(int32_t));
+    M2_READ(world->trees, M2_TREE_COUNT * sizeof(m2DynamicTree));
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        M2_READ(world->treeNodes[t], (size_t)world->treeNodeCapacity * sizeof(m2TreeNode));
+    }
+    M2_READ(world->proxyIds, cap * sizeof(int32_t));
+    M2_READ(world->inMoved, cap * sizeof(uint8_t));
+    M2_READ(world->moved, cap * sizeof(int32_t));
+    M2_READ(world->pairKeys, (size_t)world->pairCapacity * sizeof(uint64_t));
+#undef M2_READ
     M2_ASSERT(cursor == size);
     return true;
 }
@@ -398,6 +635,8 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->angularVelocities[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
     }
+    // Pair set is sim-visible state (future contacts feed on it): hash it.
+    h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
     return h;
 }
 
@@ -444,6 +683,23 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
         world->maxBodyIndex = index + 1;
     }
 
+    // Eager proxy insertion (topic-02 §4.1): the body is visible to the
+    // broadphase the moment it exists, and pairs against everything it
+    // overlaps on the next pair update.
+    int32_t tree = (int32_t)def->type;
+    world->proxyIds[index] = m2Tree_Insert(&world->trees[tree], world->treeNodes[tree],
+                                           Fatten(TightAABB(world, index)), index);
+    if (world->proxyIds[index] == M2_NULL_NODE)
+    {
+        // Node pool exhausted: undo the body, fail as a capacity error.
+        world->alive[index] = 0;
+        world->freeHead = (world->freeHead + world->bodyCapacity - 1) % world->bodyCapacity;
+        world->freeQueue[world->freeHead] = index;
+        world->freeCount += 1;
+        return m2_nullBodyId;
+    }
+    PushMoved(world, index);
+
     m2BodyId id = {index + 1, worldId.index1, world->generations[index]};
     return id;
 }
@@ -460,6 +716,28 @@ void m2DestroyBody(m2BodyId bodyId)
     {
         return;
     }
+
+    if (world->proxyIds[index] != M2_NULL_NODE)
+    {
+        int32_t tree = world->types[index];
+        m2Tree_Remove(&world->trees[tree], world->treeNodes[tree], world->proxyIds[index]);
+        world->proxyIds[index] = M2_NULL_NODE;
+    }
+    // Drop pairs involving this body immediately (event bookending will
+    // hang end-touch emission on exactly this path, registry M19).
+    int32_t kept = 0;
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (a != index && b != index)
+        {
+            world->pairKeys[kept] = world->pairKeys[i];
+            kept += 1;
+        }
+    }
+    world->pairCount = kept;
+
     world->alive[index] = 0;
     if (world->generations[index] == UINT16_MAX)
     {

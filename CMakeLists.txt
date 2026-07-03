@@ -7,6 +7,7 @@ include(cmake/CompilerFlags.cmake)
 
 add_library(maul2d STATIC
     src/core.c
+    src/dynamic_tree.c
     src/math_functions.c
     src/world.c)
 target_include_directories(maul2d PUBLIC include)
@@ -27,6 +28,12 @@ add_executable(test_world test/test_world.c)
 target_link_libraries(test_world PRIVATE maul2d)
 maul2d_apply_flags(test_world)
 add_test(NAME world COMMAND test_world)
+
+add_executable(test_broadphase test/test_broadphase.c)
+target_link_libraries(test_broadphase PRIVATE maul2d)
+target_include_directories(test_broadphase PRIVATE src)
+maul2d_apply_flags(test_broadphase)
+add_test(NAME broadphase COMMAND test_broadphase)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
