@@ -10,6 +10,7 @@
 #include "dynamic_tree.h"
 #include "maul2d/body.h"
 #include "maul2d/events.h"
+#include "maul2d/joint.h"
 #include "maul2d/world.h"
 #include "shape_internal.h"
 
@@ -63,6 +64,27 @@ typedef struct m2World
     int32_t shapeFreeTail;
     int32_t shapeFreeCount;
     int32_t shapeRetiredCount;
+
+    // Joints (slice 8): same id discipline; impulses are warm-start
+    // snapshot state. type: 0 = distance, 1 = revolute.
+    int32_t jointCapacity;
+    int32_t maxJointIndex;
+    uint8_t* jointType;
+    uint8_t* jointAlive;
+    int32_t* jointBodyA;
+    int32_t* jointBodyB;
+    m2Vec2* jointLocalAnchorA;
+    m2Vec2* jointLocalAnchorB;
+    float* jointLength;
+    float* jointHertz;
+    float* jointDamping;
+    m2Vec2* jointImpulse; // distance uses .x only
+    uint16_t* jointGenerations;
+    int32_t* jointFreeQueue;
+    int32_t jointFreeHead;
+    int32_t jointFreeTail;
+    int32_t jointFreeCount;
+    int32_t jointRetiredCount;
 
     // Broadphase: per-type trees; leaves are SHAPE proxies (topic-02 D1).
     m2DynamicTree trees[M2_TREE_COUNT];

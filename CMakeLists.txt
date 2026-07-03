@@ -76,6 +76,12 @@ target_include_directories(test_events PRIVATE src)
 maul2d_apply_flags(test_events)
 add_test(NAME events COMMAND test_events)
 
+add_executable(test_joints test/test_joints.c)
+target_link_libraries(test_joints PRIVATE maul2d)
+target_include_directories(test_joints PRIVATE src)
+maul2d_apply_flags(test_joints)
+add_test(NAME joints COMMAND test_joints)
+
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)

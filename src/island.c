@@ -94,6 +94,22 @@ void m2UpdateIslandsAndWake(m2World* world)
         }
     }
 
+    // Joints connect islands exactly like touching contacts do.
+    for (int32_t j = 0; j < world->maxJointIndex; ++j)
+    {
+        if (world->jointAlive[j] == 0)
+        {
+            continue;
+        }
+        int32_t bodyA = world->jointBodyA[j];
+        int32_t bodyB = world->jointBodyB[j];
+        if (world->types[bodyA] == (uint8_t)m2_dynamicBody &&
+            world->types[bodyB] == (uint8_t)m2_dynamicBody)
+        {
+            Union(parent, bodyA, bodyB);
+        }
+    }
+
     // Fold member-awake and disturbance flags up to the roots.
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
     {

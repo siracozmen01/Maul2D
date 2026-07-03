@@ -54,7 +54,8 @@ jobs:
           "$BIN/test_islands$SUFFIX" | tee -a out.txt
           "$BIN/test_ccd$SUFFIX" | tee -a out.txt
           "$BIN/test_events$SUFFIX" | tee -a out.txt
-          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          "$BIN/test_joints$SUFFIX" | tee -a out.txt
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,13 +75,13 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT)_HASH=' hashes/*.txt | tee all-hashes.txt
+          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT)_HASH=' hashes/*.txt | tee all-hashes.txt
           CELLS=6
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
           DISTINCT=$(sort -u all-hashes.txt | wc -l)
-          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "9" ]; then
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "10" ]; then
             echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi
@@ -106,6 +107,7 @@ jobs:
           ./build/test_islands
           ./build/test_ccd
           ./build/test_events
+          ./build/test_joints
 
   format:
     name: clang-format

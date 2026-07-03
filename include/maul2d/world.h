@@ -30,6 +30,7 @@ extern "C"
         m2Vec2 gravity;       // meters/s^2, applied to dynamic bodies
         int32_t bodyCapacity; // fixed capacities for now (no growth yet)
         int32_t shapeCapacity;
+        int32_t jointCapacity;
         int32_t internalValue;
     } m2WorldDef;
 

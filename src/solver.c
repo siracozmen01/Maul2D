@@ -71,6 +71,23 @@ typedef struct m2ConstraintPoint
     uint16_t persisted;
 } m2ConstraintPoint;
 
+typedef struct m2JointConstraint
+{
+    int32_t jointIndex;
+    int32_t bodyA;
+    int32_t bodyB;
+    uint8_t type; // 0 distance, 1 revolute
+    m2Vec2 rA;    // world-rotated anchors at prepare
+    m2Vec2 rB;
+    m2Vec2 axis;         // distance: unit axis at prepare
+    float baseC;         // distance: C0; revolute uses baseCVec
+    m2Vec2 baseCVec;     // revolute: C0
+    float axialMass;     // distance
+    float k11, k12, k22; // revolute 2x2 effective mass
+    m2Softness softness;
+    m2Vec2 impulse; // accumulated (x only for distance)
+} m2JointConstraint;
+
 typedef struct m2ContactConstraint
 {
     int32_t pairIndex;
@@ -89,7 +106,8 @@ typedef struct m2ContactConstraint
 
 int32_t m2ContactConstraintSize(void)
 {
-    return (int32_t)sizeof(m2ContactConstraint);
+    // Joint constraints ride in the tail of the same scratch block.
+    return (int32_t)sizeof(m2ContactConstraint) + (int32_t)sizeof(m2JointConstraint);
 }
 
 static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints, float h)
@@ -356,6 +374,171 @@ static void StoreImpulses(m2World* world, m2ContactConstraint* constraints, int3
     }
 }
 
+static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
+{
+    // Stiff default softness for hertz==0 (F-T5-4 surface pending).
+    int32_t count = 0;
+    for (int32_t j = 0; j < world->maxJointIndex; ++j)
+    {
+        if (world->jointAlive[j] == 0)
+        {
+            continue;
+        }
+        int32_t bodyA = world->jointBodyA[j];
+        int32_t bodyB = world->jointBodyB[j];
+        if ((world->types[bodyA] != (uint8_t)m2_dynamicBody || world->asleep[bodyA] != 0) &&
+            (world->types[bodyB] != (uint8_t)m2_dynamicBody || world->asleep[bodyB] != 0))
+        {
+            continue; // both ends inert this step
+        }
+        m2JointConstraint* c = joints + count;
+        count += 1;
+        c->jointIndex = j;
+        c->bodyA = bodyA;
+        c->bodyB = bodyB;
+        c->type = world->jointType[j];
+        float hertz = world->jointHertz[j] > 0.0f ? world->jointHertz[j] : 60.0f;
+        float damping = world->jointHertz[j] > 0.0f ? world->jointDamping[j] : 2.0f;
+        c->softness = MakeSoft(hertz, damping, h);
+        c->impulse = world->jointImpulse[j];
+
+        m2Rot qA = world->transforms[bodyA].q;
+        m2Rot qB = world->transforms[bodyB].q;
+        c->rA = Rotate(qA, world->jointLocalAnchorA[j]);
+        c->rB = Rotate(qB, world->jointLocalAnchorB[j]);
+        float dx = (float)(world->transforms[bodyB].p.x - world->transforms[bodyA].p.x) + c->rB.x -
+                   c->rA.x;
+        float dy = (float)(world->transforms[bodyB].p.y - world->transforms[bodyA].p.y) + c->rB.y -
+                   c->rA.y;
+        float mA = world->invMass[bodyA];
+        float iA = world->invInertia[bodyA];
+        float mB = world->invMass[bodyB];
+        float iB = world->invInertia[bodyB];
+
+        if (c->type == 0)
+        {
+            float length = sqrtf(dx * dx + dy * dy);
+            c->axis = length > 1.19209290e-7f ? (m2Vec2){dx / length, dy / length}
+                                              : (m2Vec2){0.0f, 1.0f}; // canonical fallback
+            c->baseC = length - world->jointLength[j];
+            float crA = Cross(c->rA, c->axis);
+            float crB = Cross(c->rB, c->axis);
+            float k = mA + mB + iA * crA * crA + iB * crB * crB;
+            c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
+        }
+        else
+        {
+            c->baseCVec = (m2Vec2){dx, dy};
+            c->k11 = mA + mB + iA * c->rA.y * c->rA.y + iB * c->rB.y * c->rB.y;
+            c->k12 = -iA * c->rA.x * c->rA.y - iB * c->rB.x * c->rB.y;
+            c->k22 = mA + mB + iA * c->rA.x * c->rA.x + iB * c->rB.x * c->rB.x;
+        }
+    }
+    return count;
+}
+
+static void ApplyJointImpulse(m2World* world, const m2JointConstraint* c, m2Vec2 P)
+{
+    float mA = world->invMass[c->bodyA];
+    float iA = world->invInertia[c->bodyA];
+    float mB = world->invMass[c->bodyB];
+    float iB = world->invInertia[c->bodyB];
+    world->linearVelocities[c->bodyA].x -= mA * P.x;
+    world->linearVelocities[c->bodyA].y -= mA * P.y;
+    world->angularVelocities[c->bodyA] -= iA * Cross(c->rA, P);
+    world->linearVelocities[c->bodyB].x += mB * P.x;
+    world->linearVelocities[c->bodyB].y += mB * P.y;
+    world->angularVelocities[c->bodyB] += iB * Cross(c->rB, P);
+}
+
+static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t count)
+{
+    for (int32_t i = 0; i < count; ++i)
+    {
+        m2JointConstraint* c = joints + i;
+        m2Vec2 P = c->type == 0 ? (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y}
+                                : c->impulse;
+        ApplyJointImpulse(world, c, P);
+    }
+}
+
+static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count, bool useBias)
+{
+    for (int32_t i = 0; i < count; ++i)
+    {
+        m2JointConstraint* c = joints + i;
+        m2Vec2 vA = world->linearVelocities[c->bodyA];
+        float wA = world->angularVelocities[c->bodyA];
+        m2Vec2 vB = world->linearVelocities[c->bodyB];
+        float wB = world->angularVelocities[c->bodyB];
+        m2Vec2 dp = {world->deltaPositions[c->bodyB].x - world->deltaPositions[c->bodyA].x,
+                     world->deltaPositions[c->bodyB].y - world->deltaPositions[c->bodyA].y};
+        m2Vec2 drB = Rotate(world->deltaRotations[c->bodyB], c->rB);
+        m2Vec2 drA = Rotate(world->deltaRotations[c->bodyA], c->rA);
+        m2Vec2 ds = {dp.x + (drB.x - c->rB.x) - (drA.x - c->rA.x),
+                     dp.y + (drB.y - c->rB.y) - (drA.y - c->rA.y)};
+
+        if (c->type == 0)
+        {
+            float bias = 0.0f;
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (useBias)
+            {
+                float C = c->baseC + ds.x * c->axis.x + ds.y * c->axis.y;
+                bias = c->softness.massScale * c->softness.biasRate * C;
+                massScale = c->softness.massScale;
+                impulseScale = c->softness.impulseScale;
+            }
+            m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
+            m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
+            float cdot = (vrB.x - vrA.x) * c->axis.x + (vrB.y - vrA.y) * c->axis.y;
+            float impulse = -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
+            c->impulse.x += impulse;
+            ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
+        }
+        else
+        {
+            m2Vec2 bias = {0.0f, 0.0f};
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (useBias)
+            {
+                m2Vec2 C = {c->baseCVec.x + ds.x, c->baseCVec.y + ds.y};
+                bias.x = c->softness.massScale * c->softness.biasRate * C.x;
+                bias.y = c->softness.massScale * c->softness.biasRate * C.y;
+                massScale = c->softness.massScale;
+                impulseScale = c->softness.impulseScale;
+            }
+            m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
+            m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
+            m2Vec2 cdot = {vrB.x - vrA.x, vrB.y - vrA.y};
+            m2Vec2 b = {massScale * cdot.x + bias.x, massScale * cdot.y + bias.y};
+            // Solve K * impulse = -b (2x2, guarded determinant: row-skip law).
+            float det = c->k11 * c->k22 - c->k12 * c->k12;
+            if (det <= 0.0f)
+            {
+                continue;
+            }
+            float invDet = 1.0f / det;
+            m2Vec2 impulse = {-invDet * (c->k22 * b.x - c->k12 * b.y) - impulseScale * c->impulse.x,
+                              -invDet * (c->k11 * b.y - c->k12 * b.x) -
+                                  impulseScale * c->impulse.y};
+            c->impulse.x += impulse.x;
+            c->impulse.y += impulse.y;
+            ApplyJointImpulse(world, c, impulse);
+        }
+    }
+}
+
+static void StoreJointImpulses(m2World* world, m2JointConstraint* joints, int32_t count)
+{
+    for (int32_t i = 0; i < count; ++i)
+    {
+        world->jointImpulse[joints[i].jointIndex] = joints[i].impulse;
+    }
+}
+
 void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 {
     float h = dt / (float)substepCount;
@@ -371,6 +554,10 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 
     m2ContactConstraint* constraints = (m2ContactConstraint*)world->constraintScratch;
     int32_t constraintCount = PrepareContacts(world, constraints, h);
+    m2JointConstraint* joints =
+        (m2JointConstraint*)((uint8_t*)world->constraintScratch +
+                             (size_t)world->pairCapacity * sizeof(m2ContactConstraint));
+    int32_t jointCount = PrepareJoints(world, joints, h);
 
     for (int32_t sub = 0; sub < substepCount; ++sub)
     {
@@ -386,7 +573,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             world->linearVelocities[i].y += world->gravity.y * world->gravityScales[i] * h;
         }
 
+        WarmStartJoints(world, joints, jointCount);
         WarmStart(world, constraints, constraintCount);
+        SolveJoints(world, joints, jointCount, true); // joints before contacts (topic-05 §5)
         SolveContacts(world, constraints, constraintCount, invH, true);
 
         // Bullet substep origins, captured before positions move.
@@ -416,9 +605,11 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         }
 
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
+        SolveJoints(world, joints, jointCount, false);
         SolveContacts(world, constraints, constraintCount, invH, false);
     }
 
     ApplyRestitution(world, constraints, constraintCount);
     StoreImpulses(world, constraints, constraintCount);
+    StoreJointImpulses(world, joints, jointCount);
 }
