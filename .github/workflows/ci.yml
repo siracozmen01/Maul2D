@@ -89,6 +89,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check formatting
+        # Version pinned: formatter verdicts drift across major versions
+        # (the same lesson as pinning compilers for determinism).
         run: |
-          sudo apt-get install -y clang-format >/dev/null
+          pip install clang-format==22.1.5 >/dev/null
+          clang-format --version
           clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c
