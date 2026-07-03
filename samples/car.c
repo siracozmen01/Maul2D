@@ -34,7 +34,7 @@ int main(void)
         float x = i == 0 ? -0.6f : 0.6f;
         m2BodyDef wheelDef = m2DefaultBodyDef();
         wheelDef.type = m2_dynamicBody;
-        wheelDef.position = (m2Pos2){x, 0.55};
+        wheelDef.position = (m2Pos2){(double)x, 0.55};
         m2BodyId wheel = m2CreateBody(world, &wheelDef);
         m2ShapeDef tireShape = m2DefaultShapeDef();
         tireShape.friction = 0.9f;
