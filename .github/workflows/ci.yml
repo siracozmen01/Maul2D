@@ -82,7 +82,7 @@ jobs:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
           DISTINCT=$(sort -u all-hashes.txt | wc -l)
-          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "11" ]; then
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "12" ]; then
             echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi

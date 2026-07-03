@@ -689,6 +689,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
     M2_ALLOC(pairTouching, world->pairCapacity, uint8_t);
     M2_ALLOC(touchingScratch, world->pairCapacity, uint8_t);
+    M2_ALLOC(queryScratch, cap, int32_t);
     M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
     M2_ALLOC(endEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pendingEndEvents, world->pairCapacity, m2ContactEndEvent);
@@ -818,6 +819,7 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->pairKeys);
     free(world->pairTouching);
     free(world->touchingScratch);
+    free(world->queryScratch);
     free(world->beginEvents);
     free(world->endEvents);
     free(world->pendingEndEvents);

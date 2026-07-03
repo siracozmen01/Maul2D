@@ -125,6 +125,7 @@ typedef struct m2World
     uint8_t* islandDisturbed; // island flags scratch (step-transient)
     m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)
     uint8_t* touchingScratch; // pair-touching carry scratch (step-transient)
+    int32_t* queryScratch;    // shapeCapacity ints (query-transient, never snapshot)
 
     // Event buffers (world-owned observer stream; cleared at Step start
     // and by Restore; never snapshot state).

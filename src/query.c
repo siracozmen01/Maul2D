@@ -1,0 +1,545 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Sirac Ozmen
+//
+// World queries (topic-09 API surface): closest ray cast and AABB
+// overlap over the broadphase trees. Read-only by construction - no
+// world state is touched, so a query storm between steps cannot move
+// the simulation hash. Results are canonical: the ray tie-breaks equal
+// fractions on the lower shape index, overlap lists sort ascending.
+//
+// Shape kernels are adapted from Box2D v3.1.1 geometry.c (MIT,
+// Copyright Erin Catto), reworked for Maul's frames: the ray drops
+// into each body's local frame through one f64->f32 crossing, exactly
+// like the narrowphase, so casts stay exact far from the origin.
+
+#include "world_internal.h"
+
+#include "maul2d/base.h"
+
+#include <math.h>
+#include <stdlib.h>
+
+typedef struct m2CastHit
+{
+    m2Vec2 point; // body-local
+    m2Vec2 normal;
+    float fraction; // of the local ray length parameter (0..maxFraction)
+    bool hit;
+} m2CastHit;
+
+static float LengthAndNormalize(m2Vec2* out, m2Vec2 v)
+{
+    float length = sqrtf(v.x * v.x + v.y * v.y);
+    if (length < 1.19209290e-7f)
+    {
+        *out = (m2Vec2){0.0f, 0.0f};
+        return 0.0f;
+    }
+    out->x = v.x / length;
+    out->y = v.y / length;
+    return length;
+}
+
+// Circle kernel (reference structure).
+static m2CastHit RayCastCircle(m2Vec2 p1, m2Vec2 d, float maxFraction, m2Vec2 center, float radius)
+{
+    m2CastHit output = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+    m2Vec2 s = {p1.x - center.x, p1.y - center.y};
+    float rr = radius * radius;
+
+    m2Vec2 unit;
+    float length = LengthAndNormalize(&unit, d);
+    if (length == 0.0f)
+    {
+        if (s.x * s.x + s.y * s.y < rr)
+        {
+            output.point = p1;
+            output.hit = true;
+        }
+        return output;
+    }
+
+    float t = -(s.x * unit.x + s.y * unit.y);
+    m2Vec2 c = {s.x + t * unit.x, s.y + t * unit.y};
+    float cc = c.x * c.x + c.y * c.y;
+    if (cc > rr)
+    {
+        return output;
+    }
+
+    float h = sqrtf(rr - cc);
+    float fraction = t - h;
+    if (fraction < 0.0f || maxFraction * length < fraction)
+    {
+        if (s.x * s.x + s.y * s.y < rr)
+        {
+            output.point = p1;
+            output.hit = true;
+        }
+        return output;
+    }
+
+    m2Vec2 hitPoint = {s.x + fraction * unit.x, s.y + fraction * unit.y};
+    float invRadius = radius > 0.0f ? 1.0f / radius : 0.0f;
+    output.fraction = fraction / length;
+    output.normal = (m2Vec2){hitPoint.x * invRadius, hitPoint.y * invRadius};
+    output.point =
+        (m2Vec2){center.x + radius * output.normal.x, center.y + radius * output.normal.y};
+    output.hit = true;
+    return output;
+}
+
+// Two-sided segment kernel (reference structure).
+static m2CastHit RayCastSegment(m2Vec2 p1, m2Vec2 d, float maxFraction, m2Vec2 v1, m2Vec2 v2)
+{
+    m2CastHit output = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+    m2Vec2 e = {v2.x - v1.x, v2.y - v1.y};
+    m2Vec2 eUnit;
+    float length = LengthAndNormalize(&eUnit, e);
+    if (length == 0.0f)
+    {
+        return output;
+    }
+
+    m2Vec2 normal = {eUnit.y, -eUnit.x}; // right perp
+    float numerator = normal.x * (v1.x - p1.x) + normal.y * (v1.y - p1.y);
+    float denominator = normal.x * d.x + normal.y * d.y;
+    if (denominator == 0.0f)
+    {
+        return output;
+    }
+
+    float t = numerator / denominator;
+    if (t < 0.0f || maxFraction < t)
+    {
+        return output;
+    }
+
+    m2Vec2 p = {p1.x + t * d.x, p1.y + t * d.y};
+    float s = (p.x - v1.x) * eUnit.x + (p.y - v1.y) * eUnit.y;
+    if (s < 0.0f || length < s)
+    {
+        return output;
+    }
+    if (numerator > 0.0f)
+    {
+        normal = (m2Vec2){-normal.x, -normal.y};
+    }
+    output.fraction = t;
+    output.point = p;
+    output.normal = normal;
+    output.hit = true;
+    return output;
+}
+
+// Capsule kernel (reference structure).
+static m2CastHit RayCastCapsule(m2Vec2 p1, m2Vec2 d, float maxFraction, m2Vec2 v1, m2Vec2 v2,
+                                float radius)
+{
+    m2CastHit output = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+    m2Vec2 a;
+    float capsuleLength = LengthAndNormalize(&a, (m2Vec2){v2.x - v1.x, v2.y - v1.y});
+    if (capsuleLength == 0.0f)
+    {
+        return RayCastCircle(p1, d, maxFraction, v1, radius);
+    }
+
+    m2Vec2 q = {p1.x - v1.x, p1.y - v1.y};
+    float qa = q.x * a.x + q.y * a.y;
+    m2Vec2 qp = {q.x - qa * a.x, q.y - qa * a.y};
+
+    if (qp.x * qp.x + qp.y * qp.y < radius * radius)
+    {
+        if (qa < 0.0f)
+        {
+            return RayCastCircle(p1, d, maxFraction, v1, radius);
+        }
+        if (qa > capsuleLength)
+        {
+            return RayCastCircle(p1, d, maxFraction, v2, radius);
+        }
+        output.point = p1;
+        output.hit = true;
+        return output;
+    }
+
+    m2Vec2 n = {a.y, -a.x};
+    m2Vec2 u;
+    float rayLength = LengthAndNormalize(&u, d);
+    if (rayLength == 0.0f)
+    {
+        return output;
+    }
+
+    float den = -a.x * u.y + u.x * a.y;
+    if (den > -1.19209290e-7f && den < 1.19209290e-7f)
+    {
+        return output; // parallel and outside
+    }
+
+    m2Vec2 b1 = {q.x - radius * n.x, q.y - radius * n.y};
+    m2Vec2 b2 = {q.x + radius * n.x, q.y + radius * n.y};
+    float invDen = 1.0f / den;
+    float s21 = (a.x * b1.y - b1.x * a.y) * invDen;
+    float s22 = (a.x * b2.y - b2.x * a.y) * invDen;
+
+    float s2;
+    m2Vec2 b;
+    if (s21 < s22)
+    {
+        s2 = s21;
+        b = b1;
+    }
+    else
+    {
+        s2 = s22;
+        b = b2;
+        n = (m2Vec2){-n.x, -n.y};
+    }
+
+    if (s2 < 0.0f || maxFraction * rayLength < s2)
+    {
+        return output;
+    }
+
+    float s1 = (-b.x * u.y + u.x * b.y) * invDen;
+    if (s1 < 0.0f)
+    {
+        return RayCastCircle(p1, d, maxFraction, v1, radius);
+    }
+    if (capsuleLength < s1)
+    {
+        return RayCastCircle(p1, d, maxFraction, v2, radius);
+    }
+
+    float lerp = s1 / capsuleLength;
+    output.fraction = s2 / rayLength;
+    output.point = (m2Vec2){v1.x + lerp * (v2.x - v1.x) + radius * n.x,
+                            v1.y + lerp * (v2.y - v1.y) + radius * n.y};
+    output.normal = n;
+    output.hit = true;
+    return output;
+}
+
+// Sharp polygon kernel (reference structure, radius == 0 path).
+static m2CastHit RayCastSharpPolygon(m2Vec2 p1In, m2Vec2 d, float maxFraction,
+                                     const m2Polygon* shape)
+{
+    m2CastHit output = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+    // Shift the math to the first vertex (the polygon may sit far from
+    // the body origin).
+    m2Vec2 base = shape->vertices[0];
+    m2Vec2 p1 = {p1In.x - base.x, p1In.y - base.y};
+
+    float lower = 0.0f;
+    float upper = maxFraction;
+    int32_t index = -1;
+
+    for (int32_t i = 0; i < shape->count; ++i)
+    {
+        m2Vec2 vertex = {shape->vertices[i].x - base.x, shape->vertices[i].y - base.y};
+        float numerator =
+            shape->normals[i].x * (vertex.x - p1.x) + shape->normals[i].y * (vertex.y - p1.y);
+        float denominator = shape->normals[i].x * d.x + shape->normals[i].y * d.y;
+
+        if (denominator == 0.0f)
+        {
+            if (numerator < 0.0f)
+            {
+                return output;
+            }
+        }
+        else
+        {
+            if (denominator < 0.0f && numerator < lower * denominator)
+            {
+                lower = numerator / denominator;
+                index = i;
+            }
+            else if (denominator > 0.0f && numerator < upper * denominator)
+            {
+                upper = numerator / denominator;
+            }
+        }
+
+        if (upper < lower)
+        {
+            return output;
+        }
+    }
+
+    if (index >= 0)
+    {
+        output.fraction = lower;
+        output.normal = shape->normals[index];
+        output.point = (m2Vec2){p1In.x + lower * d.x, p1In.y + lower * d.y};
+        output.hit = true;
+    }
+    else
+    {
+        output.point = p1In;
+        output.hit = true;
+    }
+    return output;
+}
+
+static void TakeBetter(m2CastHit* best, m2CastHit candidate)
+{
+    if (candidate.hit && (!best->hit || candidate.fraction < best->fraction))
+    {
+        *best = candidate;
+    }
+}
+
+// Rounded polygons cast as the union of offset edges and vertex
+// circles: exact, and built from kernels that are already exact.
+static m2CastHit RayCastPolygon(m2Vec2 p1, m2Vec2 d, float maxFraction, const m2Polygon* shape)
+{
+    if (shape->radius == 0.0f)
+    {
+        return RayCastSharpPolygon(p1, d, maxFraction, shape);
+    }
+    m2CastHit best = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+    for (int32_t i = 0; i < shape->count; ++i)
+    {
+        int32_t j = i + 1 < shape->count ? i + 1 : 0;
+        m2Vec2 offset = {shape->normals[i].x * shape->radius, shape->normals[i].y * shape->radius};
+        m2Vec2 e1 = {shape->vertices[i].x + offset.x, shape->vertices[i].y + offset.y};
+        m2Vec2 e2 = {shape->vertices[j].x + offset.x, shape->vertices[j].y + offset.y};
+        TakeBetter(&best, RayCastSegment(p1, d, maxFraction, e1, e2));
+        TakeBetter(&best, RayCastCircle(p1, d, maxFraction, shape->vertices[i], shape->radius));
+    }
+    return best;
+}
+
+static m2CastHit RayCastGeometry(const m2ShapeGeometry* geometry, m2Vec2 p1, m2Vec2 d,
+                                 float maxFraction)
+{
+    switch (geometry->type)
+    {
+    case m2_circleShape:
+        return RayCastCircle(p1, d, maxFraction, geometry->circle.center, geometry->circle.radius);
+    case m2_capsuleShape:
+        return RayCastCapsule(p1, d, maxFraction, geometry->capsule.point1,
+                              geometry->capsule.point2, geometry->capsule.radius);
+    case m2_segmentShape:
+        return RayCastSegment(p1, d, maxFraction, geometry->segment.point1,
+                              geometry->segment.point2);
+    default:
+        return RayCastPolygon(p1, d, maxFraction, &geometry->polygon);
+    }
+}
+
+// Ray vs one shape in the body frame: one f64 subtraction per body is
+// the only precision crossing, same law as the narrowphase.
+static m2CastHit RayCastShape(const m2World* world, int32_t shapeIndex, m2Pos2 origin, m2Vec2 d,
+                              float maxFraction)
+{
+    int32_t body = world->shapeBody[shapeIndex];
+    m2Transform xf = world->transforms[body];
+    m2Vec2 rel = {(float)(origin.x - xf.p.x), (float)(origin.y - xf.p.y)};
+    // Inverse-rotate into the body frame.
+    m2Vec2 pLocal = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+    m2Vec2 dLocal = {xf.q.c * d.x + xf.q.s * d.y, -xf.q.s * d.x + xf.q.c * d.y};
+    m2CastHit hit = RayCastGeometry(&world->shapeGeometry[shapeIndex], pLocal, dLocal, maxFraction);
+    if (hit.hit)
+    {
+        // Rotate the normal back out; the point is rebuilt in f64 by
+        // the caller from the fraction.
+        m2Vec2 n = hit.normal;
+        hit.normal = (m2Vec2){xf.q.c * n.x - xf.q.s * n.y, xf.q.s * n.x + xf.q.c * n.y};
+    }
+    return hit;
+}
+
+typedef struct m2RayState
+{
+    m2Pos2 origin;
+    m2Vec2 translation;
+    float fraction; // current best (starts at 1)
+    int32_t shapeIndex;
+    m2Vec2 normal;
+    bool hit;
+    bool initialOverlap;
+} m2RayState;
+
+// Node cull: segment AABB overlap plus the reference's separating-line
+// test, all in f64 so far-from-origin worlds cull exactly.
+static bool RayMissesNode(const m2RayState* ray, m2AABB aabb)
+{
+    double p1x = ray->origin.x;
+    double p1y = ray->origin.y;
+    double p2x = p1x + (double)ray->fraction * (double)ray->translation.x;
+    double p2y = p1y + (double)ray->fraction * (double)ray->translation.y;
+    double segLoX = p1x < p2x ? p1x : p2x;
+    double segHiX = p1x < p2x ? p2x : p1x;
+    double segLoY = p1y < p2y ? p1y : p2y;
+    double segHiY = p1y < p2y ? p2y : p1y;
+    if (segLoX > aabb.upperBound.x || segHiX < aabb.lowerBound.x || segLoY > aabb.upperBound.y ||
+        segHiY < aabb.lowerBound.y)
+    {
+        return true;
+    }
+    // Separating line through the ray direction's perpendicular.
+    double cx = 0.5 * (aabb.lowerBound.x + aabb.upperBound.x);
+    double cy = 0.5 * (aabb.lowerBound.y + aabb.upperBound.y);
+    double hx = 0.5 * (aabb.upperBound.x - aabb.lowerBound.x);
+    double hy = 0.5 * (aabb.upperBound.y - aabb.lowerBound.y);
+    double vx = -(p2y - p1y);
+    double vy = p2x - p1x;
+    double separation = fabs(vx * (p1x - cx) + vy * (p1y - cy)) - (fabs(vx) * hx + fabs(vy) * hy);
+    return separation > 0.0;
+}
+
+static void RayCastTree(const m2World* world, int32_t treeIndex, m2RayState* ray)
+{
+    const m2DynamicTree* tree = &world->trees[treeIndex];
+    const m2TreeNode* nodes = world->treeNodes[treeIndex];
+    int32_t stack[256];
+    int32_t top = 0;
+    if (tree->root != M2_NULL_NODE)
+    {
+        stack[top++] = tree->root;
+    }
+    while (top > 0)
+    {
+        int32_t index = stack[--top];
+        if (RayMissesNode(ray, nodes[index].aabb))
+        {
+            continue;
+        }
+        if (nodes[index].height > 0)
+        {
+            M2_ASSERT(top + 2 <= 256);
+            // Push child2 first so child1 is visited first: canonical.
+            stack[top++] = nodes[index].child2;
+            stack[top++] = nodes[index].child1;
+            continue;
+        }
+        int32_t shapeIndex = nodes[index].userData;
+        if (world->shapeAlive[shapeIndex] == 0)
+        {
+            continue;
+        }
+        m2CastHit hit =
+            RayCastShape(world, shapeIndex, ray->origin, ray->translation, ray->fraction);
+        if (!hit.hit)
+        {
+            continue;
+        }
+        // Canonical winner: strictly closer, or same fraction and a
+        // lower shape index.
+        if (!ray->hit || hit.fraction < ray->fraction ||
+            (hit.fraction == ray->fraction && shapeIndex < ray->shapeIndex))
+        {
+            ray->hit = true;
+            ray->fraction = hit.fraction;
+            ray->shapeIndex = shapeIndex;
+            ray->normal = hit.normal;
+            ray->initialOverlap = hit.normal.x == 0.0f && hit.normal.y == 0.0f;
+        }
+    }
+}
+
+m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation)
+{
+    m2RayCastResult result;
+    result.shapeId = m2_nullShapeId;
+    result.point = origin;
+    result.normal = (m2Vec2){0.0f, 0.0f};
+    result.fraction = 0.0f;
+    result.hit = false;
+
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+
+    m2RayState ray;
+    ray.origin = origin;
+    ray.translation = translation;
+    ray.fraction = 1.0f;
+    ray.shapeIndex = -1;
+    ray.normal = (m2Vec2){0.0f, 0.0f};
+    ray.hit = false;
+    ray.initialOverlap = false;
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        RayCastTree(world, t, &ray);
+    }
+    if (!ray.hit)
+    {
+        return result;
+    }
+
+    result.shapeId.index1 = ray.shapeIndex + 1;
+    result.shapeId.world0 = worldId.index1;
+    result.shapeId.generation = world->shapeGenerations[ray.shapeIndex];
+    result.fraction = ray.initialOverlap ? 0.0f : ray.fraction;
+    result.point = (m2Pos2){origin.x + (double)result.fraction * (double)translation.x,
+                            origin.y + (double)result.fraction * (double)translation.y};
+    result.normal = ray.normal;
+    result.hit = true;
+    return result;
+}
+
+static int CompareShapeIndex(const void* a, const void* b)
+{
+    int32_t ia = *(const int32_t*)a;
+    int32_t ib = *(const int32_t*)b;
+    return ia < ib ? -1 : (ia > ib ? 1 : 0);
+}
+
+int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2ShapeId* results,
+                            int32_t capacity)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL || upper.x < lower.x || upper.y < lower.y)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+
+    m2AABB aabb = {lower, upper};
+    int32_t total = 0;
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        int32_t base = total;
+        int32_t hits = m2Tree_Query(&world->trees[t], world->treeNodes[t], aabb,
+                                    world->queryScratch + base, world->shapeCapacity - base);
+        for (int32_t h = 0; h < hits; ++h)
+        {
+            // In-place compaction: the write cursor can never pass the
+            // read cursor because kept <= scanned.
+            int32_t shapeIndex = world->queryScratch[base + h];
+            if (world->shapeAlive[shapeIndex] == 0)
+            {
+                continue;
+            }
+            // Tight filter: the fat tree AABB over-reports.
+            int32_t body = world->shapeBody[shapeIndex];
+            m2AABB tight =
+                m2ComputeShapeAABB(&world->shapeGeometry[shapeIndex], world->transforms[body]);
+            if (!m2AABB_Overlaps(tight, aabb))
+            {
+                continue;
+            }
+            world->queryScratch[total] = shapeIndex;
+            total += 1;
+        }
+    }
+
+    qsort(world->queryScratch, (size_t)total, sizeof(int32_t), CompareShapeIndex);
+
+    int32_t stored = total < capacity ? total : capacity;
+    for (int32_t i = 0; i < stored; ++i)
+    {
+        int32_t shapeIndex = world->queryScratch[i];
+        results[i].index1 = shapeIndex + 1;
+        results[i].world0 = worldId.index1;
+        results[i].generation = world->shapeGenerations[shapeIndex];
+    }
+    return total;
+}

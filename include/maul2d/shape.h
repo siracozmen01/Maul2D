@@ -96,6 +96,29 @@ extern "C"
 
     static const m2ShapeId m2_nullShapeId = {0, 0, 0};
 
+    /// Queries are read-only: they never touch simulation state, and
+    /// their results are canonical (closest hit with lowest-shape-index
+    /// tie break; overlap lists in ascending creation order).
+    typedef struct m2RayCastResult
+    {
+        m2ShapeId shapeId; // null when hit is false
+        m2Pos2 point;      // world hit point (ray origin on initial overlap)
+        m2Vec2 normal;     // world surface normal ((0,0) on initial overlap)
+        float fraction;    // hit = origin + fraction * translation
+        bool hit;
+    } m2RayCastResult;
+
+    /// Closest hit along origin + t * translation, t in [0, 1].
+    /// Thread class: reader.
+    m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation);
+
+    /// Fills results with up to capacity alive shapes whose tight AABB
+    /// overlaps [lower, upper], ascending shape order. Returns the total
+    /// number of overlapping shapes even when it exceeds capacity.
+    /// Thread class: reader.
+    int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2ShapeId* results,
+                                int32_t capacity);
+
 #ifdef __cplusplus
 }
 #endif
