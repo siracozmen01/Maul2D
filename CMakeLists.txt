@@ -15,6 +15,7 @@ add_library(maul2d STATIC
     src/journal.c
     src/query.c
     src/platform_thread.c
+    src/draw.c
     src/manifold.c
     src/math_functions.c
     src/shape.c

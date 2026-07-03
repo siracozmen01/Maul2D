@@ -413,8 +413,128 @@ static void TestSetType(void)
     m2DestroyWorld(world);
 }
 
+typedef struct DrawCounts
+{
+    int32_t polygons;
+    int32_t circles;
+    int32_t segments;
+    int32_t points;
+    double firstPolyX; // world x of the first polygon's first vertex
+    bool firstPolySeen;
+} DrawCounts;
+
+static void CountPolygon(const m2Vec2* verts, int32_t count, m2Pos2 origin, m2Rot rotation,
+                         uint32_t color, void* context)
+{
+    (void)color;
+    DrawCounts* c = context;
+    c->polygons += 1;
+    if (!c->firstPolySeen && count > 0)
+    {
+        c->firstPolySeen = true;
+        c->firstPolyX = origin.x + (double)(rotation.c * verts[0].x - rotation.s * verts[0].y);
+    }
+}
+
+static void CountCircle(m2Pos2 center, float radius, m2Rot rotation, uint32_t color, void* context)
+{
+    (void)center;
+    (void)radius;
+    (void)rotation;
+    (void)color;
+    ((DrawCounts*)context)->circles += 1;
+}
+
+static void CountSegment(m2Pos2 p1, m2Pos2 p2, uint32_t color, void* context)
+{
+    (void)p1;
+    (void)p2;
+    (void)color;
+    ((DrawCounts*)context)->segments += 1;
+}
+
+static void CountPoint(m2Pos2 p, float size, uint32_t color, void* context)
+{
+    (void)p;
+    (void)size;
+    (void)color;
+    ((DrawCounts*)context)->points += 1;
+}
+
+static void TestDebugDraw(void)
+{
+    // A known scene: one ground polygon, one resting box, one circle,
+    // one joint. The counting renderer must see exactly that - and a
+    // draw storm must not move a single simulation bit.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){100.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(6.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){100.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){103.0, 2.0};
+    m2BodyId ball = m2CreateBody(world, &cd);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    m2Circle circle = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(ball, &cs, &circle);
+    m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+    jd.bodyIdA = floor;
+    jd.bodyIdB = ball;
+    m2CreateDistanceJoint(world, &jd);
+
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    DrawCounts counts;
+    memset(&counts, 0, sizeof(counts));
+    m2DebugDraw draw;
+    memset(&draw, 0, sizeof(draw));
+    draw.drawPolygon = CountPolygon;
+    draw.drawCircle = CountCircle;
+    draw.drawSegment = CountSegment;
+    draw.drawPoint = CountPoint;
+    draw.drawShapes = true;
+    draw.drawJoints = true;
+    draw.drawContacts = true;
+    draw.context = &counts;
+
+    uint64_t before = m2World_Hash(world);
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Draw(world, &draw);
+    }
+    CHECK(m2World_Hash(world) == before, "a draw storm moves no bits");
+
+    memset(&counts, 0, sizeof(counts));
+    m2World_Draw(world, &draw);
+    CHECK(counts.polygons == 2, "two polygons drawn");
+    CHECK(counts.circles == 1, "one circle drawn");
+    CHECK(counts.segments == 1, "one joint segment drawn");
+    CHECK(counts.points >= 4, "joint anchors and contact points drawn");
+    CHECK(counts.firstPolySeen && counts.firstPolyX > 90.0 && counts.firstPolyX < 110.0,
+          "local vertices compose with the f64 origin to world space");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestDebugDraw();
     TestSetType();
     TestTeleport();
     TestKineticEnergy();

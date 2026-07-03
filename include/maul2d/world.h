@@ -62,6 +62,30 @@ extern "C"
     /// Generation-checked liveness. Thread class: reader.
     bool m2World_IsValid(m2WorldId worldId);
 
+    /// Debug drawing: the engine walks its state and calls back; you
+    /// render. Polygon vertices arrive BODY-LOCAL with the body's f64
+    /// origin and rotation so your renderer can compose camera-relative
+    /// doubles and stay steady far from the origin. Leave any callback
+    /// NULL to skip that primitive. Colors are 0xRRGGBB hints.
+    /// Read-only. Thread class: reader.
+    typedef struct m2DebugDraw
+    {
+        void (*drawPolygon)(const m2Vec2* localVertices, int32_t count, m2Pos2 origin,
+                            m2Rot rotation, uint32_t color, void* context);
+        void (*drawCircle)(m2Pos2 center, float radius, m2Rot rotation, uint32_t color,
+                           void* context);
+        void (*drawCapsule)(m2Pos2 p1, m2Pos2 p2, float radius, uint32_t color, void* context);
+        void (*drawSegment)(m2Pos2 p1, m2Pos2 p2, uint32_t color, void* context);
+        void (*drawPoint)(m2Pos2 p, float size, uint32_t color, void* context);
+        bool drawShapes;
+        bool drawJoints;
+        bool drawContacts;
+        bool drawAABBs;
+        void* context;
+    } m2DebugDraw;
+
+    void m2World_Draw(m2WorldId worldId, const m2DebugDraw* draw);
+
     /// Diagnostics. Counters are derived from simulation state and are
     /// therefore deterministic; profile times are wall-clock and are
     /// NOT - neither is ever snapshot state or hash input.
