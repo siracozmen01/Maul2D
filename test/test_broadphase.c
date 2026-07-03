@@ -9,6 +9,13 @@
 
 #include "world_internal.h"
 
+static m2ShapeId AttachUnitBox(m2BodyId body)
+{
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    return m2CreatePolygonShape(body, &sd, &box);
+}
+
 #include "maul2d/base.h"
 
 #include <stdio.h>
@@ -111,29 +118,33 @@ static void TestTreeStructure(void)
     free(nodes);
 }
 
+static m2AABB ShapeFat(const m2World* world, int32_t s)
+{
+    int32_t tree = world->types[world->shapeBody[s]];
+    return world->treeNodes[tree][world->proxyIds[s]].aabb;
+}
+
 static int32_t BrutePairCount(const m2World* world)
 {
     int32_t count = 0;
-    for (int32_t a = 0; a < world->maxBodyIndex; ++a)
+    for (int32_t a = 0; a < world->maxShapeIndex; ++a)
     {
-        if (world->alive[a] == 0)
+        if (world->shapeAlive[a] == 0)
         {
             continue;
         }
-        for (int32_t b = a + 1; b < world->maxBodyIndex; ++b)
+        for (int32_t b = a + 1; b < world->maxShapeIndex; ++b)
         {
-            if (world->alive[b] == 0)
+            if (world->shapeAlive[b] == 0 || world->shapeBody[a] == world->shapeBody[b])
             {
                 continue;
             }
-            if (world->types[a] != (uint8_t)m2_dynamicBody &&
-                world->types[b] != (uint8_t)m2_dynamicBody)
+            if (world->types[world->shapeBody[a]] != (uint8_t)m2_dynamicBody &&
+                world->types[world->shapeBody[b]] != (uint8_t)m2_dynamicBody)
             {
                 continue;
             }
-            m2AABB fatA = world->treeNodes[world->types[a]][world->proxyIds[a]].aabb;
-            m2AABB fatB = world->treeNodes[world->types[b]][world->proxyIds[b]].aabb;
-            count += m2AABB_Overlaps(fatA, fatB) ? 1 : 0;
+            count += m2AABB_Overlaps(ShapeFat(world, a), ShapeFat(world, b)) ? 1 : 0;
         }
     }
     return count;
@@ -155,6 +166,7 @@ static void TestPairPipeline(void)
         bd.type = m2_dynamicBody;
         bd.position = (m2Pos2){3.0 * (double)(i % 4), 3.0 * (double)(i / 4)};
         grid[i] = m2CreateBody(worldId, &bd);
+        AttachUnitBox(grid[i]);
     }
     m2World_Step(worldId, 1.0f / 60.0f, 4);
     CHECK(world->pairCount == 0, "sparse grid has no pairs");
@@ -165,6 +177,7 @@ static void TestPairPipeline(void)
     bd.type = m2_dynamicBody;
     bd.position = (m2Pos2){0.4, 0.0};
     m2BodyId intruder = m2CreateBody(worldId, &bd);
+    AttachUnitBox(intruder);
     m2World_Step(worldId, 1.0f / 60.0f, 4);
     CHECK(world->pairCount == BrutePairCount(world), "pair set matches brute force (intruder)");
     CHECK(world->pairCount >= 1, "creation overlap must produce a pair");
@@ -176,6 +189,7 @@ static void TestPairPipeline(void)
     kd.position = (m2Pos2){-6.0, 0.0};
     kd.linearVelocity = (m2Vec2){30.0f, 0.0f};
     m2BodyId sweeper = m2CreateBody(worldId, &kd);
+    m2ShapeId sweeperShape = AttachUnitBox(sweeper);
     bool sweeperPaired = false;
     for (int32_t i = 0; i < 60; ++i)
     {
@@ -185,7 +199,7 @@ static void TestPairPipeline(void)
         {
             int32_t a = (int32_t)(world->pairKeys[p] >> 32);
             int32_t b = (int32_t)(world->pairKeys[p] & 0xFFFFFFFFu);
-            if (a == sweeper.index1 - 1 || b == sweeper.index1 - 1)
+            if (a == sweeperShape.index1 - 1 || b == sweeperShape.index1 - 1)
             {
                 sweeperPaired = true;
             }
@@ -210,13 +224,13 @@ static void TestBroadphaseRollback(void)
     // A falling column over a static floor: pairs evolve as bodies drop.
     m2BodyDef floorDef = m2DefaultBodyDef();
     floorDef.position = (m2Pos2){0.0, -2.0};
-    m2CreateBody(worldId, &floorDef);
+    AttachUnitBox(m2CreateBody(worldId, &floorDef));
     for (int32_t i = 0; i < 20; ++i)
     {
         m2BodyDef bd = m2DefaultBodyDef();
         bd.type = m2_dynamicBody;
         bd.position = (m2Pos2){0.25 * (double)(i % 2), 1.5 * (double)i};
-        m2CreateBody(worldId, &bd);
+        AttachUnitBox(m2CreateBody(worldId, &bd));
     }
 
     for (int32_t i = 0; i < 30; ++i)
@@ -265,7 +279,7 @@ static uint64_t BroadphaseSweepHash(void)
     {
         m2BodyDef bd = m2DefaultBodyDef();
         bd.position = (m2Pos2){2.5 * (double)i - 15.0, -4.0};
-        m2CreateBody(worldId, &bd);
+        AttachUnitBox(m2CreateBody(worldId, &bd));
     }
 
     uint64_t h = M2_HASH_INIT;
@@ -277,7 +291,7 @@ static uint64_t BroadphaseSweepHash(void)
             bd.type = m2_dynamicBody;
             bd.position = (m2Pos2){-14.0 + 0.47 * (double)(step % 60), 6.0 + 0.03 * (double)step};
             bd.linearVelocity = (m2Vec2){(float)(step % 7) - 3.0f, 0.0f};
-            m2CreateBody(worldId, &bd);
+            AttachUnitBox(m2CreateBody(worldId, &bd));
         }
         m2World_Step(worldId, 1.0f / 60.0f, 4);
         h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));

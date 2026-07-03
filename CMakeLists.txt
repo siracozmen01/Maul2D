@@ -9,6 +9,7 @@ add_library(maul2d STATIC
     src/core.c
     src/dynamic_tree.c
     src/math_functions.c
+    src/shape.c
     src/world.c)
 target_include_directories(maul2d PUBLIC include)
 maul2d_apply_flags(maul2d)
@@ -34,6 +35,12 @@ target_link_libraries(test_broadphase PRIVATE maul2d)
 target_include_directories(test_broadphase PRIVATE src)
 maul2d_apply_flags(test_broadphase)
 add_test(NAME broadphase COMMAND test_broadphase)
+
+add_executable(test_shapes test/test_shapes.c)
+target_link_libraries(test_shapes PRIVATE maul2d)
+target_include_directories(test_shapes PRIVATE src)
+maul2d_apply_flags(test_shapes)
+add_test(NAME shapes COMMAND test_shapes)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)
