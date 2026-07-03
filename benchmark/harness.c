@@ -397,6 +397,333 @@ static SceneResult RunMaulScene(const char* name, MaulScene (*create)(void), int
     return result;
 }
 
+// --- Two-sided behavior trials -----------------------------------------
+// Each trial builds the same scene in both engines and returns one
+// scalar; the bands below referee the pair. Ramps are polygons with
+// pre-rotated vertices so neither engine needs spawn-rotation support.
+
+static void RampVertices(float halfLength, float halfThickness, float angle, float* xs, float* ys)
+{
+    float c = cosf(angle);
+    float sn = sinf(angle);
+    float cx[4] = {-halfLength, halfLength, halfLength, -halfLength};
+    float cy[4] = {-halfThickness, -halfThickness, halfThickness, halfThickness};
+    for (int i = 0; i < 4; ++i)
+    {
+        xs[i] = c * cx[i] - sn * cy[i];
+        ys[i] = sn * cx[i] + c * cy[i];
+    }
+}
+
+static double BounceTrialB2(void)
+{
+    b2WorldDef def = b2DefaultWorldDef();
+    b2WorldId world = b2CreateWorld(&def);
+    b2BodyDef gd = b2DefaultBodyDef();
+    gd.position = (b2Vec2){0.0f, -0.5f};
+    b2BodyId ground = b2CreateBody(world, &gd);
+    b2ShapeDef gs = b2DefaultShapeDef();
+    b2Polygon slab = b2MakeBox(20.0f, 0.5f);
+    b2CreatePolygonShape(ground, &gs, &slab);
+
+    b2BodyDef bd = b2DefaultBodyDef();
+    bd.type = b2_dynamicBody;
+    bd.position = (b2Vec2){0.0f, 4.0f};
+    b2BodyId ball = b2CreateBody(world, &bd);
+    b2ShapeDef sd = b2DefaultShapeDef();
+    sd.material.restitution = 0.8f;
+    b2Circle circle = {{0.0f, 0.0f}, 0.25f};
+    b2CreateCircleShape(ball, &sd, &circle);
+
+    double peak = 0.0;
+    for (int i = 0; i < 240; ++i)
+    {
+        b2World_Step(world, 1.0f / 60.0f, 4);
+        if (i > 60)
+        {
+            double y = b2Body_GetPosition(ball).y;
+            peak = y > peak ? y : peak;
+        }
+    }
+    b2DestroyWorld(world);
+    return peak;
+}
+
+static double BounceTrialM2(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(ground, &gs, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.restitution = 0.8f;
+    m2Circle circle = {{0.0f, 0.0f}, 0.25f};
+    m2CreateCircleShape(ball, &sd, &circle);
+
+    double peak = 0.0;
+    for (int i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        if (i > 60)
+        {
+            double y = m2Body_GetPosition(ball).y;
+            peak = y > peak ? y : peak;
+        }
+    }
+    m2DestroyWorld(world);
+    return peak;
+}
+
+static double RampTrialB2(float mu)
+{
+    b2WorldDef def = b2DefaultWorldDef();
+    b2WorldId world = b2CreateWorld(&def);
+    float xs[4];
+    float ys[4];
+    RampVertices(6.0f, 0.3f, -0.35f, xs, ys); // ~20 degrees down toward +x
+    b2Vec2 points[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        points[i] = (b2Vec2){xs[i], ys[i]};
+    }
+    b2Hull hull = b2ComputeHull(points, 4);
+    b2Polygon ramp = b2MakePolygon(&hull, 0.0f);
+    b2BodyDef gd = b2DefaultBodyDef();
+    b2BodyId ground = b2CreateBody(world, &gd);
+    b2ShapeDef gs = b2DefaultShapeDef();
+    gs.material.friction = mu;
+    b2CreatePolygonShape(ground, &gs, &ramp);
+
+    b2BodyDef bd = b2DefaultBodyDef();
+    bd.type = b2_dynamicBody;
+    // Sit on the upper part of the slope.
+    bd.position = (b2Vec2){-3.0f * cosf(0.35f), 3.0f * sinf(0.35f) + 0.75f};
+    b2BodyId box = b2CreateBody(world, &bd);
+    b2ShapeDef sd = b2DefaultShapeDef();
+    sd.material.friction = mu;
+    b2Polygon unit = b2MakeBox(0.3f, 0.3f);
+    b2CreatePolygonShape(box, &sd, &unit);
+
+    double x0 = b2Body_GetPosition(box).x;
+    for (int i = 0; i < 300; ++i)
+    {
+        b2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double travel = b2Body_GetPosition(box).x - x0;
+    b2DestroyWorld(world);
+    return travel;
+}
+
+static double RampTrialM2(float mu)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    float xs[4];
+    float ys[4];
+    RampVertices(6.0f, 0.3f, -0.35f, xs, ys);
+    m2Vec2 points[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        points[i] = (m2Vec2){xs[i], ys[i]};
+    }
+    m2Polygon ramp = m2MakePolygon(points, 4, 0.0f);
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    gs.friction = mu;
+    m2CreatePolygonShape(ground, &gs, &ramp);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){-3.0 * cos(0.35), 3.0 * sin(0.35) + 0.75};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.friction = mu;
+    m2Polygon unit = m2MakeBox(0.3f, 0.3f);
+    m2CreatePolygonShape(box, &sd, &unit);
+
+    double x0 = m2Body_GetPosition(box).x;
+    for (int i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double travel = m2Body_GetPosition(box).x - x0;
+    m2DestroyWorld(world);
+    return travel;
+}
+
+static double CarTrialB2(void)
+{
+    b2WorldDef def = b2DefaultWorldDef();
+    b2WorldId world = b2CreateWorld(&def);
+    b2BodyDef gd = b2DefaultBodyDef();
+    gd.position = (b2Vec2){0.0f, -0.5f};
+    b2BodyId road = b2CreateBody(world, &gd);
+    b2ShapeDef gs = b2DefaultShapeDef();
+    gs.material.friction = 0.9f;
+    b2Polygon slab = b2MakeBox(60.0f, 0.5f);
+    b2CreatePolygonShape(road, &gs, &slab);
+
+    b2BodyDef cd = b2DefaultBodyDef();
+    cd.type = b2_dynamicBody;
+    cd.position = (b2Vec2){0.0f, 1.0f};
+    b2BodyId chassis = b2CreateBody(world, &cd);
+    b2ShapeDef cs = b2DefaultShapeDef();
+    b2Polygon deck = b2MakeBox(0.9f, 0.15f);
+    b2CreatePolygonShape(chassis, &cs, &deck);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        float x = i == 0 ? -0.6f : 0.6f;
+        b2BodyDef wd = b2DefaultBodyDef();
+        wd.type = b2_dynamicBody;
+        wd.position = (b2Vec2){x, 0.55f};
+        b2BodyId wheel = b2CreateBody(world, &wd);
+        b2ShapeDef ws = b2DefaultShapeDef();
+        ws.material.friction = 0.9f;
+        b2Circle tire = {{0.0f, 0.0f}, 0.3f};
+        b2CreateCircleShape(wheel, &ws, &tire);
+        b2WheelJointDef ride = b2DefaultWheelJointDef();
+        ride.bodyIdA = chassis;
+        ride.bodyIdB = wheel;
+        ride.localAnchorA = (b2Vec2){x, -0.45f};
+        ride.localAxisA = (b2Vec2){0.0f, 1.0f};
+        ride.enableSpring = true;
+        ride.hertz = 4.0f;
+        ride.dampingRatio = 0.7f;
+        ride.enableLimit = true;
+        ride.lowerTranslation = -0.2f;
+        ride.upperTranslation = 0.2f;
+        ride.enableMotor = true;
+        ride.motorSpeed = -12.0f;
+        ride.maxMotorTorque = 20.0f;
+        b2CreateWheelJoint(world, &ride);
+    }
+
+    for (int i = 0; i < 360; ++i)
+    {
+        b2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double travel = b2Body_GetPosition(chassis).x;
+    b2Rot q = b2Body_GetRotation(chassis);
+    b2DestroyWorld(world);
+    return q.c > 0.9f ? travel : -1000.0; // flipped car disqualifies
+}
+
+static double CarTrialM2(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId road = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    gs.friction = 0.9f;
+    m2Polygon slab = m2MakeBox(60.0f, 0.5f);
+    m2CreatePolygonShape(road, &gs, &slab);
+
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){0.0, 1.0};
+    m2BodyId chassis = m2CreateBody(world, &cd);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    m2Polygon deck = m2MakeBox(0.9f, 0.15f);
+    m2CreatePolygonShape(chassis, &cs, &deck);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        float x = i == 0 ? -0.6f : 0.6f;
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){x, 0.55};
+        m2BodyId wheel = m2CreateBody(world, &wd);
+        m2ShapeDef ws = m2DefaultShapeDef();
+        ws.friction = 0.9f;
+        m2Circle tire = {{0.0f, 0.0f}, 0.3f};
+        m2CreateCircleShape(wheel, &ws, &tire);
+        m2WheelJointDef ride = m2DefaultWheelJointDef();
+        ride.bodyIdA = chassis;
+        ride.bodyIdB = wheel;
+        ride.localAnchorA = (m2Vec2){x, -0.45f};
+        ride.localAxisA = (m2Vec2){0.0f, 1.0f};
+        ride.enableSpring = true;
+        ride.hertz = 4.0f;
+        ride.dampingRatio = 0.7f;
+        ride.enableLimit = true;
+        ride.lowerTranslation = -0.2f;
+        ride.upperTranslation = 0.2f;
+        ride.enableMotor = true;
+        ride.motorSpeed = -12.0f;
+        ride.maxMotorTorque = 20.0f;
+        m2CreateWheelJoint(world, &ride);
+    }
+
+    for (int i = 0; i < 360; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double travel = m2Body_GetPosition(chassis).x;
+    m2Rot q = m2Body_GetRotation(chassis);
+    m2DestroyWorld(world);
+    return q.c > 0.9f ? travel : -1000.0;
+}
+
+static int RunTrials(void)
+{
+    int failures = 0;
+
+    double b2Peak = BounceTrialB2();
+    double m2Peak = BounceTrialM2();
+    printf("trial,bounce_peak,b2=%.3f,m2=%.3f\n", b2Peak, m2Peak);
+    if (m2Peak < 1.6 || m2Peak > 3.2 || m2Peak < b2Peak - 0.5 || m2Peak > b2Peak + 0.5)
+    {
+        printf("BAND FAIL: bounce peak m2=%.3f vs b2=%.3f\n", m2Peak, b2Peak);
+        failures += 1;
+    }
+
+    double b2Stick = RampTrialB2(0.9f);
+    double m2Stick = RampTrialM2(0.9f);
+    double b2Slide = RampTrialB2(0.05f);
+    double m2Slide = RampTrialM2(0.05f);
+    printf("trial,ramp_stick,b2=%.3f,m2=%.3f\n", b2Stick, m2Stick);
+    printf("trial,ramp_slide,b2=%.3f,m2=%.3f\n", b2Slide, m2Slide);
+    if (m2Stick < -0.15 || m2Stick > 0.15)
+    {
+        printf("BAND FAIL: high-friction box slid %.3f\n", m2Stick);
+        failures += 1;
+    }
+    if (m2Slide < 1.0 || (b2Slide > 1.0 && (m2Slide < 0.5 * b2Slide || m2Slide > 2.0 * b2Slide)))
+    {
+        printf("BAND FAIL: low-friction slide m2=%.3f vs b2=%.3f\n", m2Slide, b2Slide);
+        failures += 1;
+    }
+
+    double b2Car = CarTrialB2();
+    double m2Car = CarTrialM2();
+    printf("trial,car_travel,b2=%.3f,m2=%.3f\n", b2Car, m2Car);
+    if (m2Car < 3.0 || b2Car < 3.0)
+    {
+        printf("BAND FAIL: a car failed to drive (b2=%.3f m2=%.3f)\n", b2Car, m2Car);
+        failures += 1;
+    }
+    else if (m2Car < 0.5 * b2Car || m2Car > 2.0 * b2Car)
+    {
+        printf("BAND FAIL: car travel m2=%.3f vs b2=%.3f\n", m2Car, b2Car);
+        failures += 1;
+    }
+
+    return failures;
+}
+
 int main(void)
 {
     b2Version v = b2GetVersion();
@@ -451,5 +778,7 @@ int main(void)
             failures += 1;
         }
     }
+    failures += RunTrials();
+
     return failures > 0 ? 1 : 0;
 }
