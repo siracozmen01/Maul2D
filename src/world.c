@@ -19,7 +19,7 @@
 #define M2_BODY_COOKIE      (M2_COOKIE ^ ((int32_t)sizeof(m2BodyDef) << 8) ^ 2)
 #define M2_SHAPE_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ShapeDef) << 8) ^ 3)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 3u
+#define M2_SNAPSHOT_VERSION 4u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -322,6 +322,137 @@ static void RecomputeMass(m2World* world, int32_t bodyIndex)
     world->invInertia[bodyIndex] = inertiaCenter > 0.0f ? 1.0f / inertiaCenter : 0.0f;
 }
 
+// --- Contacts (topic-04) -------------------------------------------------------
+
+// Relative pose of shape B's body in shape A's body frame: the single
+// f64 -> f32 crossing for the contact stage (RT1-NUM-3).
+static m2RelativePose MakeRelativePose(const m2World* world, int32_t bodyA, int32_t bodyB)
+{
+    m2Transform xfA = world->transforms[bodyA];
+    m2Transform xfB = world->transforms[bodyB];
+    float dx = (float)(xfB.p.x - xfA.p.x);
+    float dy = (float)(xfB.p.y - xfA.p.y);
+    m2RelativePose pose;
+    pose.p = (m2Vec2){xfA.q.c * dx + xfA.q.s * dy, -xfA.q.s * dx + xfA.q.c * dy};
+    m2Rot rel = {xfA.q.c * xfB.q.c + xfA.q.s * xfB.q.s, xfA.q.c * xfB.q.s - xfA.q.s * xfB.q.c};
+    pose.q = m2NormalizeRot(rel); // every composition renormalizes
+    return pose;
+}
+
+// Convert a manifold computed with swapped shape roles back into the
+// canonical frame (A = lower shape index).
+static m2Manifold FlipManifold(m2Manifold in, m2RelativePose poseOfBInA)
+{
+    m2Manifold out = in;
+    for (int32_t k = 0; k < in.pointCount; ++k)
+    {
+        out.points[k].anchorA = in.points[k].anchorB;
+        out.points[k].anchorB = in.points[k].anchorA;
+    }
+    m2Vec2 n = {poseOfBInA.q.c * in.normal.x - poseOfBInA.q.s * in.normal.y,
+                poseOfBInA.q.s * in.normal.x + poseOfBInA.q.c * in.normal.y};
+    out.normal = (m2Vec2){-n.x, -n.y};
+    return out;
+}
+
+static m2RelativePose InvertPose(m2RelativePose pose)
+{
+    m2RelativePose inv;
+    inv.q = (m2Rot){pose.q.c, -pose.q.s};
+    m2Vec2 r = {inv.q.c * pose.p.x - inv.q.s * pose.p.y, inv.q.s * pose.p.x + inv.q.c * pose.p.y};
+    inv.p = (m2Vec2){-r.x, -r.y};
+    return inv;
+}
+
+static m2Manifold ComputeManifold(const m2World* world, int32_t shapeA, int32_t shapeB,
+                                  m2RelativePose pose)
+{
+    const m2ShapeGeometry* ga = &world->shapeGeometry[shapeA];
+    const m2ShapeGeometry* gb = &world->shapeGeometry[shapeB];
+
+    if (ga->type == m2_circleShape && gb->type == m2_circleShape)
+    {
+        return m2CollideCircles(&ga->circle, &gb->circle, pose);
+    }
+    if (ga->type == m2_polygonShape && gb->type == m2_circleShape)
+    {
+        return m2CollidePolygonAndCircle(&ga->polygon, &gb->circle, pose);
+    }
+    if (ga->type == m2_circleShape && gb->type == m2_polygonShape)
+    {
+        m2Manifold m = m2CollidePolygonAndCircle(&gb->polygon, &ga->circle, InvertPose(pose));
+        return FlipManifold(m, pose);
+    }
+
+    // Remaining combinations (capsule/segment/polygon-polygon) land in
+    // slice 3b with the SAT+clip kernel; until then those pairs carry an
+    // empty manifold - a recorded partial, not a silent one.
+    m2Manifold empty;
+    memset(&empty, 0, sizeof(empty));
+    return empty;
+}
+
+// Stash old (key, manifold) rows, then rebuild aligned to the new pair
+// array, carrying warm-start impulses across by pair key and point id.
+static void StashContacts(m2World* world)
+{
+    memcpy(world->oldPairScratch, world->pairKeys, (size_t)world->pairCount * sizeof(uint64_t));
+    memcpy(world->manifoldScratch, world->manifolds, (size_t)world->pairCount * sizeof(m2Manifold));
+}
+
+static void UpdateContacts(m2World* world)
+{
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        m2RelativePose pose =
+            MakeRelativePose(world, world->shapeBody[shapeA], world->shapeBody[shapeB]);
+        m2Manifold fresh = ComputeManifold(world, shapeA, shapeB, pose);
+
+        // Locate the previous manifold for this pair (both lists sorted;
+        // binary search keeps this O(P log P) worst case).
+        const m2Manifold* previous = NULL;
+        int32_t lo = 0;
+        int32_t hi = world->oldPairCount - 1;
+        while (lo <= hi)
+        {
+            int32_t mid = (lo + hi) / 2;
+            if (world->oldPairScratch[mid] == world->pairKeys[i])
+            {
+                previous = &world->manifoldScratch[mid];
+                break;
+            }
+            if (world->oldPairScratch[mid] < world->pairKeys[i])
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        if (previous != NULL)
+        {
+            for (int32_t k = 0; k < fresh.pointCount; ++k)
+            {
+                for (int32_t o = 0; o < previous->pointCount; ++o)
+                {
+                    if (previous->points[o].id == fresh.points[k].id)
+                    {
+                        fresh.points[k].normalImpulse = previous->points[o].normalImpulse;
+                        fresh.points[k].tangentImpulse = previous->points[o].tangentImpulse;
+                        fresh.points[k].flags |= 1; // persisted
+                        break;
+                    }
+                }
+            }
+        }
+        world->manifolds[i] = fresh;
+    }
+}
+
 // --- Defs & world lifecycle ----------------------------------------------------
 
 m2WorldDef m2DefaultWorldDef(void)
@@ -404,6 +535,9 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(moved, shapeCap, int32_t);
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
     M2_ALLOC(pairScratch, world->pairCapacity, uint64_t);
+    M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
+    M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
+    M2_ALLOC(manifoldScratch, world->pairCapacity, m2Manifold);
 #undef M2_ALLOC
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
@@ -484,6 +618,9 @@ void m2DestroyWorld(m2WorldId worldId)
     free(world->moved);
     free(world->pairKeys);
     free(world->pairScratch);
+    free(world->manifolds);
+    free(world->oldPairScratch);
+    free(world->manifoldScratch);
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
         free(world->treeNodes[t]);
@@ -552,7 +689,10 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
             }
         }
     }
+    world->oldPairCount = world->pairCount;
+    StashContacts(world);
     UpdatePairs(world);
+    UpdateContacts(world);
 
     world->stepCount += 1;
 }
@@ -601,6 +741,7 @@ static int32_t BlockBytes(const m2World* world)
     bytes += M2_TREE_COUNT * sizeof(m2DynamicTree);
     bytes += (size_t)M2_TREE_COUNT * (size_t)world->treeNodeCapacity * sizeof(m2TreeNode);
     bytes += (size_t)world->pairCapacity * sizeof(uint64_t);
+    bytes += (size_t)world->pairCapacity * sizeof(m2Manifold);
     return (int32_t)bytes;
 }
 
@@ -663,6 +804,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         M2_BLOCK(world->treeNodes[t], (size_t)world->treeNodeCapacity * sizeof(m2TreeNode));
     }
     M2_BLOCK(world->pairKeys, (size_t)world->pairCapacity * sizeof(uint64_t));
+    M2_BLOCK(world->manifolds, (size_t)world->pairCapacity * sizeof(m2Manifold));
 #undef M2_BLOCK
     return cursor;
 }
@@ -767,6 +909,7 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
     }
     h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
+    h = m2Hash64(h, world->manifolds, world->pairCount * (int32_t)sizeof(m2Manifold));
     return h;
 }
 

@@ -8,6 +8,7 @@ include(cmake/CompilerFlags.cmake)
 add_library(maul2d STATIC
     src/core.c
     src/dynamic_tree.c
+    src/manifold.c
     src/math_functions.c
     src/shape.c
     src/world.c)
@@ -41,6 +42,12 @@ target_link_libraries(test_shapes PRIVATE maul2d)
 target_include_directories(test_shapes PRIVATE src)
 maul2d_apply_flags(test_shapes)
 add_test(NAME shapes COMMAND test_shapes)
+
+add_executable(test_contacts test/test_contacts.c)
+target_link_libraries(test_contacts PRIVATE maul2d)
+target_include_directories(test_contacts PRIVATE src)
+maul2d_apply_flags(test_contacts)
+add_test(NAME contacts COMMAND test_contacts)
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
 if(MAUL2D_BENCHMARKS)

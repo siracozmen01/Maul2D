@@ -71,6 +71,13 @@ typedef struct m2World
     int32_t pairCapacity;
     uint64_t* pairScratch; // step-transient; not hashed, snapshot-benign
 
+    // Contacts (slice 3): manifolds[i] belongs to pairKeys[i]. Warm-start
+    // impulses live here, so the block is snapshot state (topic-04 §4).
+    m2Manifold* manifolds;
+    int32_t oldPairCount;        // step-transient
+    uint64_t* oldPairScratch;    // step-transient
+    m2Manifold* manifoldScratch; // step-transient
+
     uint16_t worldGeneration;
 } m2World;
 
