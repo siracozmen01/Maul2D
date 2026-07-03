@@ -832,7 +832,10 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         {
             float dt;
             int32_t substepCount;
-        } marker = {dt, substepCount};
+        } marker;
+        memset(&marker, 0, sizeof(marker));
+        marker.dt = dt;
+        marker.substepCount = substepCount;
         m2JournalRecord(world, m2_opStep, &marker, (int32_t)sizeof(marker));
     }
 
@@ -1218,7 +1221,10 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
 
             m2BodyId expected;
 
-        } record = {*def, id};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = id;
 
         m2JournalRecord(world, m2_opCreateBody, &record, (int32_t)sizeof(record));
     }
@@ -1395,7 +1401,10 @@ void m2Body_SetLinearVelocity(m2BodyId bodyId, m2Vec2 velocity)
         {
             m2BodyId body;
             m2Vec2 value;
-        } record = {bodyId, velocity};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.value = velocity;
         m2JournalRecord(world, m2_opSetLinearVelocity, &record, (int32_t)sizeof(record));
     }
 }
@@ -1418,7 +1427,10 @@ void m2Body_SetAngularVelocity(m2BodyId bodyId, float velocity)
         {
             m2BodyId body;
             float value;
-        } record = {bodyId, velocity};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.value = velocity;
         m2JournalRecord(world, m2_opSetAngularVelocity, &record, (int32_t)sizeof(record));
     }
 }
@@ -1519,7 +1531,12 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
 
             m2ShapeId expected;
 
-        } record = {bodyId, *def, *geometry, id};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.def = *def;
+        record.geometry = *geometry;
+        record.expected = id;
 
         m2JournalRecord(world, m2_opCreateShape, &record, (int32_t)sizeof(record));
     }
@@ -1690,7 +1707,10 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
         {
             m2DistanceJointDef def;
             m2JointId expected;
-        } record = {*def, jointId};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
         m2JournalRecord(world, m2_opCreateDistanceJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
@@ -1724,7 +1744,10 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
         {
             m2RevoluteJointDef def;
             m2JointId expected;
-        } record = {*def, jointId};
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
         m2JournalRecord(world, m2_opCreateRevoluteJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
