@@ -45,6 +45,22 @@ extern "C"
     /// Thread class: reader.
     m2ContactEvents m2World_GetContactEvents(m2WorldId worldId);
 
+    /// A read-only view of the contacts touching right now, canonical
+    /// pair order. Returns the total touching count even beyond
+    /// capacity. Thread class: reader.
+    typedef struct m2ContactData
+    {
+        m2ShapeId shapeIdA;
+        m2ShapeId shapeIdB;
+        m2Vec2 normal; // world frame, from A to B
+        int32_t pointCount;
+        float separations[2];
+        float normalImpulses[2];
+        float tangentImpulses[2];
+    } m2ContactData;
+
+    int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t capacity);
+
 #ifdef __cplusplus
 }
 #endif

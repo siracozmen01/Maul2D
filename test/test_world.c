@@ -342,8 +342,8 @@ static void TestTeleport(void)
     CHECK(v.x == 1.5f && v.y == 0.0f, "teleport leaves velocity untouched");
 
     // Ray finds it at the new home immediately (broadphase refreshed).
-    m2RayCastResult hit =
-        m2World_CastRayClosest(world, (m2Pos2){100.0, 2.0}, (m2Vec2){0.0f, -6.0f});
+    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){100.0, 2.0}, (m2Vec2){0.0f, -6.0f},
+                                                 m2DefaultQueryFilter());
     CHECK(hit.hit, "queries see the teleported body at once");
 
     CHECK(m2World_JournalBaseSize(world) == 32 + m2World_SnapshotSize(world),

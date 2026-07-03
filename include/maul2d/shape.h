@@ -107,6 +107,18 @@ extern "C"
 
     static const m2ShapeId m2_nullShapeId = {0, 0, 0};
 
+    /// Query filtering mirrors contact filtering: a shape answers a
+    /// query when each side's category intersects the other's mask.
+    /// The default filter (category 1, mask all) sees every shape
+    /// whose mask includes category 1.
+    typedef struct m2QueryFilter
+    {
+        uint32_t categoryBits;
+        uint32_t maskBits;
+    } m2QueryFilter;
+
+    m2QueryFilter m2DefaultQueryFilter(void);
+
     /// Queries are read-only: they never touch simulation state, and
     /// their results are canonical (closest hit with lowest-shape-index
     /// tie break; overlap lists in ascending creation order).
@@ -121,14 +133,15 @@ extern "C"
 
     /// Closest hit along origin + t * translation, t in [0, 1].
     /// Thread class: reader.
-    m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation);
+    m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation,
+                                           m2QueryFilter filter);
 
     /// Fills results with up to capacity alive shapes whose tight AABB
     /// overlaps [lower, upper], ascending shape order. Returns the total
     /// number of overlapping shapes even when it exceeds capacity.
     /// Thread class: reader.
     int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2ShapeId* results,
-                                int32_t capacity);
+                                int32_t capacity, m2QueryFilter filter);
 
 #ifdef __cplusplus
 }

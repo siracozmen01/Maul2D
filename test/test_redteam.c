@@ -215,24 +215,27 @@ static void TestQueryEdges(void)
     m2WorldId world = m2CreateWorld(&def);
 
     // Empty world: everything misses quietly.
-    m2RayCastResult miss = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){5.0f, 0.0f});
+    m2RayCastResult miss = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){5.0f, 0.0f},
+                                                  m2DefaultQueryFilter());
     CHECK(!miss.hit, "empty world misses");
     m2ShapeId results[4];
-    CHECK(m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){1.0, 1.0}, results, 4) == 0,
+    CHECK(m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){1.0, 1.0}, results, 4,
+                              m2DefaultQueryFilter()) == 0,
           "empty world overlaps nothing");
 
     m2BodyId box = AddBox(world, 0.0, 0.0);
 
     // Zero-length ray inside a shape: initial-overlap convention.
-    m2RayCastResult inside =
-        m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){0.0f, 0.0f});
+    m2RayCastResult inside = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){0.0f, 0.0f},
+                                                    m2DefaultQueryFilter());
     CHECK(inside.hit && inside.fraction == 0.0f, "zero ray inside reports initial overlap");
     CHECK(inside.normal.x == 0.0f && inside.normal.y == 0.0f, "initial overlap has no normal");
 
     // Destroyed shapes drop out of query results after the flush.
     m2DestroyBody(box);
     m2World_Step(world, 1.0f / 60.0f, 4);
-    CHECK(m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){1.0, 1.0}, results, 4) == 0,
+    CHECK(m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){1.0, 1.0}, results, 4,
+                              m2DefaultQueryFilter()) == 0,
           "destroyed shape leaves the query space");
 
     m2DestroyWorld(world);

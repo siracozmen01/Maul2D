@@ -2052,6 +2052,45 @@ m2ContactEvents m2World_GetContactEvents(m2WorldId worldId)
     return events;
 }
 
+int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t capacity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        if (total < capacity)
+        {
+            int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
+            int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            m2Manifold* manifold = &world->manifolds[i];
+            m2ContactData* out = data + total;
+            out->shapeIdA = MakeShapeId(world, shapeA);
+            out->shapeIdB = MakeShapeId(world, shapeB);
+            m2Rot qA = world->transforms[world->shapeBody[shapeA]].q;
+            out->normal = (m2Vec2){qA.c * manifold->normal.x - qA.s * manifold->normal.y,
+                                   qA.s * manifold->normal.x + qA.c * manifold->normal.y};
+            out->pointCount = manifold->pointCount;
+            for (int32_t k = 0; k < 2; ++k)
+            {
+                bool live = k < manifold->pointCount;
+                out->separations[k] = live ? manifold->points[k].separation : 0.0f;
+                out->normalImpulses[k] = live ? manifold->points[k].normalImpulse : 0.0f;
+                out->tangentImpulses[k] = live ? manifold->points[k].tangentImpulse : 0.0f;
+            }
+        }
+        total += 1;
+    }
+    return total;
+}
+
 m2Profile m2World_GetProfile(m2WorldId worldId)
 {
     m2World* world = GetWorld(worldId);

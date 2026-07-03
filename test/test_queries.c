@@ -65,7 +65,8 @@ static void TestRayClosest(void)
     m2ShapeId nearWall = AddStaticBox(world, 4.0, 0.0, 0.5, 2.0);
     AddStaticBox(world, 12.0, 0.0, 0.5, 2.0);
 
-    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){20.0f, 0.0f});
+    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){20.0f, 0.0f},
+                                                 m2DefaultQueryFilter());
     CHECK(hit.hit, "ray hits");
     CHECK(SameShape(hit.shapeId, nearWall), "closest wall wins");
     // Wall face at x = 3.5, ray length 20: fraction = 0.175 exactly.
@@ -75,15 +76,15 @@ static void TestRayClosest(void)
     CHECK(px > -1.0e-6 && px < 1.0e-6 && hit.point.y == 0.0, "hit point lands on the face");
 
     // A miss stays a miss.
-    m2RayCastResult miss =
-        m2World_CastRayClosest(world, (m2Pos2){0.0, 10.0}, (m2Vec2){20.0f, 0.0f});
+    m2RayCastResult miss = m2World_CastRayClosest(world, (m2Pos2){0.0, 10.0}, (m2Vec2){20.0f, 0.0f},
+                                                  m2DefaultQueryFilter());
     CHECK(!miss.hit, "ray over the walls misses");
 
     // Circle fraction: center (4,-6) r=1, vertical ray from (4,-3)
     // (below the wall) down 10: hits at y=-5, fraction 0.2.
     AddStaticCircle(world, 4.0, -6.0, 1.0f);
-    m2RayCastResult round =
-        m2World_CastRayClosest(world, (m2Pos2){4.0, -3.0}, (m2Vec2){0.0f, -10.0f});
+    m2RayCastResult round = m2World_CastRayClosest(world, (m2Pos2){4.0, -3.0},
+                                                   (m2Vec2){0.0f, -10.0f}, m2DefaultQueryFilter());
     CHECK(round.hit, "circle hit");
     CHECK(round.fraction == 0.2f, "circle fraction is analytically exact");
     CHECK(round.normal.y == 1.0f, "circle normal points up");
@@ -106,7 +107,8 @@ static void TestRayGeometries(void)
     m2Capsule capsule = {{-1.0f, 0.0f}, {1.0f, 0.0f}, 0.5f};
     m2CreateCapsuleShape(body, &sd, &capsule);
 
-    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){0.0, 5.0}, (m2Vec2){0.0f, -10.0f});
+    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){0.0, 5.0}, (m2Vec2){0.0f, -10.0f},
+                                                 m2DefaultQueryFilter());
     CHECK(hit.hit, "capsule hit");
     CHECK(hit.fraction == 0.45f, "capsule top at y=0.5: fraction exact");
 
@@ -116,7 +118,8 @@ static void TestRayGeometries(void)
     m2Segment segment = {{-2.0f, 0.0f}, {2.0f, 0.0f}};
     m2CreateSegmentShape(ground, &sd, &segment);
 
-    m2RayCastResult seg = m2World_CastRayClosest(world, (m2Pos2){10.0, 3.0}, (m2Vec2){0.0f, -6.0f});
+    m2RayCastResult seg = m2World_CastRayClosest(world, (m2Pos2){10.0, 3.0}, (m2Vec2){0.0f, -6.0f},
+                                                 m2DefaultQueryFilter());
     CHECK(seg.hit, "segment hit");
     CHECK(seg.fraction == 0.5f, "segment fraction exact");
 
@@ -133,7 +136,8 @@ static void TestRayFarFromOrigin(void)
 
     double bx = 3.0e5;
     AddStaticBox(world, bx + 4.0, 0.0, 0.5, 2.0);
-    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){bx, 0.0}, (m2Vec2){20.0f, 0.0f});
+    m2RayCastResult hit = m2World_CastRayClosest(world, (m2Pos2){bx, 0.0}, (m2Vec2){20.0f, 0.0f},
+                                                 m2DefaultQueryFilter());
     CHECK(hit.hit, "far cast hits");
     CHECK(hit.fraction == 0.175f, "far fraction identical to the origin scene");
     double farPx = hit.point.x - (bx + 3.5);
@@ -155,8 +159,8 @@ static void TestOverlap(void)
     AddStaticBox(world, 40.0, 0.0, 0.5, 0.5); // far away
 
     m2ShapeId results[8];
-    int32_t total =
-        m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){4.2, 1.0}, results, 8);
+    int32_t total = m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){4.2, 1.0}, results, 8,
+                                        m2DefaultQueryFilter());
     CHECK(total == 3, "overlap finds exactly the three");
     CHECK(SameShape(results[0], a) && SameShape(results[1], b) && SameShape(results[2], c),
           "overlap order is canonical (creation order)");
@@ -164,13 +168,14 @@ static void TestOverlap(void)
     // Truthful total under a tight capacity; the kept ones are the
     // lowest indices.
     m2ShapeId two[2];
-    int32_t clamped = m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){4.2, 1.0}, two, 2);
+    int32_t clamped = m2World_OverlapAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){4.2, 1.0}, two, 2,
+                                          m2DefaultQueryFilter());
     CHECK(clamped == 3, "total reported even beyond capacity");
     CHECK(SameShape(two[0], a) && SameShape(two[1], b), "capacity keeps the canonical head");
 
     // Empty region.
-    int32_t none =
-        m2World_OverlapAABB(world, (m2Pos2){100.0, 100.0}, (m2Pos2){101.0, 101.0}, results, 8);
+    int32_t none = m2World_OverlapAABB(world, (m2Pos2){100.0, 100.0}, (m2Pos2){101.0, 101.0},
+                                       results, 8, m2DefaultQueryFilter());
     CHECK(none == 0, "empty region reports zero");
 
     m2DestroyWorld(world);
@@ -209,9 +214,10 @@ static void TestQueriesAreReadOnly(void)
     m2ShapeId results[32];
     for (int32_t i = 0; i < 50; ++i)
     {
-        m2World_CastRayClosest(world, (m2Pos2){-5.0 + 0.2 * (double)i, 3.0}, (m2Vec2){0.3f, -6.0f});
+        m2World_CastRayClosest(world, (m2Pos2){-5.0 + 0.2 * (double)i, 3.0}, (m2Vec2){0.3f, -6.0f},
+                               m2DefaultQueryFilter());
         m2World_OverlapAABB(world, (m2Pos2){-4.0, -1.0}, (m2Pos2){0.1 * (double)i, 2.0}, results,
-                            32);
+                            32, m2DefaultQueryFilter());
     }
     CHECK(m2World_Hash(world) == before, "queries never touch simulation state");
 
@@ -295,9 +301,9 @@ static uint64_t QuerySweepHash(void)
         // Ray fan.
         for (int32_t r = 0; r < 8; ++r)
         {
-            m2RayCastResult hit =
-                m2World_CastRayClosest(world, (m2Pos2){-4.4e5 - 12.0 + 3.0 * (double)r, 4.0},
-                                       (m2Vec2){0.5f * (float)(r - 4), -8.0f});
+            m2RayCastResult hit = m2World_CastRayClosest(
+                world, (m2Pos2){-4.4e5 - 12.0 + 3.0 * (double)r, 4.0},
+                (m2Vec2){0.5f * (float)(r - 4), -8.0f}, m2DefaultQueryFilter());
             h = m2Hash64(h, &hit.hit, 1);
             if (hit.hit)
             {
@@ -308,8 +314,8 @@ static uint64_t QuerySweepHash(void)
         }
         // Sliding overlap window.
         double x = -4.4e5 - 12.0 + 0.2 * (double)step;
-        int32_t total =
-            m2World_OverlapAABB(world, (m2Pos2){x, -1.0}, (m2Pos2){x + 4.0, 3.0}, results, 64);
+        int32_t total = m2World_OverlapAABB(world, (m2Pos2){x, -1.0}, (m2Pos2){x + 4.0, 3.0},
+                                            results, 64, m2DefaultQueryFilter());
         h = m2Hash64(h, &total, (int32_t)sizeof(int32_t));
         for (int32_t i = 0; i < total && i < 64; ++i)
         {
@@ -320,8 +326,95 @@ static uint64_t QuerySweepHash(void)
     return h;
 }
 
+static void TestQueryFilters(void)
+{
+    // A filtered ray sees only what its mask allows; the overlap list
+    // shrinks the same way; the default filter behaves as before.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.position = (m2Pos2){4.0, 0.0};
+    m2BodyId wallBody = m2CreateBody(world, &bd);
+    m2ShapeDef wallShape = m2DefaultShapeDef();
+    wallShape.categoryBits = 0x2; // "wall"
+    m2Polygon wall = m2MakeBox(0.5, 2.0f);
+    m2ShapeId wallId = m2CreatePolygonShape(wallBody, &wallShape, &wall);
+
+    bd.position = (m2Pos2){2.0, 0.0};
+    m2BodyId ghostBody = m2CreateBody(world, &bd);
+    m2ShapeDef ghostShape = m2DefaultShapeDef();
+    ghostShape.categoryBits = 0x4; // "ghost"
+    m2Circle ghost = {{0.0f, 0.0f}, 0.4f};
+    m2CreateCircleShape(ghostBody, &ghostShape, &ghost);
+
+    // Walls-only ray passes through the ghost and hits the wall.
+    m2QueryFilter wallsOnly = {1u, 0x2u};
+    m2RayCastResult hit =
+        m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){10.0f, 0.0f}, wallsOnly);
+    CHECK(hit.hit && hit.shapeId.index1 == wallId.index1, "filtered ray skips the ghost");
+
+    // The default filter hits the ghost first.
+    m2RayCastResult any = m2World_CastRayClosest(world, (m2Pos2){0.0, 0.0}, (m2Vec2){10.0f, 0.0f},
+                                                 m2DefaultQueryFilter());
+    CHECK(any.hit && any.shapeId.index1 != wallId.index1, "default filter sees everything");
+
+    m2ShapeId results[4];
+    int32_t total =
+        m2World_OverlapAABB(world, (m2Pos2){0.0, -1.0}, (m2Pos2){5.0, 1.0}, results, 4, wallsOnly);
+    CHECK(total == 1 && results[0].index1 == wallId.index1, "filtered overlap lists walls only");
+
+    m2DestroyWorld(world);
+}
+
+static void TestContactData(void)
+{
+    // A box resting on a slab reports one touching contact with an
+    // upward normal and load-bearing impulses.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(5.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2ContactData data[4];
+    int32_t total = m2World_GetContactData(world, data, 4);
+    CHECK(total == 1, "one touching contact");
+    CHECK(data[0].pointCount == 2, "box on slab carries two points");
+    float ny = data[0].normal.y;
+    CHECK(ny == 1.0f || ny == -1.0f, "contact normal is vertical");
+    CHECK(data[0].normalImpulses[0] > 0.0f && data[0].normalImpulses[1] > 0.0f,
+          "the contact carries the box's weight");
+
+    // Capacity clamp stays truthful.
+    CHECK(m2World_GetContactData(world, data, 0) == 1, "total reported beyond capacity");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestQueryFilters();
+    TestContactData();
     TestRayClosest();
     TestRayGeometries();
     TestRayFarFromOrigin();

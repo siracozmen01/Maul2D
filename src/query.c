@@ -19,6 +19,18 @@
 #include <math.h>
 #include <stdlib.h>
 
+m2QueryFilter m2DefaultQueryFilter(void)
+{
+    m2QueryFilter filter = {1u, 0xFFFFFFFFu};
+    return filter;
+}
+
+static bool QueryShouldSee(const m2World* world, int32_t shapeIndex, m2QueryFilter filter)
+{
+    return (filter.categoryBits & world->shapeMask[shapeIndex]) != 0 &&
+           (world->shapeCategory[shapeIndex] & filter.maskBits) != 0;
+}
+
 typedef struct m2CastHit
 {
     m2Vec2 point; // body-local
@@ -356,6 +368,7 @@ typedef struct m2RayState
 {
     m2Pos2 origin;
     m2Vec2 translation;
+    m2QueryFilter filter;
     float fraction; // current best (starts at 1)
     int32_t shapeIndex;
     m2Vec2 normal;
@@ -417,7 +430,7 @@ static void RayCastTree(const m2World* world, int32_t treeIndex, m2RayState* ray
             continue;
         }
         int32_t shapeIndex = nodes[index].userData;
-        if (world->shapeAlive[shapeIndex] == 0)
+        if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, ray->filter))
         {
             continue;
         }
@@ -441,7 +454,8 @@ static void RayCastTree(const m2World* world, int32_t treeIndex, m2RayState* ray
     }
 }
 
-m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation)
+m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation,
+                                       m2QueryFilter filter)
 {
     m2RayCastResult result;
     result.shapeId = m2_nullShapeId;
@@ -460,6 +474,7 @@ m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 
     m2RayState ray;
     ray.origin = origin;
     ray.translation = translation;
+    ray.filter = filter;
     ray.fraction = 1.0f;
     ray.shapeIndex = -1;
     ray.normal = (m2Vec2){0.0f, 0.0f};
@@ -493,7 +508,7 @@ static int CompareShapeIndex(const void* a, const void* b)
 }
 
 int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2ShapeId* results,
-                            int32_t capacity)
+                            int32_t capacity, m2QueryFilter filter)
 {
     m2World* world = m2World_GetInternal(worldId);
     if (world == NULL || upper.x < lower.x || upper.y < lower.y)
@@ -514,7 +529,7 @@ int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2Sha
             // In-place compaction: the write cursor can never pass the
             // read cursor because kept <= scanned.
             int32_t shapeIndex = world->queryScratch[base + h];
-            if (world->shapeAlive[shapeIndex] == 0)
+            if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, filter))
             {
                 continue;
             }
