@@ -6,7 +6,7 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status: 0.1.0
+## Status: heading to 1.0
 
 The core engine is complete and gated:
 
@@ -55,6 +55,24 @@ m2World_Restore(world, buffer, size); // bit-exact resimulation from here
 ```
 
 Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Learn more
+
+The [guide](docs/guide.md) is the ten-minute tour: the determinism
+contract, rollback netcode, events, filters, chains and threading.
+The full Box2D license for the adapted kernels lives in
+[THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Samples
+
+Two tiny console programs under `samples/`:
+
+- `sample_car` - a motorized, sprung two-wheeler drives itself down a
+  road and prints telemetry; the world hash it ends on is identical
+  on every supported platform.
+- `sample_replay` - records a session into the command journal,
+  replays it into a fresh world, and compares end hashes. Bit-exact,
+  every time.
 
 ## Building
 
