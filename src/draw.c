@@ -80,6 +80,14 @@ static void DrawShape(const m2World* world, const m2DebugDraw* draw, int32_t sha
                               LocalToWorld(xf, geometry->segment.point2), color, draw->context);
         }
         break;
+    case m2_chainSegmentShape:
+        if (draw->drawSegment != NULL)
+        {
+            draw->drawSegment(LocalToWorld(xf, geometry->chainSegment.segment.point1),
+                              LocalToWorld(xf, geometry->chainSegment.segment.point2), color,
+                              draw->context);
+        }
+        break;
     default:
         if (draw->drawPolygon != NULL)
         {

@@ -51,12 +51,24 @@ extern "C"
         m2Vec2 point2;
     } m2Segment;
 
+    /// One link of a chain: the collidable segment plus the neighbor
+    /// ghost points that keep bodies from snagging on internal seams.
+    /// Built by m2CreateChain; collision is one-sided (solid on the
+    /// right when walking point1 -> point2).
+    typedef struct m2ChainSegment
+    {
+        m2Segment segment;
+        m2Vec2 ghost1;
+        m2Vec2 ghost2;
+    } m2ChainSegment;
+
     typedef enum m2ShapeType
     {
         m2_circleShape = 0,
         m2_capsuleShape = 1,
         m2_polygonShape = 2,
         m2_segmentShape = 3,
+        m2_chainSegmentShape = 4,
     } m2ShapeType;
 
     typedef struct m2ShapeDef
@@ -82,6 +94,32 @@ extern "C"
         uint64_t userData;
         int32_t internalValue;
     } m2ShapeDef;
+
+    /// A chain of one-sided segments with seam-smoothing ghosts.
+    /// Open chains need count >= 4: the first and last points are the
+    /// ghosts and the chain collides along points[1..count-2]. Loops
+    /// need count >= 3 and wrap. Cloned; the array may be temporary.
+    typedef struct m2ChainDef
+    {
+        const m2Vec2* points;
+        int32_t count;
+        bool isLoop;
+        float friction;
+        float restitution;
+        uint32_t categoryBits;
+        uint32_t maskBits;
+        int32_t groupIndex;
+        uint64_t userData;
+        int32_t internalValue;
+    } m2ChainDef;
+
+    m2ChainDef m2DefaultChainDef(void);
+
+    /// Creates the chain's segment shapes on the body and returns how
+    /// many were made (0 on failure). Per-chain destroy is a recorded
+    /// pending; destroying the body destroys the chain. Journaled.
+    /// Thread class: writer.
+    int32_t m2CreateChain(m2BodyId bodyId, const m2ChainDef* def);
 
     m2ShapeDef m2DefaultShapeDef(void);
 

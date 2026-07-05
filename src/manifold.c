@@ -511,6 +511,11 @@ float m2PointShapeDistance(const m2ShapeGeometry* geometry, m2Vec2 point)
     {
         return PointSegmentDistance(point, geometry->segment.point1, geometry->segment.point2);
     }
+    case m2_chainSegmentShape:
+    {
+        return PointSegmentDistance(point, geometry->chainSegment.segment.point1,
+                                    geometry->chainSegment.segment.point2);
+    }
     default:
     {
         const m2Polygon* poly = &geometry->polygon;

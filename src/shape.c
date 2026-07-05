@@ -205,9 +205,11 @@ m2AABB m2ComputeShapeAABB(const m2ShapeGeometry* geometry, m2Transform xf)
     }
     default:
     {
-        M2_ASSERT(geometry->type == m2_segmentShape);
-        m2Pos2 p1 = WorldPoint(xf, geometry->segment.point1);
-        m2Pos2 p2 = WorldPoint(xf, geometry->segment.point2);
+        M2_ASSERT(geometry->type == m2_segmentShape || geometry->type == m2_chainSegmentShape);
+        const m2Segment* seg = geometry->type == m2_segmentShape ? &geometry->segment
+                                                                 : &geometry->chainSegment.segment;
+        m2Pos2 p1 = WorldPoint(xf, seg->point1);
+        m2Pos2 p2 = WorldPoint(xf, seg->point2);
         aabb.lowerBound = (m2Pos2){p1.x < p2.x ? p1.x : p2.x, p1.y < p2.y ? p1.y : p2.y};
         aabb.upperBound = (m2Pos2){p1.x > p2.x ? p1.x : p2.x, p1.y > p2.y ? p1.y : p2.y};
         return aabb;
@@ -222,6 +224,9 @@ m2MassData m2ComputeShapeMass(const m2ShapeGeometry* geometry, float density)
     m2MassData data = {0};
     switch (geometry->type)
     {
+    case m2_chainSegmentShape: // chains are massless, like segments
+        return data;
+
     case m2_circleShape:
     {
         float r = geometry->circle.radius;

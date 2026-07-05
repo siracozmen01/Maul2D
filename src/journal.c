@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 11u
+#define M2_JOURNAL_VERSION 12u
 
 typedef struct m2JournalHeader
 {
@@ -62,6 +62,53 @@ void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size)
     world->journal[world->journalCursor] = (uint8_t)m2_opRestore;
     memcpy(world->journal + world->journalCursor + 1, &size, sizeof(int32_t));
     memcpy(world->journal + world->journalCursor + 1 + sizeof(int32_t), snapshot, (size_t)size);
+    world->journalCursor += needed;
+}
+
+typedef struct m2OpChainHeader
+{
+    m2BodyId body;
+    int32_t count;
+    int32_t createdCount;
+    float friction;
+    float restitution;
+    uint32_t categoryBits;
+    uint32_t maskBits;
+    int32_t groupIndex;
+    uint64_t userData;
+    uint8_t isLoop;
+} m2OpChainHeader;
+
+void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def,
+                          int32_t createdCount)
+{
+    if (world->journalActive == 0 || world->journalOverflow != 0)
+    {
+        return;
+    }
+    int32_t pointBytes = def->count * (int32_t)sizeof(m2Vec2);
+    int32_t needed = 1 + (int32_t)sizeof(m2OpChainHeader) + pointBytes;
+    if (world->journalCursor + needed > world->journalCapacity)
+    {
+        world->journalOverflow = 1;
+        return;
+    }
+    m2OpChainHeader header;
+    memset(&header, 0, sizeof(header));
+    header.body = bodyId;
+    header.count = def->count;
+    header.createdCount = createdCount;
+    header.friction = def->friction;
+    header.restitution = def->restitution;
+    header.categoryBits = def->categoryBits;
+    header.maskBits = def->maskBits;
+    header.groupIndex = def->groupIndex;
+    header.userData = def->userData;
+    header.isLoop = def->isLoop ? 1 : 0;
+    world->journal[world->journalCursor] = (uint8_t)m2_opCreateChain;
+    memcpy(world->journal + world->journalCursor + 1, &header, sizeof(header));
+    memcpy(world->journal + world->journalCursor + 1 + sizeof(header), def->points,
+           (size_t)pointBytes);
     world->journalCursor += needed;
 }
 
@@ -426,6 +473,39 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
                 return false;
             }
             cursor += restoreSize;
+            break;
+        }
+        case m2_opCreateChain:
+        {
+            M2_READ_OP(m2OpChainHeader, ch);
+            int32_t pointBytes = ch.count * (int32_t)sizeof(m2Vec2);
+            if (ch.count < 3 || cursor + pointBytes > size)
+            {
+                return false;
+            }
+            // The stream is unaligned; copy points out before use.
+            m2Vec2* pts = m2AllocZeroed((size_t)pointBytes);
+            if (pts == NULL)
+            {
+                return false;
+            }
+            memcpy(pts, in + cursor, (size_t)pointBytes);
+            m2ChainDef def = m2DefaultChainDef();
+            def.points = pts;
+            def.count = ch.count;
+            def.isLoop = ch.isLoop != 0;
+            def.friction = ch.friction;
+            def.restitution = ch.restitution;
+            def.categoryBits = ch.categoryBits;
+            def.maskBits = ch.maskBits;
+            def.groupIndex = ch.groupIndex;
+            def.userData = ch.userData;
+            ch.body.world0 = here;
+            int32_t made = m2CreateChain(ch.body, &def);
+            m2Free(pts);
+            M2_ASSERT(made == ch.createdCount);
+            (void)made;
+            cursor += pointBytes;
             break;
         }
         case m2_opSetType:

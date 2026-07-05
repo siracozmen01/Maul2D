@@ -23,6 +23,7 @@ typedef struct m2ShapeGeometry
         m2Capsule capsule;
         m2Polygon polygon;
         m2Segment segment;
+        m2ChainSegment chainSegment;
     };
 } m2ShapeGeometry;
 

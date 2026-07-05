@@ -24,6 +24,7 @@
 #define M2_PJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2PrismaticJointDef) << 8) ^ 6)
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
+#define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
 #define M2_SNAPSHOT_VERSION 16u
 
@@ -502,8 +503,86 @@ static m2RelativePose InvertPose(m2RelativePose pose)
     return inv;
 }
 
+// Chain laws, applied in the chain's own frame after the ordinary SAT
+// pipeline has spoken. DELIBERATE DEVIATION from the reference (argued
+// per CONTRIBUTING): Box2D integrates ghost handling into a GJK-based
+// collider; Maul reuses its bit-proven SAT+clip pipeline and enforces
+// one-sidedness and ghost Voronoi rejection as an explicit post-pass.
+// Buys: no new collider subsystem, laws visible and testable in one
+// place. Cost: seam behavior lives or dies by the crossing tests.
+static void ApplyChainLaws(m2Manifold* manifold, const m2ChainSegment* chain)
+{
+    if (manifold->pointCount == 0)
+    {
+        return;
+    }
+    m2Vec2 p1 = chain->segment.point1;
+    m2Vec2 p2 = chain->segment.point2;
+    m2Vec2 e = {p2.x - p1.x, p2.y - p1.y};
+    m2Vec2 rightPerp = {e.y, -e.x};
+
+    // One-sided: solid on the right of point1 -> point2 only.
+    if (manifold->normal.x * rightPerp.x + manifold->normal.y * rightPerp.y <= 0.0f)
+    {
+        manifold->pointCount = 0;
+        return;
+    }
+
+    float ee = e.x * e.x + e.y * e.y;
+    int32_t kept = 0;
+    for (int32_t k = 0; k < manifold->pointCount; ++k)
+    {
+        m2Vec2 pos = manifold->points[k].anchorA;
+        float v = e.x * (pos.x - p1.x) + e.y * (pos.y - p1.y);
+        bool drop = false;
+        if (v < 0.0f)
+        {
+            // Behind point1: the previous edge's Voronoi region owns
+            // anything out here; this segment lets go.
+            m2Vec2 prevEdge = {p1.x - chain->ghost1.x, p1.y - chain->ghost1.y};
+            float uPrev = prevEdge.x * (pos.x - p1.x) + prevEdge.y * (pos.y - p1.y);
+            drop = uPrev <= 0.0f;
+        }
+        else if (v > ee)
+        {
+            m2Vec2 nextEdge = {chain->ghost2.x - p2.x, chain->ghost2.y - p2.y};
+            float vNext = nextEdge.x * (pos.x - p2.x) + nextEdge.y * (pos.y - p2.y);
+            drop = vNext > 0.0f;
+        }
+        if (!drop)
+        {
+            manifold->points[kept] = manifold->points[k];
+            kept += 1;
+        }
+    }
+    manifold->pointCount = kept;
+}
+
+static m2Manifold ComputeManifoldRaw(const m2World* world, int32_t shapeA, int32_t shapeB,
+                                     m2RelativePose pose);
+
 static m2Manifold ComputeManifold(const m2World* world, int32_t shapeA, int32_t shapeB,
                                   m2RelativePose pose)
+{
+    const m2ShapeGeometry* ga = &world->shapeGeometry[shapeA];
+    const m2ShapeGeometry* gb = &world->shapeGeometry[shapeB];
+    if (gb->type == m2_chainSegmentShape && ga->type != m2_chainSegmentShape)
+    {
+        // Canonical: the chain plays shape A so its laws apply in its
+        // own frame; the manifold flips back on the way out.
+        m2Manifold m = ComputeManifold(world, shapeB, shapeA, InvertPose(pose));
+        return FlipManifold(m, pose);
+    }
+    m2Manifold m = ComputeManifoldRaw(world, shapeA, shapeB, pose);
+    if (ga->type == m2_chainSegmentShape)
+    {
+        ApplyChainLaws(&m, &ga->chainSegment);
+    }
+    return m;
+}
+
+static m2Manifold ComputeManifoldRaw(const m2World* world, int32_t shapeA, int32_t shapeB,
+                                     m2RelativePose pose)
 {
     const m2ShapeGeometry* ga = &world->shapeGeometry[shapeA];
     const m2ShapeGeometry* gb = &world->shapeGeometry[shapeB];
@@ -542,6 +621,12 @@ static m2Manifold ComputeManifold(const m2World* world, int32_t shapeA, int32_t 
         proxyA = m2MakeSegmentProxy(ga->segment.point1, ga->segment.point2, 0.0f);
         pa = &proxyA;
     }
+    else if (ga->type == m2_chainSegmentShape)
+    {
+        proxyA = m2MakeSegmentProxy(ga->chainSegment.segment.point1,
+                                    ga->chainSegment.segment.point2, 0.0f);
+        pa = &proxyA;
+    }
     if (gb->type == m2_polygonShape)
     {
         pb = &gb->polygon;
@@ -554,6 +639,12 @@ static m2Manifold ComputeManifold(const m2World* world, int32_t shapeA, int32_t 
     else if (gb->type == m2_segmentShape)
     {
         proxyB = m2MakeSegmentProxy(gb->segment.point1, gb->segment.point2, 0.0f);
+        pb = &proxyB;
+    }
+    else if (gb->type == m2_chainSegmentShape)
+    {
+        proxyB = m2MakeSegmentProxy(gb->chainSegment.segment.point1,
+                                    gb->chainSegment.segment.point2, 0.0f);
         pb = &proxyB;
     }
 
@@ -2129,6 +2220,80 @@ M2_SHAPE_CTOR(m2CreateCircleShape, m2Circle, m2_circleShape, m2ValidateCircle, c
 M2_SHAPE_CTOR(m2CreateCapsuleShape, m2Capsule, m2_capsuleShape, m2ValidateCapsule, capsule)
 M2_SHAPE_CTOR(m2CreatePolygonShape, m2Polygon, m2_polygonShape, m2ValidatePolygon, polygon)
 M2_SHAPE_CTOR(m2CreateSegmentShape, m2Segment, m2_segmentShape, m2ValidateSegment, segment)
+
+m2ChainDef m2DefaultChainDef(void)
+{
+    m2ChainDef def;
+    memset(&def, 0, sizeof(def));
+    def.friction = 0.6f;
+    def.categoryBits = 1;
+    def.maskBits = 0xFFFFFFFFu;
+    def.internalValue = M2_CHAIN_COOKIE;
+    return def;
+}
+
+int32_t m2CreateChain(m2BodyId bodyId, const m2ChainDef* def)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t bodyIndex = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (bodyIndex < 0 || def == NULL || def->internalValue != M2_CHAIN_COOKIE ||
+        def->points == NULL || (def->isLoop ? def->count < 3 : def->count < 4))
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+
+    // One journal op describes the whole chain; the per-shape creates
+    // below must not double-record.
+    uint8_t journalWasActive = world->journalActive;
+    world->journalActive = 0;
+
+    m2ShapeDef shapeDef = m2DefaultShapeDef();
+    shapeDef.density = 0.0f;
+    shapeDef.friction = def->friction;
+    shapeDef.restitution = def->restitution;
+    shapeDef.categoryBits = def->categoryBits;
+    shapeDef.maskBits = def->maskBits;
+    shapeDef.groupIndex = def->groupIndex;
+    shapeDef.userData = def->userData;
+
+    int32_t segmentCount = def->isLoop ? def->count : def->count - 3;
+    int32_t created = 0;
+    for (int32_t i = 0; i < segmentCount; ++i)
+    {
+        m2ShapeGeometry geometry;
+        memset(&geometry, 0, sizeof(geometry));
+        geometry.type = m2_chainSegmentShape;
+        if (def->isLoop)
+        {
+            int32_t n = def->count;
+            geometry.chainSegment.ghost1 = def->points[(i + n - 1) % n];
+            geometry.chainSegment.segment.point1 = def->points[i];
+            geometry.chainSegment.segment.point2 = def->points[(i + 1) % n];
+            geometry.chainSegment.ghost2 = def->points[(i + 2) % n];
+        }
+        else
+        {
+            geometry.chainSegment.ghost1 = def->points[i];
+            geometry.chainSegment.segment.point1 = def->points[i + 1];
+            geometry.chainSegment.segment.point2 = def->points[i + 2];
+            geometry.chainSegment.ghost2 = def->points[i + 3];
+        }
+        m2ShapeId shape = CreateShape(bodyId, &shapeDef, &geometry);
+        if (shape.index1 == 0)
+        {
+            break; // capacity: partial chain, loud enough via count
+        }
+        created += 1;
+    }
+
+    world->journalActive = journalWasActive;
+    if (created > 0)
+    {
+        m2JournalRecordChain(world, bodyId, def, created);
+    }
+    return created;
+}
 
 bool m2Shape_IsValid(m2ShapeId shapeId)
 {

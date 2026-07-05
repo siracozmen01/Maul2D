@@ -150,6 +150,11 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Joint_SetMotorSpeed(pressJoint, 0.7f);
     m2Body_SetTransform(ram, (m2Pos2){8.6, 2.4}, m2MakeRot(0.3f)); // op 17
     m2Body_SetType(sidecar, m2_kinematicBody);                     // op 18
+    m2Vec2 chainPts[5] = {{12.0f, 0.5f}, {11.0f, 0.0f}, {10.0f, 0.0f}, {9.0f, 0.0f}, {8.0f, 0.5f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = chainPts;
+    chain.count = 5;
+    m2CreateChain(cylinder, &chain); // op 20
     m2DestroyShape(sacrificial);
     for (int32_t i = 0; i < 15; ++i)
     {

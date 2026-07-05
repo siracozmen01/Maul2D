@@ -337,6 +337,19 @@ static m2CastHit RayCastGeometry(const m2ShapeGeometry* geometry, m2Vec2 p1, m2V
     case m2_segmentShape:
         return RayCastSegment(p1, d, maxFraction, geometry->segment.point1,
                               geometry->segment.point2);
+    case m2_chainSegmentShape:
+    {
+        // One-sided, like the collision: rays from the ghost side miss.
+        const m2Segment* seg = &geometry->chainSegment.segment;
+        m2Vec2 e = {seg->point2.x - seg->point1.x, seg->point2.y - seg->point1.y};
+        float offset = (p1.x - seg->point1.x) * e.y - (p1.y - seg->point1.y) * e.x;
+        if (offset < 0.0f) // reference sign: skip rays from the ghost side
+        {
+            m2CastHit missHit = {{0.0f, 0.0f}, {0.0f, 0.0f}, 0.0f, false};
+            return missHit;
+        }
+        return RayCastSegment(p1, d, maxFraction, seg->point1, seg->point2);
+    }
     default:
         return RayCastPolygon(p1, d, maxFraction, &geometry->polygon);
     }

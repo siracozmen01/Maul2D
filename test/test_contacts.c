@@ -452,6 +452,96 @@ static void TestGroupIndex(void)
     m2DestroyWorld(world);
 }
 
+static void TestChainGround(void)
+{
+    // The internal-edge exam. A flat floor built as a chain of five
+    // segments; a box shoved across every seam must never pop: the
+    // ghost law eats the phantom edge collisions that a naive segment
+    // floor would produce. Chain winds right-to-left so the solid side
+    // faces up (reference winding).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 points[8];
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        points[i] = (m2Vec2){9.0f - 3.0f * (float)i, 0.0f}; // +9 .. -12, right to left
+    }
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = points;
+    chain.count = 8;
+    int32_t made = m2CreateChain(ground, &chain);
+    CHECK(made == 5, "open chain of eight points makes five segments");
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){5.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.friction = 0.05f; // slide far
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // settle on the chain
+    }
+    CHECK(m2Body_GetPosition(box).y > 0.3, "the box rests on the chain floor");
+
+    m2Body_ApplyLinearImpulse(box, (m2Vec2){-4.0f, 0.0f}, m2Body_GetPosition(box));
+    float worstVy = 0.0f;
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        float vy = m2Body_GetLinearVelocity(box).y;
+        float mag = vy < 0.0f ? -vy : vy;
+        worstVy = mag > worstVy ? mag : worstVy;
+    }
+    CHECK(m2Body_GetPosition(box).x < -1.0, "the box crossed several seams");
+    CHECK(worstVy < 0.25f, "no seam ever kicked it upward");
+    CHECK(m2Body_GetPosition(box).y > 0.3 && m2Body_GetPosition(box).y < 0.6,
+          "still riding the floor after the trip");
+
+    // One-sided: a ball thrown up from below passes clean through.
+    m2BodyDef ud = m2DefaultBodyDef();
+    ud.type = m2_dynamicBody;
+    ud.position = (m2Pos2){0.0, -4.0};
+    ud.linearVelocity = (m2Vec2){0.0f, 14.0f};
+    m2BodyId riser = m2CreateBody(world, &ud);
+    m2ShapeDef us = m2DefaultShapeDef();
+    m2Circle ball = {{0.0f, 0.0f}, 0.25f};
+    m2CreateCircleShape(riser, &us, &ball);
+    bool gotAbove = false;
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        gotAbove = gotAbove || m2Body_GetPosition(riser).y > 1.0;
+    }
+    CHECK(gotAbove, "from below, the chain is a ghost");
+    bool cameBackDown = false;
+    for (int32_t i = 0; i < 300 && !cameBackDown; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        cameBackDown = !m2Body_IsAwake(riser) && m2Body_GetPosition(riser).y > 0.2;
+    }
+    CHECK(cameBackDown, "from above, it is a floor: the ball lands and sleeps");
+
+    // One-sided rays agree: from above it hits, from below it misses.
+    m2RayCastResult down = m2World_CastRayClosest(world, (m2Pos2){-2.0, 3.0}, (m2Vec2){0.0f, -5.0f},
+                                                  m2DefaultQueryFilter());
+    m2RayCastResult up = m2World_CastRayClosest(world, (m2Pos2){-2.0, -3.0}, (m2Vec2){0.0f, 2.5f},
+                                                m2DefaultQueryFilter());
+    CHECK(down.hit, "a ray from above lands on the chain");
+    CHECK(!up.hit, "a ray from below passes through");
+
+    m2DestroyWorld(world);
+}
+
 static void TestFilterRollback(void)
 {
     // Filters are snapshot state: a mixed-filter scene must replay
@@ -506,6 +596,7 @@ int main(void)
 {
     TestCollisionFilters();
     TestGroupIndex();
+    TestChainGround();
     TestFilterRollback();
     TestCircleKernels();
     TestPolygonCircleRegions();
