@@ -489,8 +489,56 @@ static void TestBeginEventPayload(void)
     m2DestroyWorld(world);
 }
 
+static void TestSensorOverlapQuery(void)
+{
+    // Two visitors inside the zone, one outside: the list names
+    // exactly the two, in canonical order, with a truthful total.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    def.bodyCapacity = 8;
+
+    m2BodyDef zd = m2DefaultBodyDef();
+    zd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId zoneBody = m2CreateBody(world, &zd);
+    m2ShapeDef zs = m2DefaultShapeDef();
+    zs.isSensor = true;
+    m2Polygon zone = m2MakeBox(2.0f, 2.0f);
+    m2ShapeId zoneId = m2CreatePolygonShape(zoneBody, &zs, &zone);
+
+    m2ShapeId visitors[3];
+    double xs[3] = {-0.5, 0.5, 10.0}; // third is far away
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_kinematicBody; // hang in place, no gravity fall
+        bd.position = (m2Pos2){xs[i], 0.0};
+        m2BodyId body = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Circle c = {{0.0f, 0.0f}, 0.3f};
+        visitors[i] = m2CreateCircleShape(body, &sd, &c);
+    }
+    for (int32_t i = 0; i < 5; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2ShapeId inside[4];
+    int32_t total = m2Shape_GetSensorOverlaps(zoneId, inside, 4);
+    CHECK(total == 2, "two visitors inside");
+    CHECK(inside[0].index1 == visitors[0].index1 && inside[1].index1 == visitors[1].index1,
+          "canonical order");
+    CHECK(m2Shape_GetSensorOverlaps(zoneId, inside, 1) == 2, "truthful beyond capacity");
+    CHECK(m2Shape_GetSensorOverlaps(visitors[0], inside, 4) == 0,
+          "a non-sensor shape reports nothing");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestSensorOverlapQuery();
     TestBeginEventPayload();
     TestSensors();
     TestTypeChangeBookends();

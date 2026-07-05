@@ -272,8 +272,14 @@ static void UpdatePairs(m2World* world)
         m2AABB fat = world->treeNodes[treeIndex][world->proxyIds[shapeIndex]].aabb;
 
         bool moverDynamic = ShapeIsDynamic(world, shapeIndex);
-        int32_t firstTree = moverDynamic ? 0 : m2_dynamicBody;
-        int32_t lastTree = moverDynamic ? M2_TREE_COUNT - 1 : m2_dynamicBody;
+        // Kinematic movers sweep every tree: a kinematic character
+        // walking through a static trigger zone is the most ordinary
+        // sensor story there is. Static movers only exist via
+        // teleport and keep the narrow scan.
+        bool moverKinematic =
+            world->types[world->shapeBody[shapeIndex]] == (uint8_t)m2_kinematicBody;
+        int32_t firstTree = moverDynamic || moverKinematic ? 0 : m2_dynamicBody;
+        int32_t lastTree = moverDynamic || moverKinematic ? M2_TREE_COUNT - 1 : m2_dynamicBody;
         for (int32_t t = firstTree; t <= lastTree; ++t)
         {
             int32_t hits =
@@ -291,9 +297,10 @@ static void UpdatePairs(m2World* world)
                 {
                     continue; // same-body shapes never pair
                 }
-                if (!moverDynamic && !ShapeIsDynamic(world, other))
+                if (!moverDynamic && !ShapeIsDynamic(world, other) &&
+                    world->shapeSensor[shapeIndex] == 0 && world->shapeSensor[other] == 0)
                 {
-                    continue;
+                    continue; // two non-dynamics only pair through a sensor
                 }
                 if (world->shapeSensor[shapeIndex] != 0 && world->shapeSensor[other] != 0)
                 {
@@ -2418,6 +2425,42 @@ m2JointEvents m2World_GetJointEvents(m2WorldId worldId)
     events.breakEvents = world->jointBreakEvents;
     events.breakCount = world->jointBreakEventCount;
     return events;
+}
+
+int32_t m2Shape_GetSensorOverlaps(m2ShapeId sensorShapeId, m2ShapeId* overlaps, int32_t capacity)
+{
+    m2World* world = WorldFromIndex(sensorShapeId.world0);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t sensor = sensorShapeId.index1 - 1;
+    if (sensor < 0 || sensor >= world->shapeCapacity || world->shapeAlive[sensor] == 0 ||
+        world->shapeGenerations[sensor] != sensorShapeId.generation ||
+        world->shapeSensor[sensor] == 0)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (a != sensor && b != sensor)
+        {
+            continue;
+        }
+        if (total < capacity)
+        {
+            overlaps[total] = MakeShapeId(world, a == sensor ? b : a);
+        }
+        total += 1;
+    }
+    return total;
 }
 
 int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t capacity)

@@ -90,6 +90,13 @@ extern "C"
 
     m2JointEvents m2World_GetJointEvents(m2WorldId worldId);
 
+    /// Who is inside this sensor right now. Fills up to capacity shape
+    /// ids in canonical pair order and returns the true total even
+    /// beyond capacity. Zero for anything that is not a live sensor.
+    /// Thread class: reader.
+    int32_t m2Shape_GetSensorOverlaps(m2ShapeId sensorShapeId, m2ShapeId* overlaps,
+                                      int32_t capacity);
+
     /// A read-only view of the contacts touching right now, canonical
     /// pair order. Returns the total touching count even beyond
     /// capacity. Thread class: reader.
