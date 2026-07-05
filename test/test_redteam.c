@@ -1042,6 +1042,279 @@ static uint64_t ChaosHash(void)
     return h;
 }
 
+// ROUND 7: the post-1.0 surface. Chain ids, the destroy-path wake
+// law, and the reaction getters each get attacked where they would
+// hurt most: precision, rollback, and slot reuse.
+
+// The wake law must be surgical: destroying a chain wakes ITS riders
+// and nobody else, even when the survivor sleeps on the same body.
+static void TestChainSurgicalWake(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 pts[6] = {{6.0f, 0.0f}, {4.0f, 0.0f},  {2.0f, 0.0f},
+                     {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId chainId = m2CreateChain(ground, &chain);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(2.0f, 0.5f);
+    m2Polygon shifted = slab;
+    for (int32_t v = 0; v < shifted.count; ++v)
+    {
+        shifted.vertices[v].x += 12.0f;
+        shifted.vertices[v].y -= 0.5f;
+    }
+    m2CreatePolygonShape(ground, &fs, &shifted);
+
+    m2BodyId onChain = AddBox(world, 1.0, 0.45);
+    m2BodyId onSlab = AddBox(world, 12.0, 0.45);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(onChain) && !m2Body_IsAwake(onSlab), "both sleep");
+
+    m2DestroyChain(chainId);
+    m2DestroyChain(chainId); // double destroy: generation miss, silent
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(onChain).y < -2.0, "the chain rider wakes and falls");
+    CHECK(!m2Body_IsAwake(onSlab), "the slab sleeper never stirs");
+    CHECK(m2Body_GetPosition(onSlab).y > 0.0, "and stays put");
+    m2DestroyWorld(world);
+}
+
+// Rollback must resurrect a destroyed chain: registry state is
+// snapshot state, so the old id becomes valid again and the re-run
+// destruction lands on identical bits.
+static void TestChainRollbackResurrection(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 pts[6] = {{6.0f, 0.0f}, {4.0f, 0.0f},  {2.0f, 0.0f},
+                     {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId chainId = m2CreateChain(ground, &chain);
+    AddBox(world, 1.0, 0.45);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot before the demolition");
+
+    m2DestroyChain(chainId);
+    uint64_t hashes[40];
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+    }
+    CHECK(!m2Chain_IsValid(chainId), "gone after the demolition");
+
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    CHECK(m2Chain_IsValid(chainId), "the rolled-back chain id lives again");
+    CHECK(m2Chain_GetSegmentCount(chainId) == 3, "with all its segments");
+    m2RayCastResult ray = m2World_CastRayClosest(world, (m2Pos2){1.0, 2.0}, (m2Vec2){0.0f, -4.0f},
+                                                 m2DefaultQueryFilter());
+    CHECK(ray.hit, "segments answer rays again");
+
+    m2DestroyChain(chainId);
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "re-run demolition is bit-exact");
+    }
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+// Journal replay across a full chain lifecycle: create, destroy,
+// create again into the recycled slot, then kill the body. Slot and
+// generation evolution must be identical on replay.
+static void TestChainLifecycleJournal(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    // The journal opens with an embedded base snapshot; a 32-shape
+    // world's snapshot alone outgrows a 64K buffer, so go big.
+    int32_t capacity = 1 << 20;
+    uint8_t* buffer = malloc((size_t)capacity);
+    m2World_StartJournal(world, buffer, capacity);
+
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 pts[6] = {{6.0f, 0.0f}, {4.0f, 0.0f},  {2.0f, 0.0f},
+                     {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId first = m2CreateChain(ground, &chain);
+    m2BodyId box = AddBox(world, 1.0, 2.0);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2DestroyChain(first);
+    m2Vec2 lower[4] = {{4.0f, -2.0f}, {2.0f, -2.0f}, {0.0f, -2.0f}, {-2.0f, -2.0f}};
+    chain.points = lower;
+    chain.count = 4;
+    m2ChainId second = m2CreateChain(ground, &chain);
+    CHECK(second.index1 != first.index1 || second.generation != first.generation,
+          "the second chain id never aliases the dead one");
+    CHECK(!m2Chain_IsValid(first) && m2Chain_IsValid(second), "and only the living answers");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2DestroyBody(box);
+    for (int32_t i = 0; i < 15; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t bytes = m2World_StopJournal(world);
+    CHECK(bytes > 0, "lifecycle journal captured");
+    uint64_t recordedHash = m2World_Hash(world);
+    m2DestroyWorld(world);
+
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, buffer, bytes), "lifecycle replays");
+    CHECK(m2World_Hash(fresh) == recordedHash, "identical bits");
+    CHECK(m2World_ReplayJournal(fresh, buffer, bytes), "and replays twice");
+    CHECK(m2World_Hash(fresh) == recordedHash, "identically");
+    free(buffer);
+    m2DestroyWorld(fresh);
+}
+
+// Reaction readings are simulation-grade state: after a rollback the
+// getter must return the restored step's load to the last bit.
+static void TestReactionRollbackReading(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 6.0};
+    m2BodyId hook = m2CreateBody(world, &ad);
+    m2BodyId bob = AddBox(world, 2.0, 6.0); // horizontal start: it swings
+    m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+    jd.bodyIdA = hook;
+    jd.bodyIdB = bob;
+    m2JointId rope = m2CreateDistanceJoint(world, &jd);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float midSwing = m2Joint_GetReactionForce(rope);
+    CHECK(midSwing > 0.0f, "a swinging rope carries load");
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot mid-swing");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    CHECK(m2Joint_GetReactionForce(rope) == midSwing, "the restored reading matches to the bit");
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+// Every joint type's reaction path answers under a real load: the
+// prismatic limit lock, the wheel spring, the revolute holding motor.
+static void TestReactionAllTypes(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    // Prismatic elevator: vertical axis, limits locked at zero, so the
+    // limit rows carry the cabin's weight.
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId post = m2CreateBody(world, &pd);
+    m2BodyId cabin = AddBox(world, 0.0, 4.0);
+    m2PrismaticJointDef pj = m2DefaultPrismaticJointDef();
+    pj.bodyIdA = post;
+    pj.bodyIdB = cabin;
+    pj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    pj.enableLimit = true;
+    pj.lowerTranslation = 0.0f;
+    pj.upperTranslation = 0.0f;
+    m2JointId lift = m2CreatePrismaticJoint(world, &pj);
+
+    // Wheel on a spring: the suspension row carries the hanging wheel.
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){6.0, 4.0};
+    m2BodyId strut = m2CreateBody(world, &cd);
+    m2BodyId hub = AddBox(world, 6.0, 4.0);
+    m2WheelJointDef wj = m2DefaultWheelJointDef();
+    wj.bodyIdA = strut;
+    wj.bodyIdB = hub;
+    wj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    wj.enableSpring = true;
+    m2JointId spring = m2CreateWheelJoint(world, &wj);
+
+    // Revolute holding motor: a level arm pinned at its end, the motor
+    // (speed zero, big budget) holds it against gravity.
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.position = (m2Pos2){12.0, 4.0};
+    m2BodyId pin = m2CreateBody(world, &hd);
+    m2BodyDef armDef = m2DefaultBodyDef();
+    armDef.type = m2_dynamicBody;
+    armDef.position = (m2Pos2){13.0, 4.0};
+    m2BodyId arm = m2CreateBody(world, &armDef);
+    m2ShapeDef as = m2DefaultShapeDef();
+    as.density = 2.0f;
+    m2Polygon bar = m2MakeBox(1.0f, 0.1f);
+    m2CreatePolygonShape(arm, &as, &bar);
+    m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+    rj.bodyIdA = pin;
+    rj.bodyIdB = arm;
+    rj.localAnchorB = (m2Vec2){-1.0f, 0.0f};
+    rj.enableMotor = true;
+    rj.motorSpeed = 0.0f;
+    rj.maxMotorTorque = 100.0f;
+    m2JointId shoulder = m2CreateRevoluteJoint(world, &rj);
+
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Joint_GetReactionForce(lift) > 1.0f, "the prismatic lock carries the cabin");
+    CHECK(m2Joint_GetReactionForce(spring) > 1.0f, "the wheel spring carries the hub");
+    CHECK(m2Joint_GetReactionTorque(shoulder) > 1.0f, "the holding motor reads torque");
+    CHECK(m2Joint_GetReactionForce(shoulder) > 1.0f, "and the pin carries the arm");
+
+    m2JointId never = {5, shoulder.world0, 999};
+    CHECK(m2Joint_GetReactionForce(never) == 0.0f, "a bogus id reads zero force");
+    CHECK(m2Joint_GetReactionTorque(never) == 0.0f, "and zero torque");
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestStaleIds();
@@ -1062,6 +1335,11 @@ int main(void)
     TestSetterChurnDeterminism();
     TestKinematicSensorHibernation();
     TestBulletThroughOneWayChain();
+    TestChainSurgicalWake();
+    TestChainRollbackResurrection();
+    TestChainLifecycleJournal();
+    TestReactionRollbackReading();
+    TestReactionAllTypes();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
