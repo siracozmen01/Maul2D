@@ -1660,10 +1660,49 @@ static void StoreJointImpulses(m2World* world, m2JointConstraint* joints, int32_
     }
 }
 
+void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, float* force,
+                               float* torque)
+{
+    m2Vec2 impulse = world->jointImpulse[j];
+    float axialTrio =
+        world->jointMotorImpulse[j] + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+    *force = 0.0f;
+    *torque = 0.0f;
+    switch (world->jointType[j])
+    {
+    case 0: // distance: axial row only
+        *force = m2AbsF(impulse.x) * invH;
+        break;
+    case 1: // revolute: point block linear, motor/limits as torque
+        *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
+        *torque = m2AbsF(axialTrio) * invH;
+        break;
+    case 2: // prismatic: (perp, angle) + axial trio
+    {
+        float linear = sqrtf(impulse.x * impulse.x + axialTrio * axialTrio);
+        *force = linear * invH;
+        *torque = m2AbsF(impulse.y) * invH;
+        break;
+    }
+    case 3: // weld: point block linear, angle row in the motor slot
+        *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
+        *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+        break;
+    default: // wheel: (perp, spring) linear, motor as torque
+    {
+        float axial = impulse.y + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+        *force = sqrtf(impulse.x * impulse.x + axial * axial) * invH;
+        *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+        break;
+    }
+    }
+}
+
 void m2SolveStep(m2World* world, float dt, int32_t substepCount)
 {
     float h = dt / (float)substepCount;
     float invH = h > 0.0f ? 1.0f / h : 0.0f;
+    world->lastInvH = invH;
 
     // Deltas are step-transient: zero at prepare, folded into f64
     // positions at each integrate-positions stage.
@@ -1782,39 +1821,9 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             continue;
         }
 
-        m2Vec2 impulse = world->jointImpulse[j];
-        float axialTrio =
-            world->jointMotorImpulse[j] + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
         float force = 0.0f;
         float torque = 0.0f;
-        switch (world->jointType[j])
-        {
-        case 0: // distance: axial row only
-            force = m2AbsF(impulse.x) * invH;
-            break;
-        case 1: // revolute: point block linear, motor/limits as torque
-            force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
-            torque = m2AbsF(axialTrio) * invH;
-            break;
-        case 2: // prismatic: (perp, angle) + axial trio
-        {
-            float linear = sqrtf(impulse.x * impulse.x + axialTrio * axialTrio);
-            force = linear * invH;
-            torque = m2AbsF(impulse.y) * invH;
-            break;
-        }
-        case 3: // weld: point block linear, angle row in the motor slot
-            force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
-            torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
-            break;
-        default: // wheel: (perp, spring) linear, motor as torque
-        {
-            float axial = impulse.y + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
-            force = sqrtf(impulse.x * impulse.x + axial * axial) * invH;
-            torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
-            break;
-        }
-        }
+        m2JointReactionMagnitudes(world, j, invH, &force, &torque);
 
         bool snapped = (breakForce > 0.0f && force > breakForce) ||
                        (breakTorque > 0.0f && torque > breakTorque);

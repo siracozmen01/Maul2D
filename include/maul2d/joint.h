@@ -144,6 +144,15 @@ extern "C"
     /// the joint during the step, deterministically, and reports it in
     /// m2World_GetJointEvents. Zero (the default) means unbreakable.
     void m2Joint_SetBreakLimits(m2JointId jointId, float maxForce, float maxTorque);
+
+    /// Reaction load the joint carried on the last step, from the
+    /// stored impulses times that step's inverse substep dt. This is
+    /// the SAME computation the break pass compares against the
+    /// limits, bit for bit, so tuning break thresholds against these
+    /// readings is exact. Newtons and newton meters; zero before the
+    /// first step and for invalid ids. Thread class: reader.
+    float m2Joint_GetReactionForce(m2JointId jointId);
+    float m2Joint_GetReactionTorque(m2JointId jointId);
     bool m2Joint_IsValid(m2JointId jointId);
 
     static const m2JointId m2_nullJointId = {0, 0, 0};

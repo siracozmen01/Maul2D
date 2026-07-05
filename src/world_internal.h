@@ -28,6 +28,7 @@ typedef struct m2World
     // World-global mutable block (snapshot state).
     m2Vec2 gravity;
     uint64_t stepCount;
+    float lastInvH; // inverse substep dt of the last solve (snapshot state)
 
     // Body storage: parallel POD arrays, fixed capacity.
     int32_t bodyCapacity;
@@ -260,6 +261,11 @@ void m2SolveContinuous(m2World* world);
 
 // Soft-step solve for one step (src/solver.c).
 void m2SolveStep(m2World* world, float dt, int32_t substepCount);
+// Reaction magnitudes from the stored impulses: the ONE mapping
+// shared by the break pass and the public getters, so the number a
+// game reads is bit-for-bit the number the scissors compare.
+void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, float* force,
+                               float* torque);
 // sizeof(m2ContactConstraint): the scratch block is sized by its owner.
 int32_t m2ContactConstraintSize(void);
 

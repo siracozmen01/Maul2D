@@ -744,6 +744,88 @@ static void TestSoftWeld(void)
     m2DestroyWorld(world);
 }
 
+// The getters hand back the same numbers the scissors compare: read
+// the load, set a limit just under it, and the joint MUST snap; set
+// one well over it and it MUST hold. Plus analytic checks: a hanging
+// crate reads its own weight, a cantilever reads its lever torque.
+static void TestReactionGetters(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2JointId ropes[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 6.0;
+        m2BodyDef ad = m2DefaultBodyDef();
+        ad.position = (m2Pos2){x, 6.0};
+        m2BodyId hook = m2CreateBody(world, &ad);
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){x, 4.0};
+        m2BodyId crate = m2CreateBody(world, &cd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 5.0f;
+        m2Polygon box = m2MakeBox(0.5f, 0.5f);
+        m2CreatePolygonShape(crate, &sd, &box);
+        m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+        jd.bodyIdA = hook;
+        jd.bodyIdB = crate;
+        ropes[i] = m2CreateDistanceJoint(world, &jd);
+    }
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    // Load = m*g = 5 * 1 * 10 = 50 N steady.
+    float load = m2Joint_GetReactionForce(ropes[0]);
+    CHECK(load > 45.0f && load < 55.0f, "hanging crate reads its own weight");
+    CHECK(m2Joint_GetReactionTorque(ropes[0]) == 0.0f, "a rope carries no torque");
+
+    // Agreement with the scissors, both directions.
+    m2Joint_SetBreakLimits(ropes[0], load * 0.95f, 0.0f);
+    m2Joint_SetBreakLimits(ropes[1], load * 2.0f, 0.0f);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Joint_IsValid(ropes[0]), "a limit under the reading snaps");
+    CHECK(m2Joint_IsValid(ropes[1]), "a limit over the reading holds");
+    CHECK(m2Joint_GetReactionForce(ropes[0]) == 0.0f, "a dead id reads zero");
+
+    // Cantilever: beam mass 4*2*0.16 = 1.28 kg, COM one meter out from
+    // the anchor: torque = 12.8 N*m, force = the 12.8 N weight.
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.position = (m2Pos2){12.0, 4.0};
+    m2BodyId wall = m2CreateBody(world, &wd);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){13.0, 4.0};
+    m2BodyId beam = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.density = 4.0f;
+    m2Polygon bar = m2MakeBox(1.0f, 0.08f);
+    m2CreatePolygonShape(beam, &bs, &bar);
+    m2WeldJointDef weld = m2DefaultWeldJointDef();
+    weld.bodyIdA = wall;
+    weld.bodyIdB = beam;
+    weld.localAnchorB = (m2Vec2){-1.0f, 0.0f};
+    m2JointId cantilever = m2CreateWeldJoint(world, &weld);
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float tipTorque = m2Joint_GetReactionTorque(cantilever);
+    float holdForce = m2Joint_GetReactionForce(cantilever);
+    CHECK(tipTorque > 10.0f && tipTorque < 16.0f, "cantilever reads its lever torque");
+    CHECK(holdForce > 10.0f && holdForce < 16.0f, "and carries the beam weight");
+
+    m2DestroyWorld(world);
+}
+
 static void TestJointBreaking(void)
 {
     // Twin ropes carry the same heavy crate; one has a break limit
@@ -1067,6 +1149,7 @@ int main(void)
     TestWheelCar();
     TestJointRuntimeTuning();
     TestSoftWeld();
+    TestReactionGetters();
     TestJointBreaking();
     TestBreakRollback();
 

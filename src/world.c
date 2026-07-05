@@ -26,7 +26,7 @@
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 18u
+#define M2_SNAPSHOT_VERSION 19u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1477,6 +1477,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(&world->chainFreeTail, sizeof(int32_t));
     M2_BLOCK(&world->chainFreeCount, sizeof(int32_t));
     M2_BLOCK(&world->chainRetiredCount, sizeof(int32_t));
+    M2_BLOCK(&world->lastInvH, sizeof(float));
     M2_BLOCK(world->shapeChain, (size_t)world->shapeCapacity * sizeof(int32_t));
     M2_BLOCK(world->chainAlive, (size_t)world->shapeCapacity * sizeof(uint8_t));
     M2_BLOCK(world->chainBody, (size_t)world->shapeCapacity * sizeof(int32_t));
@@ -3444,6 +3445,36 @@ void m2DestroyJointInternal(m2World* world, int32_t index)
     world->jointFreeQueue[world->jointFreeTail] = index;
     world->jointFreeTail = (world->jointFreeTail + 1) % world->jointCapacity;
     world->jointFreeCount += 1;
+}
+
+float m2Joint_GetReactionForce(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = jointId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->jointCapacity ||
+        world->jointAlive[index] == 0 || world->jointGenerations[index] != jointId.generation)
+    {
+        return 0.0f;
+    }
+    float force = 0.0f;
+    float torque = 0.0f;
+    m2JointReactionMagnitudes(world, index, world->lastInvH, &force, &torque);
+    return force;
+}
+
+float m2Joint_GetReactionTorque(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = jointId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->jointCapacity ||
+        world->jointAlive[index] == 0 || world->jointGenerations[index] != jointId.generation)
+    {
+        return 0.0f;
+    }
+    float force = 0.0f;
+    float torque = 0.0f;
+    m2JointReactionMagnitudes(world, index, world->lastInvH, &force, &torque);
+    return torque;
 }
 
 bool m2Joint_IsValid(m2JointId jointId)
