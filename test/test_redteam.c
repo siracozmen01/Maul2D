@@ -652,7 +652,8 @@ static void TestLoopChainBowl(void)
     chain.points = diamond;
     chain.count = 4;
     chain.isLoop = true;
-    CHECK(m2CreateChain(frame, &chain) == 4, "a loop of four points makes four segments");
+    m2ChainId bowlChain = m2CreateChain(frame, &chain);
+    CHECK(m2Chain_GetSegmentCount(bowlChain) == 4, "a loop of four points makes four segments");
 
     m2BodyDef bd = m2DefaultBodyDef();
     bd.type = m2_dynamicBody;
@@ -871,7 +872,8 @@ static void TestBulletThroughOneWayChain(void)
     m2ChainDef chain = m2DefaultChainDef();
     chain.points = pts;
     chain.count = 5; // right-to-left: solid side up
-    CHECK(m2CreateChain(platform, &chain) == 2, "two live segments");
+    m2ChainId shelfChain = m2CreateChain(platform, &chain);
+    CHECK(m2Chain_GetSegmentCount(shelfChain) == 2, "two live segments");
 
     m2BodyDef bd = m2DefaultBodyDef();
     bd.type = m2_dynamicBody;

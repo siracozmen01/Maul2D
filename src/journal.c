@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 13u
+#define M2_JOURNAL_VERSION 14u
 
 typedef struct m2JournalHeader
 {
@@ -435,6 +435,13 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             m2DestroyShape(id);
             break;
         }
+        case m2_opDestroyChain:
+        {
+            M2_READ_OP(m2ChainId, chain);
+            chain.world0 = here;
+            m2DestroyChain(chain);
+            break;
+        }
         case m2_opApplyLinearImpulse:
         {
             M2_READ_OP(m2OpLinearImpulse, li);
@@ -501,9 +508,9 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             def.groupIndex = ch.groupIndex;
             def.userData = ch.userData;
             ch.body.world0 = here;
-            int32_t made = m2CreateChain(ch.body, &def);
+            m2ChainId made = m2CreateChain(ch.body, &def);
             m2Free(pts);
-            M2_ASSERT(made == ch.createdCount);
+            M2_ASSERT(m2Chain_GetSegmentCount(made) == ch.createdCount);
             (void)made;
             cursor += pointBytes;
             break;

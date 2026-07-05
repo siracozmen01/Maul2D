@@ -573,9 +573,49 @@ static void TestRuntimeGravity(void)
     m2DestroyWorld(world);
 }
 
+// Destroying a body must wake whoever was resting on it, the same
+// law teleports and type changes already obey. Before slice 52 the
+// destroy paths skipped it and sleepers floated on a memory.
+static void TestDestroyWakesSleepers(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(5.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+    for (int32_t i = 0; i < 250; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(box), "box sleeps on the floor");
+
+    m2DestroyBody(floor);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_IsAwake(box), "yanking the floor wakes the sleeper");
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(box).y < -5.0, "and it falls");
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestDestroyWakesSleepers();
     TestDebugDraw();
     TestSetType();
     TestTeleport();

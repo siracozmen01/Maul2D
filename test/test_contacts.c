@@ -452,6 +452,69 @@ static void TestGroupIndex(void)
     m2DestroyWorld(world);
 }
 
+// A chain id names the whole ground run: destroying it must remove
+// every segment, end the contacts, and wake the sleeper that was
+// resting on it (the destroy-path wake law, caught by the floor-yank
+// probe in slice 52).
+static void TestChainDestroy(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    // Right-to-left points: solid side up for a ground chain.
+    m2Vec2 pts[6] = {{6.0f, 0.0f}, {4.0f, 0.0f},  {2.0f, 0.0f},
+                     {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId chainId = m2CreateChain(ground, &chain);
+    CHECK(m2Chain_IsValid(chainId), "chain id is live after create");
+    CHECK(m2Chain_GetSegmentCount(chainId) == 3, "six open points make three segments");
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){2.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(box), "box falls asleep on the chain");
+
+    m2RayCastResult before = m2World_CastRayClosest(world, (m2Pos2){-1.0, 2.0},
+                                                    (m2Vec2){0.0f, -4.0f}, m2DefaultQueryFilter());
+    CHECK(before.hit, "a chain segment answers rays while alive");
+
+    m2DestroyChain(chainId);
+    CHECK(!m2Chain_IsValid(chainId), "destroyed chain id misses on generation");
+    CHECK(m2Chain_GetSegmentCount(chainId) == 0, "destroyed chain reports zero segments");
+    CHECK(m2Body_IsValid(ground), "the owning body outlives its chain");
+
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(box).y < -2.0, "sleeper wakes and falls once the ground is gone");
+
+    m2RayCastResult after = m2World_CastRayClosest(world, (m2Pos2){-1.0, 2.0},
+                                                   (m2Vec2){0.0f, -4.0f}, m2DefaultQueryFilter());
+    CHECK(!after.hit, "no chain segment answers rays after destroy");
+
+    // The slot recycles with a fresh generation.
+    m2ChainId again = m2CreateChain(ground, &chain);
+    CHECK(m2Chain_IsValid(again), "a new chain can be built on the same body");
+    CHECK(again.index1 != chainId.index1 || again.generation != chainId.generation,
+          "recycled slot carries a new generation");
+    m2DestroyWorld(world);
+}
+
 static void TestChainGround(void)
 {
     // The internal-edge exam. A flat floor built as a chain of five
@@ -475,8 +538,8 @@ static void TestChainGround(void)
     m2ChainDef chain = m2DefaultChainDef();
     chain.points = points;
     chain.count = 8;
-    int32_t made = m2CreateChain(ground, &chain);
-    CHECK(made == 5, "open chain of eight points makes five segments");
+    m2ChainId made = m2CreateChain(ground, &chain);
+    CHECK(m2Chain_GetSegmentCount(made) == 5, "open chain of eight points makes five segments");
 
     m2BodyDef bd = m2DefaultBodyDef();
     bd.type = m2_dynamicBody;
@@ -716,6 +779,7 @@ int main(void)
     TestCollisionFilters();
     TestGroupIndex();
     TestChainGround();
+    TestChainDestroy();
     TestRuntimeMaterials();
     TestRuntimeFilter();
     TestFilterRollback();

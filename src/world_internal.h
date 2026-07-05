@@ -71,6 +71,7 @@ typedef struct m2World
     uint32_t* shapeMask;
     int32_t* shapeGroup;
     uint8_t* shapeSensor; // overlap-only shapes (snapshot state)
+    int32_t* shapeChain;  // owning chain slot, -1 = free-standing (snapshot state)
     uint16_t* shapeGenerations;
     int32_t* shapeFreeQueue;
     int32_t shapeFreeHead;
@@ -112,6 +113,20 @@ typedef struct m2World
     int32_t jointFreeTail;
     int32_t jointFreeCount;
     int32_t jointRetiredCount;
+
+    // Chains (slice 52): a chain is a named group of segment shapes
+    // on one body, so a whole ground run can be destroyed by id.
+    // Slots are bounded by shape capacity: every live chain owns at
+    // least one shape. Same id discipline as bodies and joints.
+    int32_t maxChainIndex;
+    uint8_t* chainAlive;
+    int32_t* chainBody;
+    uint16_t* chainGenerations;
+    int32_t* chainFreeQueue;
+    int32_t chainFreeHead;
+    int32_t chainFreeTail;
+    int32_t chainFreeCount;
+    int32_t chainRetiredCount;
 
     // Broadphase: per-type trees; leaves are SHAPE proxies (topic-02 D1).
     m2DynamicTree trees[M2_TREE_COUNT];
@@ -220,6 +235,7 @@ enum
     m2_opSetGravity = 21,
     m2_opShapeParam = 22, // friction (0) / restitution (1)
     m2_opSetFilter = 23,
+    m2_opDestroyChain = 24,
 };
 
 // Journaled joint parameter channel (op 16).

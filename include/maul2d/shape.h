@@ -99,6 +99,13 @@ extern "C"
     /// Open chains need count >= 4: the first and last points are the
     /// ghosts and the chain collides along points[1..count-2]. Loops
     /// need count >= 3 and wrap. Cloned; the array may be temporary.
+    typedef struct m2ChainId
+    {
+        int32_t index1; // 1-based, 0 = null
+        uint16_t world0;
+        uint16_t generation;
+    } m2ChainId;
+
     typedef struct m2ChainDef
     {
         const m2Vec2* points;
@@ -115,11 +122,17 @@ extern "C"
 
     m2ChainDef m2DefaultChainDef(void);
 
-    /// Creates the chain's segment shapes on the body and returns how
-    /// many were made (0 on failure). Per-chain destroy is a recorded
-    /// pending; destroying the body destroys the chain. Journaled.
-    /// Thread class: writer.
-    int32_t m2CreateChain(m2BodyId bodyId, const m2ChainDef* def);
+    /// Creates the chain's segment shapes on the body and returns the
+    /// chain's id (null on failure). The id names the whole group:
+    /// m2DestroyChain removes every segment at once, ends their
+    /// contacts, and wakes whoever was resting on them. Destroying the
+    /// body also retires the chain id. Journaled. Thread class: writer.
+    m2ChainId m2CreateChain(m2BodyId bodyId, const m2ChainDef* def);
+    void m2DestroyChain(m2ChainId chainId);
+    bool m2Chain_IsValid(m2ChainId chainId);
+    int32_t m2Chain_GetSegmentCount(m2ChainId chainId);
+
+    static const m2ChainId m2_nullChainId = {0, 0, 0};
 
     m2ShapeDef m2DefaultShapeDef(void);
 

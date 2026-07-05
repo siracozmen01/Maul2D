@@ -26,7 +26,7 @@
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 17u
+#define M2_SNAPSHOT_VERSION 18u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -955,6 +955,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
+    M2_ALLOC(shapeChain, shapeCap, int32_t);
+    M2_ALLOC(chainAlive, shapeCap, uint8_t);
+    M2_ALLOC(chainBody, shapeCap, int32_t);
+    M2_ALLOC(chainGenerations, shapeCap, uint16_t);
+    M2_ALLOC(chainFreeQueue, shapeCap, int32_t);
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
     M2_ALLOC(pairTouching, world->pairCapacity, uint8_t);
     M2_ALLOC(touchingScratch, world->pairCapacity, uint8_t);
@@ -1013,6 +1018,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         world->shapeFreeQueue[i] = i;
         world->shapeNext[i] = -1;
         world->proxyIds[i] = M2_NULL_NODE;
+        world->shapeChain[i] = -1;
+        world->chainFreeQueue[i] = i;
     }
     for (int32_t i = 0; i < jointCap; ++i)
     {
@@ -1025,6 +1032,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->shapeFreeHead = 0;
     world->shapeFreeTail = 0;
     world->shapeFreeCount = shapeCap;
+    world->chainFreeCount = shapeCap;
 
     s_worldGenerations[slot] += 1;
     world->worldGeneration = s_worldGenerations[slot];
@@ -1109,6 +1117,11 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
     m2Free(world->jointFreeQueue);
+    m2Free(world->shapeChain);
+    m2Free(world->chainAlive);
+    m2Free(world->chainBody);
+    m2Free(world->chainGenerations);
+    m2Free(world->chainFreeQueue);
     m2Free(world->pairKeys);
     m2Free(world->pairTouching);
     m2Free(world->touchingScratch);
@@ -1459,6 +1472,16 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
+    M2_BLOCK(&world->maxChainIndex, sizeof(int32_t));
+    M2_BLOCK(&world->chainFreeHead, sizeof(int32_t));
+    M2_BLOCK(&world->chainFreeTail, sizeof(int32_t));
+    M2_BLOCK(&world->chainFreeCount, sizeof(int32_t));
+    M2_BLOCK(&world->chainRetiredCount, sizeof(int32_t));
+    M2_BLOCK(world->shapeChain, (size_t)world->shapeCapacity * sizeof(int32_t));
+    M2_BLOCK(world->chainAlive, (size_t)world->shapeCapacity * sizeof(uint8_t));
+    M2_BLOCK(world->chainBody, (size_t)world->shapeCapacity * sizeof(int32_t));
+    M2_BLOCK(world->chainGenerations, (size_t)world->shapeCapacity * sizeof(uint16_t));
+    M2_BLOCK(world->chainFreeQueue, (size_t)world->shapeCapacity * sizeof(int32_t));
     M2_BLOCK(world->trees, M2_TREE_COUNT * sizeof(m2DynamicTree));
     for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
     {
@@ -1698,6 +1721,15 @@ static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
         {
             continue;
         }
+        // The same law as teleports and type changes: whoever was
+        // resting on this shape must notice it vanish, or sleepers
+        // float on a memory. (Caught by the floor-yank probe.)
+        int32_t partner = world->shapeBody[a == shapeIndex ? b : a];
+        if (world->types[partner] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[partner] = 0;
+            world->sleepTimes[partner] = 0.0f;
+        }
         bool sensor = world->shapeSensor[a] != 0 || world->shapeSensor[b] != 0;
         m2ContactEndEvent* queue = sensor ? world->pendingSensorEnd : world->pendingEndEvents;
         int32_t* queueCount = sensor ? &world->pendingSensorEndCount : &world->pendingEndCount;
@@ -1774,6 +1806,20 @@ void m2DestroyShape(m2ShapeId shapeId)
     }
 }
 
+static void RetireChainSlot(m2World* world, int32_t chainIndex)
+{
+    world->chainAlive[chainIndex] = 0;
+    if (world->chainGenerations[chainIndex] == UINT16_MAX)
+    {
+        world->chainRetiredCount += 1;
+        return;
+    }
+    world->chainGenerations[chainIndex] += 1;
+    world->chainFreeQueue[world->chainFreeTail] = chainIndex;
+    world->chainFreeTail = (world->chainFreeTail + 1) % world->shapeCapacity;
+    world->chainFreeCount += 1;
+}
+
 void m2DestroyBody(m2BodyId bodyId)
 {
     m2World* world = GetBodyWorld(bodyId);
@@ -1814,6 +1860,16 @@ void m2DestroyBody(m2BodyId bodyId)
             world->jointFreeQueue[world->jointFreeTail] = j;
             world->jointFreeTail = (world->jointFreeTail + 1) % world->jointCapacity;
             world->jointFreeCount += 1;
+        }
+    }
+
+    // Chains die with their body; their slots retire so stale chain
+    // ids miss on generation, same as every other id kind.
+    for (int32_t c = 0; c < world->maxChainIndex; ++c)
+    {
+        if (world->chainAlive[c] != 0 && world->chainBody[c] == index)
+        {
+            RetireChainSlot(world, c);
         }
     }
 
@@ -2202,6 +2258,7 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     world->shapeMask[index] = def->maskBits;
     world->shapeGroup[index] = def->groupIndex;
     world->shapeSensor[index] = def->isSensor ? 1 : 0;
+    world->shapeChain[index] = -1;
     world->shapeBody[index] = bodyIndex;
     world->shapeNext[index] = world->bodyShapeHead[bodyIndex];
     world->bodyShapeHead[bodyIndex] = index;
@@ -2289,16 +2346,23 @@ m2ChainDef m2DefaultChainDef(void)
     return def;
 }
 
-int32_t m2CreateChain(m2BodyId bodyId, const m2ChainDef* def)
+m2ChainId m2CreateChain(m2BodyId bodyId, const m2ChainDef* def)
 {
     m2World* world = GetBodyWorld(bodyId);
     int32_t bodyIndex = world != NULL ? BodySlot(world, bodyId) : -1;
     if (bodyIndex < 0 || def == NULL || def->internalValue != M2_CHAIN_COOKIE ||
-        def->points == NULL || (def->isLoop ? def->count < 3 : def->count < 4))
+        def->points == NULL || (def->isLoop ? def->count < 3 : def->count < 4) ||
+        world->chainFreeCount == 0)
     {
         M2_ASSERT(false);
-        return 0;
+        return m2_nullChainId;
     }
+
+    // Claim the chain slot before making shapes so each segment can be
+    // tagged with its owner as it is born.
+    int32_t chainIndex = world->chainFreeQueue[world->chainFreeHead];
+    world->chainFreeHead = (world->chainFreeHead + 1) % world->shapeCapacity;
+    world->chainFreeCount -= 1;
 
     // One journal op describes the whole chain; the per-shape creates
     // below must not double-record.
@@ -2339,17 +2403,110 @@ int32_t m2CreateChain(m2BodyId bodyId, const m2ChainDef* def)
         m2ShapeId shape = CreateShape(bodyId, &shapeDef, &geometry);
         if (shape.index1 == 0)
         {
-            break; // capacity: partial chain, loud enough via count
+            break; // capacity: partial chain, loud via the segment count
         }
+        world->shapeChain[shape.index1 - 1] = chainIndex;
         created += 1;
     }
 
     world->journalActive = journalWasActive;
-    if (created > 0)
+    if (created == 0)
     {
-        m2JournalRecordChain(world, bodyId, def, created);
+        // Nothing was made: retire the claimed slot. The generation
+        // burns, which keeps the id sequence append-only either way.
+        RetireChainSlot(world, chainIndex);
+        return m2_nullChainId;
     }
-    return created;
+    world->chainAlive[chainIndex] = 1;
+    world->chainBody[chainIndex] = bodyIndex;
+    if (chainIndex + 1 > world->maxChainIndex)
+    {
+        world->maxChainIndex = chainIndex + 1;
+    }
+    m2JournalRecordChain(world, bodyId, def, created);
+    m2ChainId id = {chainIndex + 1, world->worldIndex0, world->chainGenerations[chainIndex]};
+    return id;
+}
+
+static int32_t ChainSlot(const m2World* world, m2ChainId chainId)
+{
+    int32_t index = chainId.index1 - 1;
+    if (index < 0 || index >= world->shapeCapacity || world->chainAlive[index] == 0 ||
+        world->chainGenerations[index] != chainId.generation)
+    {
+        return -1;
+    }
+    return index;
+}
+
+void m2DestroyChain(m2ChainId chainId)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    int32_t index = world != NULL ? ChainSlot(world, chainId) : -1;
+    if (index < 0)
+    {
+        return;
+    }
+    m2JournalRecord(world, m2_opDestroyChain, &chainId, (int32_t)sizeof(chainId));
+
+    // One canonical walk over the body's insertion-ordered shape list,
+    // unlinking members in place; DestroyShapeInternal ends contacts
+    // and wakes whoever was resting on each segment.
+    int32_t bodyIndex = world->chainBody[index];
+    int32_t prev = -1;
+    int32_t s = world->bodyShapeHead[bodyIndex];
+    while (s != -1)
+    {
+        int32_t next = world->shapeNext[s];
+        if (world->shapeChain[s] == index)
+        {
+            if (prev == -1)
+            {
+                world->bodyShapeHead[bodyIndex] = next;
+            }
+            else
+            {
+                world->shapeNext[prev] = next;
+            }
+            world->shapeNext[s] = -1;
+            DestroyShapeInternal(world, s);
+        }
+        else
+        {
+            prev = s;
+        }
+        s = next;
+    }
+    RetireChainSlot(world, index);
+    RecomputeMass(world, bodyIndex);
+    if (world->types[bodyIndex] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyIndex] = 0;
+        world->sleepTimes[bodyIndex] = 0.0f;
+    }
+}
+
+bool m2Chain_IsValid(m2ChainId chainId)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    return world != NULL && ChainSlot(world, chainId) >= 0;
+}
+
+int32_t m2Chain_GetSegmentCount(m2ChainId chainId)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    int32_t index = world != NULL ? ChainSlot(world, chainId) : -1;
+    if (index < 0)
+    {
+        return 0;
+    }
+    int32_t count = 0;
+    for (int32_t s = world->bodyShapeHead[world->chainBody[index]]; s != -1;
+         s = world->shapeNext[s])
+    {
+        count += world->shapeChain[s] == index ? 1 : 0;
+    }
+    return count;
 }
 
 bool m2Shape_IsValid(m2ShapeId shapeId)
