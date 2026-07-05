@@ -174,16 +174,55 @@ static void EmitEnd(m2World* world, int32_t shapeA, int32_t shapeB)
     e->step = world->stepCount;
 }
 
-static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB)
+static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB, int32_t pairIndex)
 {
     if (world->beginEventCount >= world->pairCapacity)
     {
         return;
     }
     m2ContactBeginEvent* e = &world->beginEvents[world->beginEventCount++];
+    memset(e, 0, sizeof(*e)); // no stack garbage in observer payloads
     e->shapeIdA = MakeShapeId(world, shapeA);
     e->shapeIdB = MakeShapeId(world, shapeB);
     e->step = world->stepCount;
+
+    const m2Manifold* manifold = &world->manifolds[pairIndex];
+    int32_t bodyA = world->shapeBody[shapeA];
+    int32_t bodyB = world->shapeBody[shapeB];
+    m2Transform xfA = world->transforms[bodyA];
+    m2Rot qA = xfA.q;
+    e->normal = (m2Vec2){qA.c * manifold->normal.x - qA.s * manifold->normal.y,
+                         qA.s * manifold->normal.x + qA.c * manifold->normal.y};
+    e->pointCount = manifold->pointCount;
+    for (int32_t k = 0; k < manifold->pointCount && k < 2; ++k)
+    {
+        m2Vec2 anchor = manifold->points[k].anchorA;
+        e->points[k].x = xfA.p.x + (double)(qA.c * anchor.x - qA.s * anchor.y);
+        e->points[k].y = xfA.p.y + (double)(qA.s * anchor.x + qA.c * anchor.y);
+    }
+
+    if (manifold->pointCount > 0)
+    {
+        // Closing speed at the first point: how hard the hit landed.
+        m2Vec2 lcA = world->localCenters[bodyA];
+        m2Vec2 lcB = world->localCenters[bodyB];
+        m2Vec2 anchor = manifold->points[0].anchorA;
+        m2Vec2 rA = {qA.c * (anchor.x - lcA.x) - qA.s * (anchor.y - lcA.y),
+                     qA.s * (anchor.x - lcA.x) + qA.c * (anchor.y - lcA.y)};
+        m2Rot qB = world->transforms[bodyB].q;
+        // The same world point measured from B's center of mass.
+        m2Vec2 rB = {
+            (float)(e->points[0].x - world->transforms[bodyB].p.x) - (qB.c * lcB.x - qB.s * lcB.y),
+            (float)(e->points[0].y - world->transforms[bodyB].p.y) - (qB.s * lcB.x + qB.c * lcB.y)};
+        m2Vec2 vA = world->linearVelocities[bodyA];
+        m2Vec2 vB = world->linearVelocities[bodyB];
+        float wA = world->angularVelocities[bodyA];
+        float wB = world->angularVelocities[bodyB];
+        m2Vec2 velA = {vA.x - wA * rA.y, vA.y + wA * rA.x};
+        m2Vec2 velB = {vB.x - wB * rB.y, vB.y + wB * rB.x};
+        float vn = (velB.x - velA.x) * e->normal.x + (velB.y - velA.y) * e->normal.y;
+        e->approachSpeed = vn < 0.0f ? -vn : 0.0f;
+    }
 }
 
 static void EmitSensorEnd(m2World* world, int32_t shapeA, int32_t shapeB)
@@ -202,6 +241,7 @@ static void EmitSensorBegin(m2World* world, int32_t shapeA, int32_t shapeB)
     if (world->sensorBeginCount < world->pairCapacity)
     {
         m2ContactBeginEvent* e = &world->sensorBeginEvents[world->sensorBeginCount++];
+        memset(e, 0, sizeof(*e));
         e->shapeIdA = MakeShapeId(world, shapeA);
         e->shapeIdB = MakeShapeId(world, shapeB);
         e->step = world->stepCount;
@@ -1223,7 +1263,7 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
                 }
                 else
                 {
-                    EmitBegin(world, a, b);
+                    EmitBegin(world, a, b, i);
                 }
             }
             else if (sensor)

@@ -17,11 +17,22 @@ extern "C"
     /// body destruction included. Events carry the index of the step
     /// they belong to; after a rollback, re-simulated steps re-emit
     /// their events (dedup by {step, shape ids} on the host side).
+    /// Begin events carry the digested impact facts a game consumes:
+    /// where, which way, how hard. (Deliberate deviation from the
+    /// reference, which embeds its internal manifold type in the
+    /// event; Maul keeps internals private so their layout stays free
+    /// to evolve.) The normal points from shape A toward shape B in
+    /// world frame; approachSpeed is the closing speed along it,
+    /// never negative.
     typedef struct m2ContactBeginEvent
     {
         m2ShapeId shapeIdA; // lower shape index of the pair
         m2ShapeId shapeIdB;
         uint64_t step;
+        m2Vec2 normal;
+        float approachSpeed;
+        int32_t pointCount;
+        m2Pos2 points[2]; // world contact positions
     } m2ContactBeginEvent;
 
     typedef struct m2ContactEndEvent

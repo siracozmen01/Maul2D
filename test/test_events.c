@@ -437,8 +437,61 @@ static void TestSensors(void)
     m2DestroyWorld(world);
 }
 
+static void TestBeginEventPayload(void)
+{
+    // A ball dropped from a known height: the begin event must say
+    // where it hit, which way, and how hard - and the physics answer
+    // sqrt(2gh) is checkable to a few percent.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){50.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){50.0, 2.25}; // ball bottom 2m above the floor top
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    m2Circle circle = {{0.0f, 0.0f}, 0.25f};
+    m2CreateCircleShape(ball, &bs, &circle);
+
+    bool sawBegin = false;
+    m2ContactBeginEvent hit;
+    memset(&hit, 0, sizeof(hit));
+    for (int32_t i = 0; i < 120 && !sawBegin; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2ContactEvents events = m2World_GetContactEvents(world);
+        if (events.beginCount > 0)
+        {
+            hit = events.beginEvents[0];
+            sawBegin = true;
+        }
+    }
+    CHECK(sawBegin, "the drop produces a begin event");
+    CHECK(hit.pointCount >= 1, "the event carries contact points");
+    float ny = hit.normal.y;
+    CHECK(ny == 1.0f || ny == -1.0f, "the normal is vertical");
+    CHECK(hit.points[0].x > 49.9 && hit.points[0].x < 50.1, "the hit lands where it should");
+    CHECK(hit.points[0].y > -0.15 && hit.points[0].y < 0.15, "on the floor's surface");
+    // v = sqrt(2*10*2) = 6.32 m/s; speculative contact fires a touch
+    // early, so accept a small undershoot band.
+    CHECK(hit.approachSpeed > 5.6f && hit.approachSpeed < 6.6f,
+          "approach speed tells the impact story");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestBeginEventPayload();
     TestSensors();
     TestTypeChangeBookends();
     TestDestroyShapeBookends();
