@@ -11,6 +11,15 @@ extern "C"
 {
 #endif
 
+    typedef enum m2JointType
+    {
+        m2_distanceJoint = 0,
+        m2_revoluteJoint = 1,
+        m2_prismaticJoint = 2,
+        m2_weldJoint = 3,
+        m2_wheelJoint = 4,
+    } m2JointType;
+
     typedef struct m2JointId
     {
         int32_t index1; // 1-based, 0 = null
@@ -154,6 +163,14 @@ extern "C"
     float m2Joint_GetReactionForce(m2JointId jointId);
     float m2Joint_GetReactionTorque(m2JointId jointId);
     bool m2Joint_IsValid(m2JointId jointId);
+    m2JointType m2Joint_GetType(m2JointId jointId);
+    m2BodyId m2Joint_GetBodyA(m2JointId jointId);
+    m2BodyId m2Joint_GetBodyB(m2JointId jointId);
+
+    /// Editor and integration walk: ascending slot order, truthful
+    /// total (same contract as m2World_GetBodies). Thread class:
+    /// reader.
+    int32_t m2World_GetJoints(m2WorldId worldId, m2JointId* ids, int32_t capacity);
 
     static const m2JointId m2_nullJointId = {0, 0, 0};
 

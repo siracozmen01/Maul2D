@@ -170,6 +170,16 @@ extern "C"
                            int32_t groupIndex);
     float m2Shape_GetFriction(m2ShapeId shapeId);
     float m2Shape_GetRestitution(m2ShapeId shapeId);
+    m2ShapeType m2Shape_GetType(m2ShapeId shapeId);
+    bool m2Shape_IsSensor(m2ShapeId shapeId);
+    /// Reads the collision filter; any out pointer may be NULL.
+    void m2Shape_GetFilter(m2ShapeId shapeId, uint32_t* categoryBits, uint32_t* maskBits,
+                           int32_t* groupIndex);
+
+    /// Enumeration walks, ascending slot order, truthful totals
+    /// (same contract as m2World_OverlapAABB). Thread class: reader.
+    int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity);
+    int32_t m2World_GetChains(m2WorldId worldId, m2ChainId* ids, int32_t capacity);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 

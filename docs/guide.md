@@ -121,6 +121,16 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Walking the world
+
+An editor or engine layer can enumerate everything from a bare world
+id: `m2World_GetBodies`, `m2World_GetJoints` and `m2World_GetChains`
+fill caller arrays in ascending slot order and return the true total
+even when it exceeds capacity, and `m2Body_GetShapes` does the same
+per body. Types, filters and sensor flags read back through
+`m2Body_GetType`, `m2Shape_GetType`, `m2Shape_GetFilter`,
+`m2Shape_IsSensor`, `m2Joint_GetType` and `m2Joint_GetBodyA`/`B`.
+
 ## Rollback netcode in one paragraph
 
 Snapshot every confirmed frame. When a late input arrives, restore,

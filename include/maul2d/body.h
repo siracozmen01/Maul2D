@@ -64,6 +64,13 @@ extern "C"
     /// Sleep state (topic-06). Setters and new contacts wake bodies;
     /// waking is island-transitive at the next step.
     bool m2Body_IsAwake(m2BodyId bodyId);
+    m2BodyType m2Body_GetType(m2BodyId bodyId);
+
+    /// Editor and integration walk: fills ids with up to capacity
+    /// live body handles in ascending slot order and returns the
+    /// TRUE total, even when it exceeds capacity. Thread class:
+    /// reader.
+    int32_t m2World_GetBodies(m2WorldId worldId, m2BodyId* ids, int32_t capacity);
 
     /// Setters wake nothing yet (no sleep system in this slice) but are
     /// already journal-shaped: every mutation is a discrete command.

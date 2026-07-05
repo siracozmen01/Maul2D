@@ -3488,3 +3488,224 @@ bool m2Joint_IsValid(m2JointId jointId)
     return index >= 0 && index < world->jointCapacity && world->jointAlive[index] != 0 &&
            world->jointGenerations[index] == jointId.generation;
 }
+
+// Introspection and enumeration (slice 55): pure readers for the
+// editor and engine-integration walk. Every list is ascending slot
+// order (the canonical order everywhere else in Maul) and returns the
+// TRUE total even when it exceeds capacity, so callers can size and
+// retry instead of silently missing objects.
+
+static int32_t JointSlotChecked(const m2World* world, m2JointId jointId)
+{
+    int32_t index = jointId.index1 - 1;
+    if (index < 0 || index >= world->jointCapacity || world->jointAlive[index] == 0 ||
+        world->jointGenerations[index] != jointId.generation)
+    {
+        return -1;
+    }
+    return index;
+}
+
+m2JointType m2Joint_GetType(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return m2_distanceJoint;
+    }
+    return (m2JointType)world->jointType[index];
+}
+
+m2BodyId m2Joint_GetBodyA(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return m2_nullBodyId;
+    }
+    int32_t b = world->jointBodyA[index];
+    m2BodyId id = {b + 1, jointId.world0, world->generations[b]};
+    return id;
+}
+
+m2BodyId m2Joint_GetBodyB(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return m2_nullBodyId;
+    }
+    int32_t b = world->jointBodyB[index];
+    m2BodyId id = {b + 1, jointId.world0, world->generations[b]};
+    return id;
+}
+
+m2BodyType m2Body_GetType(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return m2_staticBody;
+    }
+    return (m2BodyType)world->types[index];
+}
+
+m2ShapeType m2Shape_GetType(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return m2_circleShape;
+    }
+    return (m2ShapeType)world->shapeGeometry[index].type;
+}
+
+bool m2Shape_IsSensor(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return false;
+    }
+    return world->shapeSensor[index] != 0;
+}
+
+void m2Shape_GetFilter(m2ShapeId shapeId, uint32_t* categoryBits, uint32_t* maskBits,
+                       int32_t* groupIndex)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    uint32_t category = 0;
+    uint32_t mask = 0;
+    int32_t group = 0;
+    if (index >= 0)
+    {
+        category = world->shapeCategory[index];
+        mask = world->shapeMask[index];
+        group = world->shapeGroup[index];
+    }
+    else
+    {
+        M2_ASSERT(false);
+    }
+    if (categoryBits != NULL)
+    {
+        *categoryBits = category;
+    }
+    if (maskBits != NULL)
+    {
+        *maskBits = mask;
+    }
+    if (groupIndex != NULL)
+    {
+        *groupIndex = group;
+    }
+}
+
+int32_t m2World_GetBodies(m2WorldId worldId, m2BodyId* ids, int32_t capacity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            m2BodyId id = {i + 1, world->worldIndex0, world->generations[i]};
+            ids[total] = id;
+        }
+        total += 1;
+    }
+    return total;
+}
+
+int32_t m2World_GetJoints(m2WorldId worldId, m2JointId* ids, int32_t capacity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxJointIndex; ++i)
+    {
+        if (world->jointAlive[i] == 0)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            m2JointId id = {i + 1, world->worldIndex0, world->jointGenerations[i]};
+            ids[total] = id;
+        }
+        total += 1;
+    }
+    return total;
+}
+
+int32_t m2World_GetChains(m2WorldId worldId, m2ChainId* ids, int32_t capacity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxChainIndex; ++i)
+    {
+        if (world->chainAlive[i] == 0)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            m2ChainId id = {i + 1, world->worldIndex0, world->chainGenerations[i]};
+            ids[total] = id;
+        }
+        total += 1;
+    }
+    return total;
+}
+
+int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t bodyIndex = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (bodyIndex < 0)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxShapeIndex; ++i)
+    {
+        if (world->shapeAlive[i] == 0 || world->shapeBody[i] != bodyIndex)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            ids[total] = MakeShapeId(world, i);
+        }
+        total += 1;
+    }
+    return total;
+}

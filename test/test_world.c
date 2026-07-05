@@ -612,9 +612,134 @@ static void TestDestroyWakesSleepers(void)
     m2DestroyWorld(world);
 }
 
+// The integrator walk: an editor or engine layer must be able to
+// enumerate every live object from a bare world id, read types and
+// filters back, and see destroys reflected. Ascending slot order,
+// truthful totals.
+static void TestEnumerationWalk(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -1.0};
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    m2Polygon slabPoly = m2MakeBox(8.0f, 0.5f);
+    m2ShapeId slab = m2CreatePolygonShape(ground, &gs, &slabPoly);
+    m2Vec2 pts[6] = {{6.0f, 2.0f}, {4.0f, 2.0f},  {2.0f, 2.0f},
+                     {0.0f, 2.0f}, {-2.0f, 2.0f}, {-4.0f, 2.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId ledge = m2CreateChain(ground, &chain);
+
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.position = (m2Pos2){0.0, 6.0};
+    m2BodyId hook = m2CreateBody(world, &hd);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.type = m2_dynamicBody;
+    ad.position = (m2Pos2){0.0, 4.0};
+    m2BodyId boxA = m2CreateBody(world, &ad);
+    m2ShapeDef asd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(boxA, &asd, &unit);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){3.0, 0.5};
+    m2BodyId boxB = m2CreateBody(world, &bd);
+    m2CreatePolygonShape(boxB, &asd, &unit);
+    m2ShapeDef sensorDef = m2DefaultShapeDef();
+    sensorDef.isSensor = true;
+    m2Circle aura = {{0.0f, 0.0f}, 1.5f};
+    m2ShapeId auraShape = m2CreateCircleShape(boxB, &sensorDef, &aura);
+
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hook;
+    dj.bodyIdB = boxA;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+    rj.bodyIdA = ground;
+    rj.bodyIdB = boxB;
+    m2JointId pin = m2CreateRevoluteJoint(world, &rj);
+
+    // Totals are truthful regardless of capacity.
+    CHECK(m2World_GetBodies(world, NULL, 0) == 4, "four live bodies");
+    m2BodyId two[2];
+    CHECK(m2World_GetBodies(world, two, 2) == 4, "small capacity still reports four");
+    m2BodyId bodies[8];
+    int32_t n = m2World_GetBodies(world, bodies, 8);
+    CHECK(n == 4, "the full walk finds four");
+    bool ascending = true;
+    for (int32_t i = 1; i < n; ++i)
+    {
+        ascending = ascending && bodies[i - 1].index1 < bodies[i].index1;
+    }
+    CHECK(ascending, "bodies arrive in ascending slot order");
+    CHECK(m2World_GetJoints(world, NULL, 0) == 2, "two joints");
+    CHECK(m2World_GetChains(world, NULL, 0) == 1, "one chain");
+
+    // Per-body shape walks.
+    CHECK(m2Body_GetShapes(ground, NULL, 0) == 4, "slab plus three chain segments");
+    m2ShapeId groundShapes[8];
+    int32_t gn = m2Body_GetShapes(ground, groundShapes, 8);
+    int32_t segments = 0;
+    for (int32_t i = 0; i < gn; ++i)
+    {
+        segments += m2Shape_GetType(groundShapes[i]) == m2_chainSegmentShape ? 1 : 0;
+    }
+    CHECK(segments == 3, "and the walk can tell which are chain links");
+    CHECK(m2Body_GetShapes(boxB, NULL, 0) == 2, "box B carries body and aura");
+
+    // Types and flags read back.
+    CHECK(m2Body_GetType(ground) == m2_staticBody, "ground reads static");
+    CHECK(m2Body_GetType(boxA) == m2_dynamicBody, "box A reads dynamic");
+    m2Body_SetType(boxA, m2_kinematicBody);
+    CHECK(m2Body_GetType(boxA) == m2_kinematicBody, "and follows SetType");
+    m2Body_SetType(boxA, m2_dynamicBody);
+    CHECK(m2Shape_GetType(slab) == m2_polygonShape, "slab reads polygon");
+    CHECK(m2Shape_GetType(auraShape) == m2_circleShape, "aura reads circle");
+    CHECK(m2Shape_IsSensor(auraShape), "aura reads sensor");
+    CHECK(!m2Shape_IsSensor(slab), "slab does not");
+
+    // Filter round-trip, including NULL out-params.
+    m2Shape_SetFilter(slab, 0x4u, 0xF0u, -3);
+    uint32_t category = 0;
+    uint32_t mask = 0;
+    int32_t group = 0;
+    m2Shape_GetFilter(slab, &category, &mask, &group);
+    CHECK(category == 0x4u && mask == 0xF0u && group == -3, "filter reads back exactly");
+    m2Shape_GetFilter(slab, NULL, NULL, &group);
+    CHECK(group == -3, "partial reads are fine");
+
+    // Joint introspection.
+    CHECK(m2Joint_GetType(rope) == m2_distanceJoint, "rope reads distance");
+    CHECK(m2Joint_GetType(pin) == m2_revoluteJoint, "pin reads revolute");
+    m2BodyId ja = m2Joint_GetBodyA(rope);
+    m2BodyId jb = m2Joint_GetBodyB(rope);
+    CHECK(ja.index1 == hook.index1 && ja.generation == hook.generation, "rope body A is the hook");
+    CHECK(jb.index1 == boxA.index1 && jb.generation == boxA.generation, "rope body B is box A");
+
+    // Destroys are reflected immediately.
+    m2DestroyBody(boxA);
+    CHECK(m2World_GetBodies(world, NULL, 0) == 3, "three bodies after the destroy");
+    CHECK(m2World_GetJoints(world, NULL, 0) == 1, "the rope died with its body");
+    m2DestroyChain(ledge);
+    CHECK(m2World_GetChains(world, NULL, 0) == 0, "no chains after demolition");
+    CHECK(m2Body_GetShapes(ground, NULL, 0) == 1, "the slab is all that remains");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestEnumerationWalk();
     TestDestroyWakesSleepers();
     TestDebugDraw();
     TestSetType();
