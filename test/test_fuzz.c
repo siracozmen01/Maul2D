@@ -10,7 +10,10 @@
 //      and a re-snapshot is byte-equal,
 //   3. a twin run of the same seed WITHOUT a journal reaches the same
 //      hash (recording is observation-only, and no static state leaks
-//      between worlds).
+//      between worlds),
+//   4. a THREADED twin (workerCount 3) of the same seed reaches the
+//      same hash: parallel execution is a pure scheduling change even
+//      under random API churn, not just on crafted scenes.
 // The mixed end-state hash of all scenarios is the 15th CI gate line:
 // eight platform cells must agree on the bits of several hundred
 // randomized API calls. Hand-written tests walk the paths we thought
@@ -112,7 +115,9 @@ static void DoRandomOp(m2WorldId world)
 
     if (roll < 30)
     {
-        m2World_Step(world, Pick(2) == 0 ? 1.0f / 60.0f : 1.0f / 120.0f, 4);
+        float dt = Pick(2) == 0 ? 1.0f / 60.0f : 1.0f / 120.0f;
+        int32_t substeps = 2 << Pick(2); // 2, 4, or 8
+        m2World_Step(world, dt, substeps);
         return;
     }
     if (roll < 35)
@@ -453,13 +458,15 @@ static void DoRandomOp(m2WorldId world)
 
 // One full walk. With a journal the walk is recorded and must replay
 // onto its own bits; the rollback identity is enforced either way.
-static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapacity)
+static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapacity,
+                            int32_t workerCount)
 {
     s_rng = seed;
     m2WorldDef def = m2DefaultWorldDef();
     def.bodyCapacity = 16;
     def.shapeCapacity = 32;
     def.jointCapacity = 8;
+    def.workerCount = workerCount;
     m2WorldId world = m2CreateWorld(&def);
     if (journal != NULL)
     {
@@ -474,7 +481,7 @@ static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapa
     m2Polygon slab = m2MakeBox(14.0f, 0.5f);
     m2CreatePolygonShape(floor, &fs, &slab);
 
-    for (int32_t i = 0; i < 220; ++i)
+    for (int32_t i = 0; i < 300; ++i)
     {
         DoRandomOp(world);
     }
@@ -529,9 +536,11 @@ int main(void)
     };
     for (int32_t i = 0; i < 10; ++i)
     {
-        uint64_t recorded = RunScenario(seeds[i], journal, JOURNAL_CAPACITY);
-        uint64_t twin = RunScenario(seeds[i], NULL, 0);
+        uint64_t recorded = RunScenario(seeds[i], journal, JOURNAL_CAPACITY, 1);
+        uint64_t twin = RunScenario(seeds[i], NULL, 0, 1);
+        uint64_t threaded = RunScenario(seeds[i], NULL, 0, 3);
         CHECK(recorded == twin, "the unjournaled twin reaches the same bits");
+        CHECK(recorded == threaded, "the threaded twin reaches the same bits");
         fuzzHash ^= recorded + 0x9E3779B97F4A7C15ull + (fuzzHash << 6) + (fuzzHash >> 2);
     }
     free(journal);
