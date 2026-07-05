@@ -124,13 +124,19 @@ static void DoRandomOp(m2WorldId world)
         m2BodyDef bd = m2DefaultBodyDef();
         uint32_t kind = Pick(100);
         bd.type = kind < 60 ? m2_dynamicBody : (kind < 85 ? m2_staticBody : m2_kinematicBody);
-        bd.position = (m2Pos2){PickCoord(), (double)Pick(80) * 0.1};
+        // One draw per statement: evaluation order inside initializer
+        // lists and argument lists is indeterminately sequenced in C,
+        // and the fuzzer's first CI run proved compilers disagree.
+        double px = PickCoord();
+        double py = (double)Pick(80) * 0.1;
+        bd.position = (m2Pos2){px, py};
         if (bd.type == m2_dynamicBody)
         {
             bd.isBullet = Pick(7) == 0;
             bd.gravityScale = 0.5f + (float)Pick(11) * 0.1f;
-            bd.linearVelocity =
-                (m2Vec2){(float)((int32_t)Pick(9) - 4), (float)((int32_t)Pick(9) - 4)};
+            float vx = (float)((int32_t)Pick(9) - 4);
+            float vy = (float)((int32_t)Pick(9) - 4);
+            bd.linearVelocity = (m2Vec2){vx, vy};
         }
         m2CreateBody(world, &bd);
         return;
@@ -157,9 +163,10 @@ static void DoRandomOp(m2WorldId world)
         uint32_t kind = Pick(3);
         if (kind == 0)
         {
-            m2Circle circle = {
-                {(float)((int32_t)Pick(11) - 5) * 0.1f, (float)((int32_t)Pick(11) - 5) * 0.1f},
-                0.2f + (float)Pick(25) * 0.01f};
+            float cx = (float)((int32_t)Pick(11) - 5) * 0.1f;
+            float cy = (float)((int32_t)Pick(11) - 5) * 0.1f;
+            float radius = 0.2f + (float)Pick(25) * 0.01f;
+            m2Circle circle = {{cx, cy}, radius};
             m2CreateCircleShape(body, &sd, &circle);
         }
         else if (kind == 1)
@@ -170,8 +177,9 @@ static void DoRandomOp(m2WorldId world)
         }
         else
         {
-            m2Polygon box =
-                m2MakeBox(0.15f + (float)Pick(40) * 0.01f, 0.15f + (float)Pick(40) * 0.01f);
+            float halfW = 0.15f + (float)Pick(40) * 0.01f;
+            float halfH = 0.15f + (float)Pick(40) * 0.01f;
+            m2Polygon box = m2MakeBox(halfW, halfH);
             m2CreatePolygonShape(body, &sd, &box);
         }
         return;
@@ -188,10 +196,12 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        m2Vec2 anchorA = {(float)((int32_t)Pick(5) - 2) * 0.1f,
-                          (float)((int32_t)Pick(5) - 2) * 0.1f};
-        m2Vec2 anchorB = {(float)((int32_t)Pick(5) - 2) * 0.1f,
-                          (float)((int32_t)Pick(5) - 2) * 0.1f};
+        float aax = (float)((int32_t)Pick(5) - 2) * 0.1f;
+        float aay = (float)((int32_t)Pick(5) - 2) * 0.1f;
+        float abx = (float)((int32_t)Pick(5) - 2) * 0.1f;
+        float aby = (float)((int32_t)Pick(5) - 2) * 0.1f;
+        m2Vec2 anchorA = {aax, aay};
+        m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
         uint32_t type = Pick(5);
         if (type == 0)
@@ -264,7 +274,9 @@ static void DoRandomOp(m2WorldId world)
         }
         if (made.index1 != 0 && Pick(5) == 0)
         {
-            m2Joint_SetBreakLimits(made, 10.0f + (float)Pick(60), 5.0f + (float)Pick(30));
+            float bf = 10.0f + (float)Pick(60);
+            float bt = 5.0f + (float)Pick(30);
+            m2Joint_SetBreakLimits(made, bf, bt);
         }
         return;
     }
@@ -347,8 +359,9 @@ static void DoRandomOp(m2WorldId world)
         uint32_t which = Pick(5);
         if (which == 0)
         {
-            m2Body_SetLinearVelocity(
-                body, (m2Vec2){(float)((int32_t)Pick(9) - 4), (float)((int32_t)Pick(9) - 4)});
+            float vx = (float)((int32_t)Pick(9) - 4);
+            float vy = (float)((int32_t)Pick(9) - 4);
+            m2Body_SetLinearVelocity(body, (m2Vec2){vx, vy});
         }
         else if (which == 1)
         {
@@ -359,15 +372,17 @@ static void DoRandomOp(m2WorldId world)
             if (m2Body_GetType(body) == m2_dynamicBody)
             {
                 m2Pos2 at = m2Body_GetPosition(body);
-                m2Body_ApplyLinearImpulse(
-                    body, (m2Vec2){(float)((int32_t)Pick(5) - 2), (float)((int32_t)Pick(5) - 2)},
-                    at);
+                float jx = (float)((int32_t)Pick(5) - 2);
+                float jy = (float)((int32_t)Pick(5) - 2);
+                m2Body_ApplyLinearImpulse(body, (m2Vec2){jx, jy}, at);
             }
         }
         else if (which == 3)
         {
             m2Rot identity = {1.0f, 0.0f};
-            m2Body_SetTransform(body, (m2Pos2){PickCoord(), (double)Pick(60) * 0.1}, identity);
+            double tx = PickCoord();
+            double ty = (double)Pick(60) * 0.1;
+            m2Body_SetTransform(body, (m2Pos2){tx, ty}, identity);
         }
         else
         {
@@ -377,8 +392,9 @@ static void DoRandomOp(m2WorldId world)
     }
     if (roll < 79)
     {
-        m2World_SetGravity(world, (m2Vec2){(float)((int32_t)Pick(5) - 2) * 0.5f,
-                                           -10.0f + (float)((int32_t)Pick(9) - 4) * 0.5f});
+        float gx = (float)((int32_t)Pick(5) - 2) * 0.5f;
+        float gy = -10.0f + (float)((int32_t)Pick(9) - 4) * 0.5f;
+        m2World_SetGravity(world, (m2Vec2){gx, gy});
         return;
     }
     if (roll < 90)
@@ -399,8 +415,10 @@ static void DoRandomOp(m2WorldId world)
         }
         else
         {
-            m2Shape_SetFilter(shape, 1u << Pick(4), Pick(4) == 0 ? 0x3u : 0xFFFFFFFFu,
-                              (int32_t)Pick(5) - 2);
+            uint32_t category = 1u << Pick(4);
+            uint32_t mask = Pick(4) == 0 ? 0x3u : 0xFFFFFFFFu;
+            int32_t group = (int32_t)Pick(5) - 2;
+            m2Shape_SetFilter(shape, category, mask, group);
         }
         return;
     }
@@ -426,7 +444,9 @@ static void DoRandomOp(m2WorldId world)
         }
         else
         {
-            m2Joint_SetBreakLimits(joint, 20.0f + (float)Pick(80), 10.0f + (float)Pick(40));
+            float bf = 20.0f + (float)Pick(80);
+            float bt = 10.0f + (float)Pick(40);
+            m2Joint_SetBreakLimits(joint, bf, bt);
         }
     }
 }
