@@ -2505,6 +2505,191 @@ double m2World_GetKineticEnergy(m2WorldId worldId)
     return energy;
 }
 
+void m2World_SetGravity(m2WorldId worldId, m2Vec2 gravity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->gravity.x == gravity.x && world->gravity.y == gravity.y)
+    {
+        return; // no-op, not journaled
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2Vec2 gravity;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.gravity = gravity;
+        m2JournalRecord(world, m2_opSetGravity, &record, (int32_t)sizeof(record));
+    }
+    world->gravity = gravity;
+    // Honesty over precedent: a sleeping stack must feel the new
+    // world. Wake every dynamic sleeper (deterministic, one pass).
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] != 0 && world->types[i] == (uint8_t)m2_dynamicBody &&
+            world->asleep[i] != 0)
+        {
+            world->asleep[i] = 0;
+            world->sleepTimes[i] = 0.0f;
+        }
+    }
+}
+
+m2Vec2 m2World_GetGravity(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    return world != NULL ? world->gravity : (m2Vec2){0.0f, 0.0f};
+}
+
+static int32_t ShapeSlotChecked(m2ShapeId shapeId, m2World** outWorld)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    *outWorld = world;
+    if (world == NULL)
+    {
+        return -1;
+    }
+    int32_t index = shapeId.index1 - 1;
+    if (index < 0 || index >= world->shapeCapacity || world->shapeAlive[index] == 0 ||
+        world->shapeGenerations[index] != shapeId.generation)
+    {
+        return -1;
+    }
+    return index;
+}
+
+// One journaled channel for shape materials (op 22).
+void m2SetShapeParamInternal(m2World* world, m2ShapeId shapeId, uint8_t param, float value)
+{
+    int32_t index = shapeId.index1 - 1;
+    if (index < 0 || index >= world->shapeCapacity || world->shapeAlive[index] == 0 ||
+        world->shapeGenerations[index] != shapeId.generation)
+    {
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ShapeId shape;
+            float value;
+            uint8_t param;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.shape = shapeId;
+        record.value = value;
+        record.param = param;
+        m2JournalRecord(world, m2_opShapeParam, &record, (int32_t)sizeof(record));
+    }
+    if (param == 0)
+    {
+        world->shapeFriction[index] = value;
+    }
+    else
+    {
+        world->shapeRestitution[index] = value;
+    }
+}
+
+void m2Shape_SetFriction(m2ShapeId shapeId, float friction)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    if (world != NULL && friction >= 0.0f)
+    {
+        m2SetShapeParamInternal(world, shapeId, 0, friction);
+    }
+}
+
+void m2Shape_SetRestitution(m2ShapeId shapeId, float restitution)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    if (world != NULL && restitution >= 0.0f && restitution <= 1.0f)
+    {
+        m2SetShapeParamInternal(world, shapeId, 1, restitution);
+    }
+}
+
+float m2Shape_GetFriction(m2ShapeId shapeId)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    return index >= 0 ? world->shapeFriction[index] : 0.0f;
+}
+
+float m2Shape_GetRestitution(m2ShapeId shapeId)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    return index >= 0 ? world->shapeRestitution[index] : 0.0f;
+}
+
+void m2Shape_SetFilter(m2ShapeId shapeId, uint32_t categoryBits, uint32_t maskBits,
+                       int32_t groupIndex)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ShapeId shape;
+            uint32_t categoryBits;
+            uint32_t maskBits;
+            int32_t groupIndex;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.shape = shapeId;
+        record.categoryBits = categoryBits;
+        record.maskBits = maskBits;
+        record.groupIndex = groupIndex;
+        m2JournalRecord(world, m2_opSetFilter, &record, (int32_t)sizeof(record));
+    }
+
+    // Whoever this shape was touching must notice its allegiance
+    // change, exactly like a teleport or a type flip.
+    int32_t body = world->shapeBody[index];
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t sa = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t sb = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (sa != index && sb != index)
+        {
+            continue;
+        }
+        int32_t other = world->shapeBody[sa == index ? sb : sa];
+        if (world->types[other] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[other] = 0;
+            world->sleepTimes[other] = 0.0f;
+        }
+    }
+    if (world->types[body] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[body] = 0;
+        world->sleepTimes[body] = 0.0f;
+    }
+
+    world->shapeCategory[index] = categoryBits;
+    world->shapeMask[index] = maskBits;
+    world->shapeGroup[index] = groupIndex;
+    PushMoved(world, index); // pair rebuild purges and re-collects (M19)
+}
+
 m2Counters m2World_GetCounters(m2WorldId worldId)
 {
     m2Counters counters;

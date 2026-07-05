@@ -146,6 +146,17 @@ extern "C"
     /// next step's events), pairs are pruned, and the owning body's
     /// mass and center of mass are recomputed. Thread class: writer.
     void m2DestroyShape(m2ShapeId shapeId);
+
+    /// Runtime material and filter tuning, journaled. Material changes
+    /// apply the next time the contact is prepared; filter changes
+    /// rebuild the shape's pairs immediately (ends are bookended) and
+    /// wake whoever was touching it. Thread class: writer / reader.
+    void m2Shape_SetFriction(m2ShapeId shapeId, float friction);
+    void m2Shape_SetRestitution(m2ShapeId shapeId, float restitution);
+    void m2Shape_SetFilter(m2ShapeId shapeId, uint32_t categoryBits, uint32_t maskBits,
+                           int32_t groupIndex);
+    float m2Shape_GetFriction(m2ShapeId shapeId);
+    float m2Shape_GetRestitution(m2ShapeId shapeId);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 

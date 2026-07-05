@@ -192,6 +192,7 @@ void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def
                           int32_t createdCount);
 void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
 void m2DestroyJointInternal(m2World* world, int32_t index);
+void m2SetShapeParamInternal(m2World* world, m2ShapeId shapeId, uint8_t param, float value);
 
 // Journal ops (fixed-size payloads, little-endian raw structs).
 enum
@@ -216,6 +217,9 @@ enum
     m2_opSetType = 18,
     m2_opRestore = 19,     // variable length: i32 size + snapshot bytes
     m2_opCreateChain = 20, // variable length: def echo + i32 count + points
+    m2_opSetGravity = 21,
+    m2_opShapeParam = 22, // friction (0) / restitution (1)
+    m2_opSetFilter = 23,
 };
 
 // Journaled joint parameter channel (op 16).

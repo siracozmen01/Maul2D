@@ -62,6 +62,13 @@ extern "C"
     /// Generation-checked liveness. Thread class: reader.
     bool m2World_IsValid(m2WorldId worldId);
 
+    /// Changing gravity wakes every sleeping dynamic body: a stack
+    /// must not float against a world that turned upside down. (The
+    /// reference leaves sleepers floating; Maul picks honesty.) The
+    /// change is journaled. Thread class: writer / reader.
+    void m2World_SetGravity(m2WorldId worldId, m2Vec2 gravity);
+    m2Vec2 m2World_GetGravity(m2WorldId worldId);
+
     /// Debug drawing: the engine walks its state and calls back; you
     /// render. Polygon vertices arrive BODY-LOCAL with the body's f64
     /// origin and rotation so your renderer can compose camera-relative

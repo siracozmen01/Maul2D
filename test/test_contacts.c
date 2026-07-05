@@ -542,6 +542,125 @@ static void TestChainGround(void)
     m2DestroyWorld(world);
 }
 
+static void TestRuntimeMaterials(void)
+{
+    // Ice turns to grip mid-slide: the tuned twin stops far short of
+    // the untouched one. Then a dead ball turns bouncy.
+    double travel[2];
+    for (int32_t tuned = 0; tuned < 2; ++tuned)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.bodyCapacity = 8;
+        def.shapeCapacity = 8;
+        m2WorldId world = m2CreateWorld(&def);
+        m2BodyDef fd = m2DefaultBodyDef();
+        fd.position = (m2Pos2){0.0, -0.5};
+        m2BodyId floor = m2CreateBody(world, &fd);
+        m2ShapeDef fs = m2DefaultShapeDef();
+        fs.friction = 0.02f; // ice
+        m2Polygon slab = m2MakeBox(40.0f, 0.5f);
+        m2ShapeId ice = m2CreatePolygonShape(floor, &fs, &slab);
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-30.0, 0.45};
+        bd.linearVelocity = (m2Vec2){8.0f, 0.0f};
+        m2BodyId puck = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.friction = 1.0f;
+        m2Polygon unit = m2MakeBox(0.3f, 0.3f);
+        m2CreatePolygonShape(puck, &sd, &unit);
+
+        double x0 = m2Body_GetPosition(puck).x;
+        for (int32_t i = 0; i < 300; ++i)
+        {
+            if (tuned == 1 && i == 30)
+            {
+                m2Shape_SetFriction(ice, 1.0f); // grip, mid-slide
+            }
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        travel[tuned] = m2Body_GetPosition(puck).x - x0;
+        m2DestroyWorld(world);
+    }
+    CHECK(travel[1] < travel[0] - 3.0, "grip mid-slide cuts the trip short");
+
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 3.0};
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.restitution = 0.0f;
+    m2Circle circle = {{0.0f, 0.0f}, 0.25f};
+    m2ShapeId ballShape = m2CreateCircleShape(ball, &bs, &circle);
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4); // dead landing
+    }
+    m2Shape_SetRestitution(ballShape, 0.9f);
+    CHECK(m2Shape_GetRestitution(ballShape) == 0.9f, "the getter agrees");
+    m2Body_ApplyLinearImpulse(ball, (m2Vec2){0.0f, -0.6f}, m2Body_GetPosition(ball));
+    double peak = 0.0;
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        double y = m2Body_GetPosition(ball).y;
+        peak = y > peak ? y : peak;
+    }
+    CHECK(peak > 0.4, "a dead ball turned bouncy");
+
+    m2DestroyWorld(world);
+}
+
+static void TestRuntimeFilter(void)
+{
+    // The floor turns into a ghost under a resting box: the box must
+    // fall through and the pair's end must be witnessed.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(5.0f, 0.5f);
+    m2ShapeId floorShape = m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2Shape_SetFilter(floorShape, 0x2, 0x2, 0); // box (cat 1) no longer matches
+    bool sawEnd = false;
+    for (int32_t i = 0; i < 70; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2ContactEvents events = m2World_GetContactEvents(world);
+        sawEnd = sawEnd || events.endCount > 0;
+    }
+    CHECK(sawEnd, "the vanished pair emitted its end (M19)");
+    CHECK(m2Body_GetPosition(box).y < -1.0, "the box fell through its former floor");
+
+    m2DestroyWorld(world);
+}
+
 static void TestFilterRollback(void)
 {
     // Filters are snapshot state: a mixed-filter scene must replay
@@ -597,6 +716,8 @@ int main(void)
     TestCollisionFilters();
     TestGroupIndex();
     TestChainGround();
+    TestRuntimeMaterials();
+    TestRuntimeFilter();
     TestFilterRollback();
     TestCircleKernels();
     TestPolygonCircleRegions();

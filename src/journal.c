@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 12u
+#define M2_JOURNAL_VERSION 13u
 
 typedef struct m2JournalHeader
 {
@@ -506,6 +506,48 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_ASSERT(made == ch.createdCount);
             (void)made;
             cursor += pointBytes;
+            break;
+        }
+        case m2_opSetGravity:
+        {
+            struct GravityOp
+            {
+                m2Vec2 gravity;
+            };
+            M2_READ_OP(struct GravityOp, g);
+            m2World_SetGravity(worldId, g.gravity);
+            break;
+        }
+        case m2_opShapeParam:
+        {
+            struct ShapeParamOp
+            {
+                m2ShapeId shape;
+                float value;
+                uint8_t param;
+            };
+            M2_READ_OP(struct ShapeParamOp, sp);
+            sp.shape.world0 = here;
+            m2World* target = m2World_GetInternal(worldId);
+            if (target == NULL)
+            {
+                return false;
+            }
+            m2SetShapeParamInternal(target, sp.shape, sp.param, sp.value);
+            break;
+        }
+        case m2_opSetFilter:
+        {
+            struct FilterOp
+            {
+                m2ShapeId shape;
+                uint32_t categoryBits;
+                uint32_t maskBits;
+                int32_t groupIndex;
+            };
+            M2_READ_OP(struct FilterOp, fo);
+            fo.shape.world0 = here;
+            m2Shape_SetFilter(fo.shape, fo.categoryBits, fo.maskBits, fo.groupIndex);
             break;
         }
         case m2_opSetType:

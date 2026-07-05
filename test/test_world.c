@@ -532,8 +532,50 @@ static void TestDebugDraw(void)
     m2DestroyWorld(world);
 }
 
+static void TestRuntimeGravity(void)
+{
+    // Flip gravity over a sleeping box: it must wake and rise. The
+    // reference leaves sleepers floating; Maul wakes the world.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(5.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(box, &sd, &unit);
+    for (int32_t i = 0; i < 200; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(box), "asleep under the old sky");
+
+    m2World_SetGravity(world, (m2Vec2){0.0f, 10.0f});
+    m2Vec2 g = m2World_GetGravity(world);
+    CHECK(g.y == 10.0f, "the getter reads the new sky");
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_IsAwake(box), "the sleeper feels the flip");
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(box).y > 3.0, "and falls upward");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
+    TestRuntimeGravity();
     TestDebugDraw();
     TestSetType();
     TestTeleport();
