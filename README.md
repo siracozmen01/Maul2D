@@ -10,20 +10,20 @@ Written in C17. MIT licensed.
 
 The core engine is complete and gated:
 
-- **Rigid bodies** — circles, capsules, segments, polygons (rounded too);
+- **Rigid bodies** - circles, capsules, segments, polygons (rounded too);
   static, kinematic, dynamic; proper center-of-mass handling.
 - **Soft-step solver** with graph-colored parallel solving. Worker count is
   *non-semantic*: 1, 2 or 8 threads produce bit-identical trajectories, and
   a CI gate proves it.
-- **Joints** — distance, revolute, prismatic, weld, wheel; motors, limits and
+- **Joints** - distance, revolute, prismatic, weld, wheel; motors, limits and
   suspension springs; runtime tuning that wakes and journals.
 - **Sleeping** (island-coupled), **continuous collision** for bullets,
   **contact events** with strict begin/end bookending.
 - **Rollback-native**: flat snapshots restore bit-exactly; a command journal
   records a session and replays it into a fresh world, byte for byte.
-- **Queries** — closest ray cast and AABB overlap, canonical ordering, exact
+- **Queries** - closest ray cast and AABB overlap, canonical ordering, exact
   hundreds of kilometers from the origin (positions are f64).
-- **Diagnostics** — deterministic counters, wall-clock phase profile,
+- **Diagnostics** - deterministic counters, wall-clock phase profile,
   allocator hooks for engines that own their memory.
 
 Determinism is the contract, not a feature flag: every commit must produce
@@ -64,7 +64,7 @@ cmake --build build
 ./build/test_core
 ```
 
-No dependencies. C17 compiler required (MSVC ≥ VS2022 17.0 — older versions
+No dependencies. C17 compiler required (MSVC ≥ VS2022 17.0 - older versions
 cannot disable FP contraction, which this engine requires).
 
 ## Acknowledgments

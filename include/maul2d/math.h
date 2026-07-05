@@ -55,7 +55,7 @@ extern "C"
 #include <arm_neon.h>
 #endif
 
-    /// Pinned minimum: exactly (a < b ? a : b), in this operand order —
+    /// Pinned minimum: exactly (a < b ? a : b), in this operand order -
     /// including signed zero and NaN behavior. MSVC folds the plain ternary
     /// under value numbering (+0/-0 compare equal), so on MSVC x64 this is
     /// implemented with scalar MINSS, whose ISA-defined semantics are exactly

@@ -18,11 +18,11 @@ cmake --build build
 
 Metrics per scene: settle step (first step where every body sleeps), a
 transform hash at settle, jitter amplitude over the 60 steps after settle
-(max displacement of any body — settled stacks must not creep), and step
+(max displacement of any body - settled stacks must not creep), and step
 time (median / p99; report-only, no band: timing belongs to fixed reference
 hardware, behavior belongs everywhere).
 
 Note on scene format: scenes are currently code. The engine's command-journal
 format (the single scene format the test constitution requires) does not
 exist yet; when it lands, these scenes migrate to journals and this note is
-deleted. This is a recorded, temporary deviation — not a second scene format.
+deleted. This is a recorded, temporary deviation - not a second scene format.
