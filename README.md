@@ -6,7 +6,7 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status: heading to 1.0
+## Status: 1.0
 
 The core engine is complete and gated:
 
