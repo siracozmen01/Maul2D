@@ -736,9 +736,367 @@ static void TestEnumerationWalk(void)
     m2DestroyWorld(world);
 }
 
+// THE MIRROR TEST: rebuild a world using nothing but the public
+// readback surface, then demand hash equality at creation and through
+// 90 steps. Any parameter the getters cannot carry breaks the mirror,
+// so this test IS the completeness proof of the integrator surface.
+// Bit-identity requires replaying the source's creation order, which
+// the ascending walks reproduce for destroy-free worlds.
+
+static m2BodyId MirrorOf(const m2BodyId* src, const m2BodyId* dst, int32_t n, m2BodyId find)
+{
+    for (int32_t i = 0; i < n; ++i)
+    {
+        if (src[i].index1 == find.index1 && src[i].generation == find.generation)
+        {
+            return dst[i];
+        }
+    }
+    m2BodyId null = {0, 0, 0};
+    return null;
+}
+
+static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
+{
+    m2WorldId mirror = m2CreateWorld(def);
+    m2BodyId bodies[16];
+    m2BodyId mirrored[16];
+    int32_t bodyCount = m2World_GetBodies(source, bodies, 16);
+    m2ChainId chains[8];
+    int32_t chainCount = m2World_GetChains(source, chains, 8);
+
+    for (int32_t i = 0; i < bodyCount; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2Body_GetType(bodies[i]);
+        m2Transform tf = m2Body_GetTransform(bodies[i]);
+        bd.position = tf.p;
+        bd.rotation = tf.q;
+        bd.linearVelocity = m2Body_GetLinearVelocity(bodies[i]);
+        bd.angularVelocity = m2Body_GetAngularVelocity(bodies[i]);
+        bd.gravityScale = m2Body_GetGravityScale(bodies[i]);
+        bd.isBullet = m2Body_IsBullet(bodies[i]);
+        bd.userData = m2Body_GetUserData(bodies[i]);
+        mirrored[i] = m2CreateBody(mirror, &bd);
+
+        m2ShapeId shapes[16];
+        int32_t shapeCount = m2Body_GetShapes(bodies[i], shapes, 16);
+        for (int32_t s = 0; s < shapeCount; ++s)
+        {
+            m2ShapeType type = m2Shape_GetType(shapes[s]);
+            if (type == m2_chainSegmentShape)
+            {
+                continue; // rebuilt with its chain below
+            }
+            m2ShapeDef sd = m2DefaultShapeDef();
+            sd.density = m2Shape_GetDensity(shapes[s]);
+            sd.friction = m2Shape_GetFriction(shapes[s]);
+            sd.restitution = m2Shape_GetRestitution(shapes[s]);
+            sd.isSensor = m2Shape_IsSensor(shapes[s]);
+            m2Shape_GetFilter(shapes[s], &sd.categoryBits, &sd.maskBits, &sd.groupIndex);
+            sd.userData = m2Shape_GetUserData(shapes[s]);
+            if (type == m2_circleShape)
+            {
+                m2Circle g = m2Shape_GetCircle(shapes[s]);
+                m2CreateCircleShape(mirrored[i], &sd, &g);
+            }
+            else if (type == m2_capsuleShape)
+            {
+                m2Capsule g = m2Shape_GetCapsule(shapes[s]);
+                m2CreateCapsuleShape(mirrored[i], &sd, &g);
+            }
+            else if (type == m2_polygonShape)
+            {
+                m2Polygon g = m2Shape_GetPolygon(shapes[s]);
+                m2CreatePolygonShape(mirrored[i], &sd, &g);
+            }
+            else
+            {
+                m2Segment g = m2Shape_GetSegment(shapes[s]);
+                m2CreateSegmentShape(mirrored[i], &sd, &g);
+            }
+        }
+
+        for (int32_t c = 0; c < chainCount; ++c)
+        {
+            m2ShapeId links[8];
+            int32_t linkCount = m2Chain_GetShapes(chains[c], links, 8);
+            if (linkCount == 0)
+            {
+                continue;
+            }
+            m2BodyId owner = m2Shape_GetBody(links[0]);
+            if (owner.index1 != bodies[i].index1)
+            {
+                continue;
+            }
+            // Open-chain polyline from the links: leading ghost, each
+            // link's first point, trailing point, trailing ghost.
+            m2Vec2 pts[16];
+            m2ChainSegment firstLink = m2Shape_GetChainSegment(links[0]);
+            m2ChainSegment lastLink = m2Shape_GetChainSegment(links[linkCount - 1]);
+            pts[0] = firstLink.ghost1;
+            for (int32_t k = 0; k < linkCount; ++k)
+            {
+                pts[k + 1] = m2Shape_GetChainSegment(links[k]).segment.point1;
+            }
+            pts[linkCount + 1] = lastLink.segment.point2;
+            pts[linkCount + 2] = lastLink.ghost2;
+            m2ChainDef cd = m2DefaultChainDef();
+            cd.points = pts;
+            cd.count = linkCount + 3;
+            cd.friction = m2Shape_GetFriction(links[0]);
+            cd.restitution = m2Shape_GetRestitution(links[0]);
+            m2Shape_GetFilter(links[0], &cd.categoryBits, &cd.maskBits, &cd.groupIndex);
+            cd.userData = m2Shape_GetUserData(links[0]);
+            m2CreateChain(mirrored[i], &cd);
+        }
+    }
+
+    m2JointId joints[8];
+    int32_t jointCount = m2World_GetJoints(source, joints, 8);
+    for (int32_t j = 0; j < jointCount; ++j)
+    {
+        m2JointId id = joints[j];
+        m2BodyId a = MirrorOf(bodies, mirrored, bodyCount, m2Joint_GetBodyA(id));
+        m2BodyId b = MirrorOf(bodies, mirrored, bodyCount, m2Joint_GetBodyB(id));
+        m2JointId made = {0, 0, 0};
+        m2JointType type = m2Joint_GetType(id);
+        if (type == m2_distanceJoint)
+        {
+            m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.length = m2Joint_GetLength(id);
+            jd.hertz = m2Joint_GetHertz(id);
+            jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            made = m2CreateDistanceJoint(mirror, &jd);
+        }
+        else if (type == m2_revoluteJoint)
+        {
+            m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.hertz = m2Joint_GetHertz(id);
+            jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            jd.enableMotor = m2Joint_IsMotorEnabled(id);
+            jd.motorSpeed = m2Joint_GetMotorSpeed(id);
+            jd.maxMotorTorque = m2Joint_GetMaxMotor(id);
+            jd.enableLimit = m2Joint_IsLimitEnabled(id);
+            m2Joint_GetLimits(id, &jd.lowerAngle, &jd.upperAngle);
+            made = m2CreateRevoluteJoint(mirror, &jd);
+        }
+        else if (type == m2_prismaticJoint)
+        {
+            m2PrismaticJointDef jd = m2DefaultPrismaticJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.localAxisA = m2Joint_GetLocalAxisA(id);
+            jd.hertz = m2Joint_GetHertz(id);
+            jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            jd.enableMotor = m2Joint_IsMotorEnabled(id);
+            jd.motorSpeed = m2Joint_GetMotorSpeed(id);
+            jd.maxMotorForce = m2Joint_GetMaxMotor(id);
+            jd.enableLimit = m2Joint_IsLimitEnabled(id);
+            m2Joint_GetLimits(id, &jd.lowerTranslation, &jd.upperTranslation);
+            made = m2CreatePrismaticJoint(mirror, &jd);
+        }
+        else if (type == m2_weldJoint)
+        {
+            m2WeldJointDef jd = m2DefaultWeldJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.linearHertz = m2Joint_GetHertz(id);
+            jd.linearDampingRatio = m2Joint_GetDampingRatio(id);
+            jd.angularHertz = m2Joint_GetAngularHertz(id);
+            jd.angularDampingRatio = m2Joint_GetAngularDampingRatio(id);
+            made = m2CreateWeldJoint(mirror, &jd);
+        }
+        else
+        {
+            m2WheelJointDef jd = m2DefaultWheelJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.localAxisA = m2Joint_GetLocalAxisA(id);
+            jd.enableSpring = m2Joint_IsSpringEnabled(id);
+            jd.hertz = m2Joint_GetHertz(id);
+            jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            jd.enableMotor = m2Joint_IsMotorEnabled(id);
+            jd.motorSpeed = m2Joint_GetMotorSpeed(id);
+            jd.maxMotorTorque = m2Joint_GetMaxMotor(id);
+            jd.enableLimit = m2Joint_IsLimitEnabled(id);
+            m2Joint_GetLimits(id, &jd.lowerTranslation, &jd.upperTranslation);
+            made = m2CreateWheelJoint(mirror, &jd);
+        }
+        float breakForce = 0.0f;
+        float breakTorque = 0.0f;
+        m2Joint_GetBreakLimits(id, &breakForce, &breakTorque);
+        if (breakForce != 0.0f || breakTorque != 0.0f)
+        {
+            m2Joint_SetBreakLimits(made, breakForce, breakTorque);
+        }
+    }
+    return mirror;
+}
+
+static void TestMirrorRebuild(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    // One of everything, with deliberately non-default numbers, built
+    // body by body so the mirror's walk replays the creation order.
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -1.0};
+    gd.userData = 11;
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    gs.friction = 0.8f;
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(ground, &gs, &slab);
+    m2Vec2 pts[6] = {{6.0f, 1.0f}, {4.0f, 1.0f},  {2.0f, 1.0f},
+                     {0.0f, 1.0f}, {-2.0f, 1.0f}, {-4.0f, 1.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    chain.friction = 0.9f;
+    chain.restitution = 0.1f;
+    chain.categoryBits = 0x2u;
+    chain.maskBits = 0xFFu;
+    chain.groupIndex = 5;
+    chain.userData = 77;
+    m2CreateChain(ground, &chain);
+
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.position = (m2Pos2){0.0, 8.0};
+    m2BodyId hook = m2CreateBody(world, &hd);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.type = m2_dynamicBody;
+    ad.position = (m2Pos2){0.0, 5.0};
+    ad.linearVelocity = (m2Vec2){1.5f, 2.0f};
+    ad.angularVelocity = 3.0f;
+    ad.gravityScale = 0.7f;
+    ad.isBullet = true;
+    ad.userData = 21;
+    m2BodyId boxA = m2CreateBody(world, &ad);
+    m2ShapeDef asd = m2DefaultShapeDef();
+    asd.density = 2.0f;
+    asd.friction = 0.4f;
+    asd.restitution = 0.3f;
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(boxA, &asd, &unit);
+
+    m2BodyDef bd2 = m2DefaultBodyDef();
+    bd2.type = m2_dynamicBody;
+    bd2.position = (m2Pos2){3.0, 2.0};
+    bd2.rotation = (m2Rot){0.9553365f, 0.29552022f}; // cos/sin of 0.3, pinned
+    m2BodyId boxB = m2CreateBody(world, &bd2);
+    m2Capsule pill = {{-0.4f, 0.0f}, {0.4f, 0.0f}, 0.25f};
+    m2CreateCapsuleShape(boxB, &asd, &pill);
+    m2ShapeDef sensorDef = m2DefaultShapeDef();
+    sensorDef.isSensor = true;
+    sensorDef.userData = 42;
+    m2Circle aura = {{0.0f, 0.0f}, 1.2f};
+    m2CreateCircleShape(boxB, &sensorDef, &aura);
+
+    m2BodyDef cd2 = m2DefaultBodyDef();
+    cd2.type = m2_dynamicBody;
+    cd2.position = (m2Pos2){-3.0, 2.0};
+    m2BodyId boxC = m2CreateBody(world, &cd2);
+    m2CreatePolygonShape(boxC, &asd, &unit);
+
+    m2BodyDef dd = m2DefaultBodyDef();
+    dd.type = m2_dynamicBody;
+    dd.position = (m2Pos2){-6.0, 2.0};
+    m2BodyId boxD = m2CreateBody(world, &dd);
+    m2Circle wheelDisc = {{0.0f, 0.0f}, 0.35f};
+    m2CreateCircleShape(boxD, &asd, &wheelDisc);
+
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hook;
+    dj.bodyIdB = boxA;
+    dj.hertz = 4.0f;
+    dj.dampingRatio = 0.6f;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    m2Joint_SetBreakLimits(rope, 60.0f, 0.0f);
+    m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+    rj.bodyIdA = ground;
+    rj.bodyIdB = boxB;
+    rj.enableMotor = true;
+    rj.motorSpeed = 1.2f;
+    rj.maxMotorTorque = 20.0f;
+    rj.enableLimit = true;
+    rj.lowerAngle = -0.5f;
+    rj.upperAngle = 0.7f;
+    m2CreateRevoluteJoint(world, &rj);
+    m2PrismaticJointDef pj = m2DefaultPrismaticJointDef();
+    pj.bodyIdA = ground;
+    pj.bodyIdB = boxC;
+    pj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    pj.enableMotor = true;
+    pj.motorSpeed = -0.5f;
+    pj.maxMotorForce = 30.0f;
+    pj.enableLimit = true;
+    pj.lowerTranslation = -1.0f;
+    pj.upperTranslation = 2.0f;
+    m2CreatePrismaticJoint(world, &pj);
+    m2WeldJointDef wj = m2DefaultWeldJointDef();
+    wj.bodyIdA = boxA;
+    wj.bodyIdB = boxB;
+    wj.linearHertz = 3.0f;
+    wj.linearDampingRatio = 0.5f;
+    wj.angularHertz = 6.0f;
+    wj.angularDampingRatio = 0.8f;
+    m2CreateWeldJoint(world, &wj);
+    m2WheelJointDef whj = m2DefaultWheelJointDef();
+    whj.bodyIdA = ground;
+    whj.bodyIdB = boxD;
+    whj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    whj.enableSpring = true;
+    whj.hertz = 2.5f;
+    whj.dampingRatio = 0.7f;
+    whj.enableMotor = true;
+    whj.motorSpeed = 4.0f;
+    whj.maxMotorTorque = 15.0f;
+    whj.enableLimit = true;
+    whj.lowerTranslation = -0.3f;
+    whj.upperTranslation = 0.3f;
+    m2CreateWheelJoint(world, &whj);
+
+    m2WorldId mirror = MirrorWorld(world, &def);
+    CHECK(m2World_Hash(mirror) == m2World_Hash(world), "the mirror is bit-identical at creation");
+
+    bool tracked = true;
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2World_Step(mirror, 1.0f / 60.0f, 4);
+        tracked = tracked && m2World_Hash(mirror) == m2World_Hash(world);
+    }
+    CHECK(tracked, "and tracks the original for 90 steps");
+
+    m2DestroyWorld(mirror);
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestMirrorRebuild();
     TestEnumerationWalk();
     TestDestroyWakesSleepers();
     TestDebugDraw();

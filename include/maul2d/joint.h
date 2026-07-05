@@ -164,6 +164,27 @@ extern "C"
     float m2Joint_GetReactionTorque(m2JointId jointId);
     bool m2Joint_IsValid(m2JointId jointId);
     m2JointType m2Joint_GetType(m2JointId jointId);
+
+    /// Parameter readback, completing the integrator surface: a world
+    /// can be reconstructed from public getters alone (the mirror test
+    /// proves it). Type-specific getters are loud on the wrong type;
+    /// motor and limit reads on a distance joint return zero quietly,
+    /// mirroring the setters that ignore them.
+    m2Vec2 m2Joint_GetLocalAnchorA(m2JointId jointId);
+    m2Vec2 m2Joint_GetLocalAnchorB(m2JointId jointId);
+    m2Vec2 m2Joint_GetLocalAxisA(m2JointId jointId); // prismatic, wheel
+    float m2Joint_GetLength(m2JointId jointId);      // distance
+    float m2Joint_GetHertz(m2JointId jointId);       // weld: linear row
+    float m2Joint_GetDampingRatio(m2JointId jointId);
+    float m2Joint_GetAngularHertz(m2JointId jointId); // weld
+    float m2Joint_GetAngularDampingRatio(m2JointId jointId);
+    float m2Joint_GetMotorSpeed(m2JointId jointId);
+    float m2Joint_GetMaxMotor(m2JointId jointId);
+    bool m2Joint_IsMotorEnabled(m2JointId jointId);
+    bool m2Joint_IsLimitEnabled(m2JointId jointId);
+    bool m2Joint_IsSpringEnabled(m2JointId jointId); // wheel
+    void m2Joint_GetLimits(m2JointId jointId, float* lower, float* upper);
+    void m2Joint_GetBreakLimits(m2JointId jointId, float* maxForce, float* maxTorque);
     m2BodyId m2Joint_GetBodyA(m2JointId jointId);
     m2BodyId m2Joint_GetBodyB(m2JointId jointId);
 

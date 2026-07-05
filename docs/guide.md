@@ -130,6 +130,11 @@ even when it exceeds capacity, and `m2Body_GetShapes` does the same
 per body. Types, filters and sensor flags read back through
 `m2Body_GetType`, `m2Shape_GetType`, `m2Shape_GetFilter`,
 `m2Shape_IsSensor`, `m2Joint_GetType` and `m2Joint_GetBodyA`/`B`.
+Geometry comes back exactly as stored (`m2Shape_GetCircle` and
+friends, `m2Chain_GetShapes`), and every joint parameter has a getter
+mirroring its def field. The surface is complete in a provable sense:
+the mirror test rebuilds a world from public getters alone and holds
+hash equality with the original through 90 steps.
 
 ## Rollback netcode in one paragraph
 
