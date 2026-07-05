@@ -108,6 +108,27 @@ static void SweepBullet(m2World* world, int32_t body, m2Pos2 p0)
             {
                 continue; // sensors never block a bullet
             }
+            if (world->shapeGeometry[shape].type == m2_chainSegmentShape)
+            {
+                // One-way platforms are one-way for bullets too: a
+                // sweep that begins on the ghost side never blocks.
+                // Same sign law as the contact and ray paths.
+                const m2ChainSegment* link = &world->shapeGeometry[shape].chainSegment;
+                int32_t chainBody = world->shapeBody[shape];
+                m2Transform cxf = world->transforms[chainBody];
+                m2Pos2 start = world->ccdPrevPositions[body];
+                m2Vec2 rel = {(float)(start.x - cxf.p.x), (float)(start.y - cxf.p.y)};
+                m2Vec2 local = {cxf.q.c * rel.x + cxf.q.s * rel.y,
+                                -cxf.q.s * rel.x + cxf.q.c * rel.y};
+                m2Vec2 e = {link->segment.point2.x - link->segment.point1.x,
+                            link->segment.point2.y - link->segment.point1.y};
+                float offset = (local.x - link->segment.point1.x) * e.y -
+                               (local.y - link->segment.point1.y) * e.x;
+                if (offset < 0.0f)
+                {
+                    continue;
+                }
+            }
             int32_t other = world->shapeBody[shape];
             if (other == body || world->bullets[other] != 0)
             {

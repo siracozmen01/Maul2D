@@ -635,6 +635,274 @@ static void TestFlipFlopDeterminism(void)
     CHECK(FlipFlopTrajectory() == FlipFlopTrajectory(), "type flip-flop is twin-deterministic");
 }
 
+static void TestLoopChainBowl(void)
+{
+    // A closed loop chain forming a diamond bowl: a ball dropped in
+    // settles inside; degenerate chain defs bounce loudly.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId frame = m2CreateBody(world, &gd);
+    // Diamond wound clockwise so the solid side faces INWARD.
+    m2Vec2 diamond[4] = {{0.0f, 3.0f}, {3.0f, 0.0f}, {0.0f, -3.0f}, {-3.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = diamond;
+    chain.count = 4;
+    chain.isLoop = true;
+    CHECK(m2CreateChain(frame, &chain) == 4, "a loop of four points makes four segments");
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.3, 1.5};
+    m2BodyId ball = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle c = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(ball, &sd, &c);
+    bool rested = false;
+    for (int32_t i = 0; i < 600 && !rested; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        rested = !m2Body_IsAwake(ball);
+    }
+    CHECK(rested, "the ball settles inside the bowl");
+    CHECK(m2Body_GetPosition(ball).y > -3.0, "and did not leak out the bottom");
+
+    m2DestroyWorld(world);
+}
+
+static void TestBreakStorm(void)
+{
+    // Every rope in a curtain breaks on the same overloaded step: all
+    // events arrive that step, in canonical joint order, and a
+    // pre-break snapshot resurrects the whole curtain.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2JointId ropes[4];
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        m2BodyDef ad = m2DefaultBodyDef();
+        ad.position = (m2Pos2){(double)i * 3.0, 6.0};
+        m2BodyId hook = m2CreateBody(world, &ad);
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){(double)i * 3.0, 4.0};
+        m2BodyId crate = m2CreateBody(world, &cd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 5.0f;
+        m2Polygon box = m2MakeBox(0.5f, 0.5f);
+        m2CreatePolygonShape(crate, &sd, &box);
+        m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+        jd.bodyIdA = hook;
+        jd.bodyIdB = crate;
+        ropes[i] = m2CreateDistanceJoint(world, &jd);
+        m2Joint_SetBreakLimits(ropes[i], 30.0f, 0.0f);
+    }
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot");
+
+    int32_t stormStep = -1;
+    for (int32_t i = 0; i < 60 && stormStep < 0; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2JointEvents events = m2World_GetJointEvents(world);
+        if (events.breakCount > 0)
+        {
+            stormStep = i;
+            CHECK(events.breakCount == 4, "the whole curtain goes at once");
+            for (int32_t k = 1; k < events.breakCount; ++k)
+            {
+                CHECK(events.breakEvents[k - 1].jointId.index1 <
+                          events.breakEvents[k].jointId.index1,
+                      "break events arrive in canonical joint order");
+            }
+        }
+    }
+    CHECK(stormStep >= 0, "the storm came");
+
+    CHECK(m2World_Restore(world, snap, size), "rollback before the storm");
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        CHECK(m2Joint_IsValid(ropes[i]), "restore resurrects the curtain");
+    }
+    int32_t stormAgain = -1;
+    for (int32_t i = 0; i < 60 && stormAgain < 0; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        if (m2World_GetJointEvents(world).breakCount > 0)
+        {
+            stormAgain = i;
+        }
+    }
+    CHECK(stormAgain == stormStep, "and the storm returns on the identical step");
+
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+static uint64_t SetterChurnTrajectory(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(15.0f, 0.5f);
+    m2ShapeId floorShape = m2CreatePolygonShape(floor, &fs, &slab);
+    m2ShapeId boxes[4];
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-3.0 + 2.0 * (double)i, 1.0 + 0.5 * (double)i};
+        m2BodyId body = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+        boxes[i] = m2CreatePolygonShape(body, &sd, &unit);
+    }
+    uint64_t h = M2_HASH_INIT;
+    for (int32_t step = 0; step < 180; ++step)
+    {
+        if (step % 13 == 4)
+        {
+            m2World_SetGravity(world, (m2Vec2){0.0f, step % 26 == 4 ? -10.0f : -6.0f});
+        }
+        if (step % 17 == 8)
+        {
+            m2Shape_SetFriction(floorShape, step % 34 == 8 ? 0.9f : 0.1f);
+        }
+        if (step % 23 == 11)
+        {
+            m2Shape_SetFilter(boxes[step % 4], step % 46 == 11 ? 0x4u : 0x1u, 0xFFFFFFFFu, 0);
+        }
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        uint64_t wh = m2World_Hash(world);
+        h = m2Hash64(h, &wh, (int32_t)sizeof(wh));
+    }
+    m2DestroyWorld(world);
+    return h;
+}
+
+static void TestSetterChurnDeterminism(void)
+{
+    CHECK(SetterChurnTrajectory() == SetterChurnTrajectory(), "setter churn is twin-deterministic");
+}
+
+static void TestKinematicSensorHibernation(void)
+{
+    // A kinematic at rest inside a static sensor must not hold the
+    // world out of hibernation; when it moves again, the exit is
+    // witnessed on the sensor stream.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &fd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyId sleeperBox = AddBox(world, 3.0, 0.5);
+
+    m2BodyDef zd = m2DefaultBodyDef();
+    zd.position = (m2Pos2){-3.0, 1.0};
+    m2BodyId zoneBody = m2CreateBody(world, &zd);
+    m2ShapeDef zs = m2DefaultShapeDef();
+    zs.isSensor = true;
+    m2Polygon zone = m2MakeBox(1.5f, 1.5f);
+    m2ShapeId zoneId = m2CreatePolygonShape(zoneBody, &zs, &zone);
+
+    m2BodyDef kd = m2DefaultBodyDef();
+    kd.type = m2_kinematicBody;
+    kd.position = (m2Pos2){-3.0, 1.0};
+    m2BodyId guard = m2CreateBody(world, &kd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    m2Circle body = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(guard, &gs, &body);
+
+    for (int32_t i = 0; i < 250; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(sleeperBox), "the dynamic box sleeps");
+    m2ShapeId inside[2];
+    CHECK(m2Shape_GetSensorOverlaps(zoneId, inside, 2) == 1,
+          "the resting guard still shows in the roll call");
+    m2Profile profile = m2World_GetProfile(world);
+    CHECK(profile.contactsMs == 0.0f && profile.solveMs == 0.0f,
+          "a resting guard does not hold the world out of hibernation");
+
+    m2Body_SetLinearVelocity(guard, (m2Vec2){4.0f, 0.0f});
+    bool sawExit = false;
+    for (int32_t i = 0; i < 60 && !sawExit; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        sawExit = m2World_GetSensorEvents(world).endCount > 0;
+    }
+    CHECK(sawExit, "the guard's exit is witnessed");
+
+    m2DestroyWorld(world);
+}
+
+static void TestBulletThroughOneWayChain(void)
+{
+    // A one-way platform must be one-way for bullets too: from the
+    // ghost side the bullet keeps its speed; from the solid side it
+    // stops on the platform.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, 2.0};
+    m2BodyId platform = m2CreateBody(world, &gd);
+    m2Vec2 pts[5] = {{6.0f, 0.0f}, {3.0f, 0.0f}, {0.0f, 0.0f}, {-3.0f, 0.0f}, {-6.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5; // right-to-left: solid side up
+    CHECK(m2CreateChain(platform, &chain) == 2, "two live segments");
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.isBullet = true;
+    bd.position = (m2Pos2){0.5, -6.0};
+    bd.linearVelocity = (m2Vec2){0.0f, 80.0f}; // straight up through the ghost side
+    m2BodyId riser = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    m2Circle ball = {{0.0f, 0.0f}, 0.1f};
+    m2CreateCircleShape(riser, &bs, &ball);
+
+    for (int32_t i = 0; i < 12; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(riser).y > 4.0, "the rising bullet passed the one-way platform");
+    CHECK(m2Body_GetLinearVelocity(riser).y > 60.0f, "without losing its speed to the ghost");
+
+    bd.position = (m2Pos2){-0.5, 10.0};
+    bd.linearVelocity = (m2Vec2){0.0f, -80.0f};
+    m2BodyId diver = m2CreateBody(world, &bd);
+    m2CreateCircleShape(diver, &bs, &ball);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(diver).y > 1.9, "the diving bullet stopped on the solid side");
+
+    m2DestroyWorld(world);
+}
+
 static uint64_t ChaosHash(void)
 {
     // Lifecycle churn far from the origin: bodies and joints created
@@ -787,6 +1055,11 @@ int main(void)
     TestTeleportOntoSleepers();
     TestSetTypeEdges();
     TestFlipFlopDeterminism();
+    TestLoopChainBowl();
+    TestBreakStorm();
+    TestSetterChurnDeterminism();
+    TestKinematicSensorHibernation();
+    TestBulletThroughOneWayChain();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
