@@ -3686,6 +3686,102 @@ int32_t m2World_GetChains(m2WorldId worldId, m2ChainId* ids, int32_t capacity)
     return total;
 }
 
+// Geometry readback: exact stored bits, loud on a type mismatch.
+#define M2_GEOMETRY_GETTER(name, fieldType, field, enumValue)                                      \
+    fieldType name(m2ShapeId shapeId)                                                              \
+    {                                                                                              \
+        fieldType zero;                                                                            \
+        memset(&zero, 0, sizeof(zero));                                                            \
+        m2World* world = WorldFromIndex(shapeId.world0);                                           \
+        int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;                            \
+        if (index < 0 || world->shapeGeometry[index].type != (int32_t)(enumValue))                 \
+        {                                                                                          \
+            M2_ASSERT(false);                                                                      \
+            return zero;                                                                           \
+        }                                                                                          \
+        return world->shapeGeometry[index].field;                                                  \
+    }
+
+M2_GEOMETRY_GETTER(m2Shape_GetCircle, m2Circle, circle, m2_circleShape)
+M2_GEOMETRY_GETTER(m2Shape_GetCapsule, m2Capsule, capsule, m2_capsuleShape)
+M2_GEOMETRY_GETTER(m2Shape_GetPolygon, m2Polygon, polygon, m2_polygonShape)
+M2_GEOMETRY_GETTER(m2Shape_GetSegment, m2Segment, segment, m2_segmentShape)
+M2_GEOMETRY_GETTER(m2Shape_GetChainSegment, m2ChainSegment, chainSegment, m2_chainSegmentShape)
+#undef M2_GEOMETRY_GETTER
+
+float m2Shape_GetDensity(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return 0.0f;
+    }
+    return world->shapeDensity[index];
+}
+
+m2Vec2 m2Body_GetLocalCenter(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        m2Vec2 zero = {0.0f, 0.0f};
+        return zero;
+    }
+    return world->localCenters[index];
+}
+
+bool m2Body_IsBullet(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return false;
+    }
+    return world->bullets[index] != 0;
+}
+
+float m2Body_GetGravityScale(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return 0.0f;
+    }
+    return world->gravityScales[index];
+}
+
+int32_t m2Chain_GetShapes(m2ChainId chainId, m2ShapeId* ids, int32_t capacity)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    int32_t chainIndex = world != NULL ? ChainSlot(world, chainId) : -1;
+    if (chainIndex < 0)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxShapeIndex; ++i)
+    {
+        if (world->shapeAlive[i] == 0 || world->shapeChain[i] != chainIndex)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            ids[total] = MakeShapeId(world, i);
+        }
+        total += 1;
+    }
+    return total;
+}
+
 int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity)
 {
     m2World* world = GetBodyWorld(bodyId);

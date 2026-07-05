@@ -65,6 +65,9 @@ extern "C"
     /// waking is island-transitive at the next step.
     bool m2Body_IsAwake(m2BodyId bodyId);
     m2BodyType m2Body_GetType(m2BodyId bodyId);
+    m2Vec2 m2Body_GetLocalCenter(m2BodyId bodyId); // body-frame center of mass
+    bool m2Body_IsBullet(m2BodyId bodyId);
+    float m2Body_GetGravityScale(m2BodyId bodyId);
 
     /// Editor and integration walk: fills ids with up to capacity
     /// live body handles in ascending slot order and returns the

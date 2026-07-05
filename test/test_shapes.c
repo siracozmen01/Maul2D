@@ -245,9 +245,91 @@ static uint64_t ShapeSweepHash(void)
     return h;
 }
 
+// Editor round-trip: what you created is what you read back, to the
+// exact stored bit, for every geometry kind plus the body state that
+// gizmos draw from.
+static void TestGeometryReadback(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 4.0};
+    bd.isBullet = true;
+    bd.gravityScale = 0.5f;
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = 2.5f;
+
+    m2Circle circle = {{1.0f, 0.25f}, 0.4f};
+    m2ShapeId circleShape = m2CreateCircleShape(body, &sd, &circle);
+    m2Capsule capsule = {{-0.5f, 0.0f}, {0.5f, 0.0f}, 0.3f};
+    m2ShapeId capsuleShape = m2CreateCapsuleShape(body, &sd, &capsule);
+    m2Polygon poly = m2MakeBox(0.6f, 0.2f);
+    m2ShapeId polyShape = m2CreatePolygonShape(body, &sd, &poly);
+
+    m2Circle rc = m2Shape_GetCircle(circleShape);
+    CHECK(rc.center.x == circle.center.x && rc.center.y == circle.center.y &&
+              rc.radius == circle.radius,
+          "circle reads back exactly");
+    m2Capsule rcap = m2Shape_GetCapsule(capsuleShape);
+    CHECK(rcap.point1.x == capsule.point1.x && rcap.point2.x == capsule.point2.x &&
+              rcap.radius == capsule.radius,
+          "capsule reads back exactly");
+    m2Polygon rp = m2Shape_GetPolygon(polyShape);
+    bool polySame = rp.count == poly.count;
+    for (int32_t i = 0; polySame && i < rp.count; ++i)
+    {
+        polySame = rp.vertices[i].x == poly.vertices[i].x && rp.vertices[i].y == poly.vertices[i].y;
+    }
+    CHECK(polySame, "polygon vertices read back exactly");
+    CHECK(m2Shape_GetDensity(polyShape) == 2.5f, "density reads back");
+
+    // Body state for gizmos: the compound is symmetric about x != 0,
+    // so the local center must sit off the origin, and the def flags
+    // read back as set.
+    m2Vec2 com = m2Body_GetLocalCenter(body);
+    CHECK(com.x != 0.0f, "offset shapes move the local center");
+    CHECK(m2Body_IsBullet(body), "bullet flag reads back");
+    CHECK(m2Body_GetGravityScale(body) == 0.5f, "gravity scale reads back");
+
+    // Chain links: enumerable per chain, each one a chain segment,
+    // and the middle link's stored points echo the source polyline.
+    m2BodyDef gd = m2DefaultBodyDef();
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 pts[6] = {{6.0f, 0.0f}, {4.0f, 0.0f},  {2.0f, 0.0f},
+                     {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2ChainId ledge = m2CreateChain(ground, &chain);
+    CHECK(m2Chain_GetShapes(ledge, NULL, 0) == m2Chain_GetSegmentCount(ledge),
+          "chain shape walk agrees with the segment count");
+    m2ShapeId links[8];
+    int32_t linkCount = m2Chain_GetShapes(ledge, links, 8);
+    CHECK(linkCount == 3, "three links");
+    bool allSegments = true;
+    bool ascending = true;
+    for (int32_t i = 0; i < linkCount; ++i)
+    {
+        allSegments = allSegments && m2Shape_GetType(links[i]) == m2_chainSegmentShape;
+        ascending = ascending && (i == 0 || links[i - 1].index1 < links[i].index1);
+    }
+    CHECK(allSegments && ascending, "all links are segments, ascending");
+    m2ChainSegment mid = m2Shape_GetChainSegment(links[1]);
+    CHECK(mid.segment.point1.x == 2.0f && mid.segment.point2.x == 0.0f && mid.ghost1.x == 4.0f &&
+              mid.ghost2.x == -2.0f,
+          "the middle link's points echo the polyline");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestValidation();
+    TestGeometryReadback();
     TestAabbAndMass();
     TestCompoundAndRollback();
 

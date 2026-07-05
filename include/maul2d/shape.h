@@ -176,10 +176,21 @@ extern "C"
     void m2Shape_GetFilter(m2ShapeId shapeId, uint32_t* categoryBits, uint32_t* maskBits,
                            int32_t* groupIndex);
 
+    /// Geometry readback for editors and gizmos: the getter must
+    /// match the shape's type (checked loudly). Returned structs are
+    /// the exact stored bits, in the shape's body-local frame.
+    m2Circle m2Shape_GetCircle(m2ShapeId shapeId);
+    m2Capsule m2Shape_GetCapsule(m2ShapeId shapeId);
+    m2Polygon m2Shape_GetPolygon(m2ShapeId shapeId);
+    m2Segment m2Shape_GetSegment(m2ShapeId shapeId);
+    m2ChainSegment m2Shape_GetChainSegment(m2ShapeId shapeId);
+    float m2Shape_GetDensity(m2ShapeId shapeId);
+
     /// Enumeration walks, ascending slot order, truthful totals
     /// (same contract as m2World_OverlapAABB). Thread class: reader.
     int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity);
     int32_t m2World_GetChains(m2WorldId worldId, m2ChainId* ids, int32_t capacity);
+    int32_t m2Chain_GetShapes(m2ChainId chainId, m2ShapeId* ids, int32_t capacity);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 
