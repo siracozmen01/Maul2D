@@ -744,6 +744,155 @@ static void TestSoftWeld(void)
     m2DestroyWorld(world);
 }
 
+static void TestJointBreaking(void)
+{
+    // Twin ropes carry the same heavy crate; one has a break limit
+    // under the load, one above it. The weak one snaps, reports the
+    // force that did it, and the crate falls. Then a weld cantilever
+    // breaks by torque alone. Snapping replays bit-exactly through a
+    // pre-break snapshot because it is a pure function of state.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyId crates[2];
+    m2JointId ropes[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 6.0;
+        m2BodyDef ad = m2DefaultBodyDef();
+        ad.position = (m2Pos2){x, 6.0};
+        m2BodyId hook = m2CreateBody(world, &ad);
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){x, 4.0};
+        crates[i] = m2CreateBody(world, &cd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 5.0f;
+        m2Polygon crate = m2MakeBox(0.5f, 0.5f);
+        m2CreatePolygonShape(crates[i], &sd, &crate);
+        m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+        jd.bodyIdA = hook;
+        jd.bodyIdB = crates[i];
+        ropes[i] = m2CreateDistanceJoint(world, &jd);
+    }
+    // Load = m*g = 5*1*10 = 50 N steady. Weak rope: 30 N. Strong: 500 N.
+    m2Joint_SetBreakLimits(ropes[0], 30.0f, 0.0f);
+    m2Joint_SetBreakLimits(ropes[1], 500.0f, 0.0f);
+
+    bool snapped = false;
+    float reportedForce = 0.0f;
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2JointEvents events = m2World_GetJointEvents(world);
+        if (events.breakCount > 0 && !snapped)
+        {
+            snapped = true;
+            reportedForce = events.breakEvents[0].force;
+            CHECK(events.breakEvents[0].jointId.index1 == ropes[0].index1,
+                  "the weak rope is the one that snapped");
+        }
+    }
+    CHECK(snapped, "the overloaded rope snaps");
+    CHECK(reportedForce > 30.0f, "the event reports the force that broke it");
+    CHECK(!m2Joint_IsValid(ropes[0]), "the snapped rope is gone");
+    CHECK(m2Joint_IsValid(ropes[1]), "the strong rope holds");
+    CHECK(m2Body_GetPosition(crates[0]).y < 2.0, "the crate fell");
+    CHECK(m2Body_GetPosition(crates[1]).y > 3.0, "the safe crate hangs");
+
+    // Torque break: a weld cantilever with a heavy tip.
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.position = (m2Pos2){12.0, 4.0};
+    m2BodyId wall = m2CreateBody(world, &wd);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){13.0, 4.0};
+    m2BodyId beam = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.density = 4.0f;
+    m2Polygon bar = m2MakeBox(1.0f, 0.08f);
+    m2CreatePolygonShape(beam, &bs, &bar);
+    m2WeldJointDef weld = m2DefaultWeldJointDef();
+    weld.bodyIdA = wall;
+    weld.bodyIdB = beam;
+    weld.localAnchorB = (m2Vec2){-1.0f, 0.0f};
+    m2JointId cantilever = m2CreateWeldJoint(world, &weld);
+    m2Joint_SetBreakLimits(cantilever, 0.0f, 4.0f); // gravity torque ~ 6.4 Nm
+    bool cracked = false;
+    for (int32_t i = 0; i < 120 && !cracked; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        cracked = m2World_GetJointEvents(world).breakCount > 0;
+    }
+    CHECK(cracked, "the weld cracks under torque alone");
+    CHECK(!m2Joint_IsValid(cantilever), "and is gone");
+
+    m2DestroyWorld(world);
+}
+
+static void TestBreakRollback(void)
+{
+    // Snapshot before the snap, replay through it: the joint must
+    // break on the identical step with identical bits.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 6.0};
+    m2BodyId hook = m2CreateBody(world, &ad);
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId crate = m2CreateBody(world, &cd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = 5.0f;
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(crate, &sd, &box);
+    m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+    jd.bodyIdA = hook;
+    jd.bodyIdB = crate;
+    m2JointId rope = m2CreateDistanceJoint(world, &jd);
+    m2Joint_SetBreakLimits(rope, 30.0f, 0.0f);
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    CHECK(m2World_Snapshot(world, snap, size) == size, "snapshot before the snap");
+
+    int32_t breakStepA = -1;
+    uint64_t hashes[60];
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        hashes[i] = m2World_Hash(world);
+        if (breakStepA < 0 && m2World_GetJointEvents(world).breakCount > 0)
+        {
+            breakStepA = i;
+        }
+    }
+    CHECK(breakStepA >= 0, "the rope snapped in the recorded run");
+
+    CHECK(m2World_Restore(world, snap, size), "restore");
+    int32_t breakStepB = -1;
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == hashes[i], "the snap replays bit-exactly");
+        if (breakStepB < 0 && m2World_GetJointEvents(world).breakCount > 0)
+        {
+            breakStepB = i;
+        }
+    }
+    CHECK(breakStepA == breakStepB, "and lands on the identical step");
+
+    free(snap);
+    m2DestroyWorld(world);
+}
+
 static uint64_t JointSweepHash(void)
 {
     // A bridge of revolute links with cargo dropped on it, far from the
@@ -918,6 +1067,8 @@ int main(void)
     TestWheelCar();
     TestJointRuntimeTuning();
     TestSoftWeld();
+    TestJointBreaking();
+    TestBreakRollback();
 
     uint64_t hash = JointSweepHash();
     printf("M2_JOINT_HASH=%016llx\n", (unsigned long long)hash);

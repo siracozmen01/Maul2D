@@ -139,6 +139,11 @@ extern "C"
     void m2Joint_EnableMotor(m2JointId jointId, bool enable);
     void m2Joint_EnableLimit(m2JointId jointId, bool enable);
     void m2Joint_SetLimits(m2JointId jointId, float lower, float upper);
+
+    /// Break thresholds: reaction force or torque beyond these snaps
+    /// the joint during the step, deterministically, and reports it in
+    /// m2World_GetJointEvents. Zero (the default) means unbreakable.
+    void m2Joint_SetBreakLimits(m2JointId jointId, float maxForce, float maxTorque);
     bool m2Joint_IsValid(m2JointId jointId);
 
     static const m2JointId m2_nullJointId = {0, 0, 0};

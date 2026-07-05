@@ -104,6 +104,8 @@ typedef struct m2World
     float* jointMotorImpulse;
     float* jointLowerImpulse;
     float* jointUpperImpulse;
+    float* jointBreakForce; // 0 = unbreakable (snapshot state)
+    float* jointBreakTorque;
     uint16_t* jointGenerations;
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
@@ -164,6 +166,8 @@ typedef struct m2World
     int32_t sensorEndCount;
     m2ContactEndEvent* pendingSensorEnd;
     int32_t pendingSensorEndCount;
+    m2JointBreakEvent* jointBreakEvents;
+    int32_t jointBreakEventCount;
     int32_t pendingEndCount;
 
     // Journal recorder (observer state; never snapshot state).
@@ -187,6 +191,7 @@ void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size);
 void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def,
                           int32_t createdCount);
 void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
+void m2DestroyJointInternal(m2World* world, int32_t index);
 
 // Journal ops (fixed-size payloads, little-endian raw structs).
 enum
@@ -222,6 +227,8 @@ enum
     m2_jointParamEnableLimit = 3,
     m2_jointParamLower = 4,
     m2_jointParamUpper = 5,
+    m2_jointParamBreakForce = 6,
+    m2_jointParamBreakTorque = 7,
 };
 
 // Islands & sleep (src/island.c).

@@ -4,6 +4,7 @@
 #ifndef MAUL2D_EVENTS_H
 #define MAUL2D_EVENTS_H
 
+#include "maul2d/joint.h"
 #include "maul2d/shape.h"
 
 #ifdef __cplusplus
@@ -68,6 +69,26 @@ extern "C"
     } m2SensorEvents;
 
     m2SensorEvents m2World_GetSensorEvents(m2WorldId worldId);
+
+    /// A joint that exceeded its break limits during the step. The id
+    /// is the one the joint had; it is already invalid by the time you
+    /// read this. Force and torque are the reaction magnitudes that
+    /// broke it. Deterministic: twins break on the same step.
+    typedef struct m2JointBreakEvent
+    {
+        m2JointId jointId;
+        uint64_t step;
+        float force;
+        float torque;
+    } m2JointBreakEvent;
+
+    typedef struct m2JointEvents
+    {
+        const m2JointBreakEvent* breakEvents;
+        int32_t breakCount;
+    } m2JointEvents;
+
+    m2JointEvents m2World_GetJointEvents(m2WorldId worldId);
 
     /// A read-only view of the contacts touching right now, canonical
     /// pair order. Returns the total touching count even beyond

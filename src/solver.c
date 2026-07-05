@@ -1764,4 +1764,76 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
     RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageStore, invH, minBiasVel,
                         false);
     StoreJointImpulses(world, joints, jointCount);
+
+    // Break pass: reaction magnitudes come straight from the stored
+    // impulses, so breaking is a pure function of state - twins snap
+    // on the same step and replays never disagree. Canonical joint
+    // order; the destroyed id is reported with the generation it had.
+    for (int32_t j = 0; j < world->maxJointIndex; ++j)
+    {
+        if (world->jointAlive[j] == 0)
+        {
+            continue;
+        }
+        float breakForce = world->jointBreakForce[j];
+        float breakTorque = world->jointBreakTorque[j];
+        if (breakForce == 0.0f && breakTorque == 0.0f)
+        {
+            continue;
+        }
+
+        m2Vec2 impulse = world->jointImpulse[j];
+        float axialTrio =
+            world->jointMotorImpulse[j] + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+        float force = 0.0f;
+        float torque = 0.0f;
+        switch (world->jointType[j])
+        {
+        case 0: // distance: axial row only
+            force = m2AbsF(impulse.x) * invH;
+            break;
+        case 1: // revolute: point block linear, motor/limits as torque
+            force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
+            torque = m2AbsF(axialTrio) * invH;
+            break;
+        case 2: // prismatic: (perp, angle) + axial trio
+        {
+            float linear = sqrtf(impulse.x * impulse.x + axialTrio * axialTrio);
+            force = linear * invH;
+            torque = m2AbsF(impulse.y) * invH;
+            break;
+        }
+        case 3: // weld: point block linear, angle row in the motor slot
+            force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
+            torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+            break;
+        default: // wheel: (perp, spring) linear, motor as torque
+        {
+            float axial = impulse.y + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+            force = sqrtf(impulse.x * impulse.x + axial * axial) * invH;
+            torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+            break;
+        }
+        }
+
+        bool snapped = (breakForce > 0.0f && force > breakForce) ||
+                       (breakTorque > 0.0f && torque > breakTorque);
+        if (!snapped)
+        {
+            continue;
+        }
+
+        if (world->jointBreakEventCount < world->jointCapacity)
+        {
+            m2JointBreakEvent* e = &world->jointBreakEvents[world->jointBreakEventCount++];
+            memset(e, 0, sizeof(*e));
+            e->jointId.index1 = j + 1;
+            e->jointId.world0 = world->worldIndex0;
+            e->jointId.generation = world->jointGenerations[j];
+            e->step = world->stepCount;
+            e->force = force;
+            e->torque = torque;
+        }
+        m2DestroyJointInternal(world, j);
+    }
 }

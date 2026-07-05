@@ -26,7 +26,7 @@
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 16u
+#define M2_SNAPSHOT_VERSION 17u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -944,6 +944,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointMotorImpulse, jointCap, float);
     M2_ALLOC(jointLowerImpulse, jointCap, float);
     M2_ALLOC(jointUpperImpulse, jointCap, float);
+    M2_ALLOC(jointBreakForce, jointCap, float);
+    M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
     M2_ALLOC(pairKeys, world->pairCapacity, uint64_t);
@@ -964,6 +966,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(sensorBeginEvents, world->pairCapacity, m2ContactBeginEvent);
     M2_ALLOC(sensorEndEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pendingSensorEnd, world->pairCapacity, m2ContactEndEvent);
+    M2_ALLOC(jointBreakEvents, world->jointCapacity, m2JointBreakEvent);
     M2_ALLOC(pairScratch, world->pairCapacity, uint64_t);
     M2_ALLOC(manifolds, world->pairCapacity, m2Manifold);
     M2_ALLOC(oldPairScratch, world->pairCapacity, uint64_t);
@@ -1095,6 +1098,8 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointMotorImpulse);
     m2Free(world->jointLowerImpulse);
     m2Free(world->jointUpperImpulse);
+    m2Free(world->jointBreakForce);
+    m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
     m2Free(world->jointFreeQueue);
     m2Free(world->pairKeys);
@@ -1111,6 +1116,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->sensorBeginEvents);
     m2Free(world->sensorEndEvents);
     m2Free(world->pendingSensorEnd);
+    m2Free(world->jointBreakEvents);
     m2Free(world->pairScratch);
     m2Free(world->manifolds);
     m2Free(world->oldPairScratch);
@@ -1169,6 +1175,7 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         world->sensorEndEvents[world->sensorEndCount++] = world->pendingSensorEnd[i];
     }
     world->pendingSensorEndCount = 0;
+    world->jointBreakEventCount = 0;
 
     // Wall-clock diagnostics only; never fed back into simulation.
     uint64_t tStart = m2TimeNowNs();
@@ -1441,6 +1448,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointMotorImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointLowerImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointUpperImpulse, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
     M2_BLOCK(world->trees, M2_TREE_COUNT * sizeof(m2DynamicTree));
@@ -1542,6 +1551,7 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     world->sensorBeginCount = 0;
     world->sensorEndCount = 0;
     world->pendingSensorEndCount = 0;
+    world->jointBreakEventCount = 0;
     return true;
 }
 
@@ -2397,6 +2407,19 @@ m2SensorEvents m2World_GetSensorEvents(m2WorldId worldId)
     return events;
 }
 
+m2JointEvents m2World_GetJointEvents(m2WorldId worldId)
+{
+    m2JointEvents events = {NULL, 0};
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return events;
+    }
+    events.breakEvents = world->jointBreakEvents;
+    events.breakCount = world->jointBreakEventCount;
+    return events;
+}
+
 int32_t m2World_GetContactData(m2WorldId worldId, m2ContactData* data, int32_t capacity)
 {
     m2World* world = GetWorld(worldId);
@@ -2569,6 +2592,8 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointMotorImpulse[index] = 0.0f;
     world->jointLowerImpulse[index] = 0.0f;
     world->jointUpperImpulse[index] = 0.0f;
+    world->jointBreakForce[index] = 0.0f;
+    world->jointBreakTorque[index] = 0.0f;
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
     world->asleep[bodyA] = 0;
@@ -2909,6 +2934,12 @@ void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, f
     case m2_jointParamLower:
         world->jointLower[index] = value;
         break;
+    case m2_jointParamBreakForce:
+        world->jointBreakForce[index] = value;
+        break;
+    case m2_jointParamBreakTorque:
+        world->jointBreakTorque[index] = value;
+        break;
     default:
         world->jointUpper[index] = value;
         break;
@@ -2974,6 +3005,16 @@ void m2Joint_SetLimits(m2JointId jointId, float lower, float upper)
     }
 }
 
+void m2Joint_SetBreakLimits(m2JointId jointId, float maxForce, float maxTorque)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    if (world != NULL)
+    {
+        m2SetJointParamInternal(world, jointId, m2_jointParamBreakForce, maxForce);
+        m2SetJointParamInternal(world, jointId, m2_jointParamBreakTorque, maxTorque);
+    }
+}
+
 void m2DestroyJoint(m2JointId jointId)
 {
     m2World* world = WorldFromIndex(jointId.world0);
@@ -2988,6 +3029,13 @@ void m2DestroyJoint(m2JointId jointId)
         return;
     }
     m2JournalRecord(world, m2_opDestroyJoint, &jointId, (int32_t)sizeof(jointId));
+    m2DestroyJointInternal(world, index);
+}
+
+// The guts, shared with the solver's break pass (which must not
+// journal: breaking is derived from state and replays by itself).
+void m2DestroyJointInternal(m2World* world, int32_t index)
+{
     // Both ends wake: a constraint vanished.
     int32_t bodyA = world->jointBodyA[index];
     int32_t bodyB = world->jointBodyB[index];
