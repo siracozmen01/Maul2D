@@ -228,6 +228,33 @@ extern "C"
     m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation,
                                            m2QueryFilter filter);
 
+    /// Convex sweeps: the given shape (in its own local frame, posed
+    /// by origin) slides along translation; the closest hit wins and
+    /// ties break to the lower shape index. Chain segments stay
+    /// one-sided: sweeps starting on the ghost side pass through.
+    /// Initial overlap reports fraction 0 with a zero normal, like
+    /// rays. Thread class: reader.
+    m2RayCastResult m2World_CastCircleClosest(m2WorldId worldId, const m2Circle* circle,
+                                              m2Transform origin, m2Vec2 translation,
+                                              m2QueryFilter filter);
+    m2RayCastResult m2World_CastCapsuleClosest(m2WorldId worldId, const m2Capsule* capsule,
+                                               m2Transform origin, m2Vec2 translation,
+                                               m2QueryFilter filter);
+    m2RayCastResult m2World_CastPolygonClosest(m2WorldId worldId, const m2Polygon* polygon,
+                                               m2Transform origin, m2Vec2 translation,
+                                               m2QueryFilter filter);
+
+    /// Convex overlaps: live shapes touching the posed shape, in
+    /// ascending slot order with a truthful total (the OverlapAABB
+    /// contract). Chain segments are one-sided here too. Thread
+    /// class: reader.
+    int32_t m2World_OverlapCircle(m2WorldId worldId, const m2Circle* circle, m2Transform origin,
+                                  m2ShapeId* ids, int32_t capacity, m2QueryFilter filter);
+    int32_t m2World_OverlapCapsule(m2WorldId worldId, const m2Capsule* capsule, m2Transform origin,
+                                   m2ShapeId* ids, int32_t capacity, m2QueryFilter filter);
+    int32_t m2World_OverlapPolygon(m2WorldId worldId, const m2Polygon* polygon, m2Transform origin,
+                                   m2ShapeId* ids, int32_t capacity, m2QueryFilter filter);
+
     /// Fills results with up to capacity alive shapes whose tight AABB
     /// overlaps [lower, upper], ascending shape order. Returns the total
     /// number of overlapping shapes even when it exceeds capacity.

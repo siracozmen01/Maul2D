@@ -10,6 +10,7 @@ find_package(Threads REQUIRED)
 add_library(maul2d STATIC
     src/core.c
     src/ccd.c
+    src/distance.c
     src/dynamic_tree.c
     src/island.c
     src/journal.c

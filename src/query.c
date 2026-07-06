@@ -571,3 +571,365 @@ int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2Sha
     }
     return total;
 }
+
+// ---------------------------------------------------------------
+// Convex sweeps and overlaps (parity sprint, slice 63). One generic
+// walk serves circle, capsule and polygon: the cast geometry becomes
+// a m2DistanceProxy in its own local frame, and per candidate shape
+// both proxies meet in the TARGET's body-local frame (the same single
+// f64 crossing as rays).
+
+static m2DistanceProxy GeometryProxy(const m2ShapeGeometry* g)
+{
+    m2DistanceProxy p;
+    p.count = 1;
+    p.radius = 0.0f;
+    p.points[0] = (m2Vec2){0.0f, 0.0f};
+    switch (g->type)
+    {
+    case m2_circleShape:
+        p.points[0] = g->circle.center;
+        p.radius = g->circle.radius;
+        break;
+    case m2_capsuleShape:
+        p.points[0] = g->capsule.point1;
+        p.points[1] = g->capsule.point2;
+        p.count = 2;
+        p.radius = g->capsule.radius;
+        break;
+    case m2_polygonShape:
+        for (int32_t i = 0; i < g->polygon.count; ++i)
+        {
+            p.points[i] = g->polygon.vertices[i];
+        }
+        p.count = g->polygon.count;
+        p.radius = g->polygon.radius;
+        break;
+    case m2_segmentShape:
+        p.points[0] = g->segment.point1;
+        p.points[1] = g->segment.point2;
+        p.count = 2;
+        break;
+    default: // chain segment
+        p.points[0] = g->chainSegment.segment.point1;
+        p.points[1] = g->chainSegment.segment.point2;
+        p.count = 2;
+        break;
+    }
+    return p;
+}
+
+typedef struct m2ProxyQuery
+{
+    m2DistanceProxy castLocal; // cast geometry in its own frame
+    m2Transform pose;          // world pose of that frame (f64 p)
+    m2Vec2 translation;        // world sweep, zero for overlaps
+    float boundRadius;         // bounding circle of the cast geometry
+} m2ProxyQuery;
+
+static m2ProxyQuery MakeProxyQuery(const m2DistanceProxy* castLocal, m2Transform pose,
+                                   m2Vec2 translation)
+{
+    m2ProxyQuery q;
+    q.castLocal = *castLocal;
+    q.pose = pose;
+    q.translation = translation;
+    float ext = 0.0f;
+    for (int32_t i = 0; i < castLocal->count; ++i)
+    {
+        float d2 = castLocal->points[i].x * castLocal->points[i].x +
+                   castLocal->points[i].y * castLocal->points[i].y;
+        float d = sqrtf(d2);
+        ext = d > ext ? d : ext;
+    }
+    q.boundRadius = ext + castLocal->radius;
+    return q;
+}
+
+// Both proxies in the target's body frame; also reports the pose
+// origin there (the chain one-sided reference point).
+static void ProxiesInBodyFrame(const m2World* world, int32_t shapeIndex, const m2ProxyQuery* q,
+                               m2DistanceProxy* target, m2DistanceProxy* cast,
+                               m2Vec2* translationLocal, m2Vec2* poseOriginLocal)
+{
+    int32_t body = world->shapeBody[shapeIndex];
+    m2Transform xf = world->transforms[body];
+    *target = GeometryProxy(&world->shapeGeometry[shapeIndex]);
+
+    m2Vec2 rel = {(float)(q->pose.p.x - xf.p.x), (float)(q->pose.p.y - xf.p.y)};
+    m2Vec2 relLocal = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+    *poseOriginLocal = relLocal;
+
+    // Combined rotation: cast local -> world (pose.q), world -> body
+    // local (inverse xf.q).
+    float rc = xf.q.c * q->pose.q.c + xf.q.s * q->pose.q.s;
+    float rs = xf.q.c * q->pose.q.s - xf.q.s * q->pose.q.c;
+    cast->count = q->castLocal.count;
+    cast->radius = q->castLocal.radius;
+    for (int32_t i = 0; i < q->castLocal.count; ++i)
+    {
+        m2Vec2 pt = q->castLocal.points[i];
+        cast->points[i] =
+            (m2Vec2){rc * pt.x - rs * pt.y + relLocal.x, rs * pt.x + rc * pt.y + relLocal.y};
+    }
+    translationLocal->x = xf.q.c * q->translation.x + xf.q.s * q->translation.y;
+    translationLocal->y = -xf.q.s * q->translation.x + xf.q.c * q->translation.y;
+}
+
+// Sweeps from the ghost side pass through, same sign law as rays.
+static bool ChainGhostSide(const m2World* world, int32_t shapeIndex, m2Vec2 startLocal)
+{
+    const m2ShapeGeometry* g = &world->shapeGeometry[shapeIndex];
+    if (g->type != m2_chainSegmentShape)
+    {
+        return false;
+    }
+    const m2Segment* seg = &g->chainSegment.segment;
+    m2Vec2 e = {seg->point2.x - seg->point1.x, seg->point2.y - seg->point1.y};
+    float offset = (startLocal.x - seg->point1.x) * e.y - (startLocal.y - seg->point1.y) * e.x;
+    return offset < 0.0f;
+}
+
+static m2RayCastResult CastProxyClosest(m2WorldId worldId, const m2DistanceProxy* castLocal,
+                                        m2Transform pose, m2Vec2 translation, m2QueryFilter filter)
+{
+    m2RayCastResult result;
+    result.shapeId = m2_nullShapeId;
+    result.point = pose.p;
+    result.normal = (m2Vec2){0.0f, 0.0f};
+    result.fraction = 0.0f;
+    result.hit = false;
+
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+    m2ProxyQuery q = MakeProxyQuery(castLocal, pose, translation);
+
+    // Swept bounding circle in f64: exact culling far from the origin.
+    double lox = q.pose.p.x - (double)q.boundRadius;
+    double loy = q.pose.p.y - (double)q.boundRadius;
+    double hix = q.pose.p.x + (double)q.boundRadius;
+    double hiy = q.pose.p.y + (double)q.boundRadius;
+    double tx = (double)translation.x;
+    double ty = (double)translation.y;
+    m2AABB aabb;
+    aabb.lowerBound.x = tx < 0.0 ? lox + tx : lox;
+    aabb.lowerBound.y = ty < 0.0 ? loy + ty : loy;
+    aabb.upperBound.x = tx > 0.0 ? hix + tx : hix;
+    aabb.upperBound.y = ty > 0.0 ? hiy + ty : hiy;
+
+    float bestFraction = 1.0f;
+    int32_t bestShape = -1;
+    m2Vec2 bestNormalLocal = {0.0f, 0.0f};
+    m2Vec2 bestPointLocal = {0.0f, 0.0f};
+    bool bestOverlap = false;
+
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        int32_t hits = m2Tree_Query(&world->trees[t], world->treeNodes[t], aabb,
+                                    world->queryScratch, world->shapeCapacity);
+        for (int32_t h = 0; h < hits; ++h)
+        {
+            int32_t shapeIndex = world->queryScratch[h];
+            if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, filter))
+            {
+                continue;
+            }
+            m2DistanceProxy target;
+            m2DistanceProxy cast;
+            m2Vec2 translationLocal;
+            m2Vec2 startLocal;
+            ProxiesInBodyFrame(world, shapeIndex, &q, &target, &cast, &translationLocal,
+                               &startLocal);
+            if (ChainGhostSide(world, shapeIndex, startLocal))
+            {
+                continue;
+            }
+            m2CastResult hit = m2ShapeCastProxy(&target, &cast, translationLocal, bestFraction);
+            if (!hit.hit)
+            {
+                continue;
+            }
+            if (bestShape < 0 || hit.fraction < bestFraction ||
+                (hit.fraction == bestFraction && shapeIndex < bestShape))
+            {
+                bestShape = shapeIndex;
+                bestFraction = hit.fraction;
+                bestNormalLocal = hit.normal;
+                bestPointLocal = hit.pointA;
+                bestOverlap = hit.normal.x == 0.0f && hit.normal.y == 0.0f;
+            }
+        }
+    }
+    if (bestShape < 0)
+    {
+        return result;
+    }
+    int32_t body = world->shapeBody[bestShape];
+    m2Transform xf = world->transforms[body];
+    result.shapeId.index1 = bestShape + 1;
+    result.shapeId.world0 = worldId.index1;
+    result.shapeId.generation = world->shapeGenerations[bestShape];
+    result.fraction = bestOverlap ? 0.0f : bestFraction;
+    result.hit = true;
+    if (bestOverlap)
+    {
+        result.point = pose.p; // the ray convention: origin on overlap
+        return result;
+    }
+    result.normal = (m2Vec2){xf.q.c * bestNormalLocal.x - xf.q.s * bestNormalLocal.y,
+                             xf.q.s * bestNormalLocal.x + xf.q.c * bestNormalLocal.y};
+    result.point =
+        (m2Pos2){xf.p.x + (double)(xf.q.c * bestPointLocal.x - xf.q.s * bestPointLocal.y),
+                 xf.p.y + (double)(xf.q.s * bestPointLocal.x + xf.q.c * bestPointLocal.y)};
+    return result;
+}
+
+static int32_t OverlapProxy(m2WorldId worldId, const m2DistanceProxy* castLocal, m2Transform pose,
+                            m2ShapeId* ids, int32_t capacity, m2QueryFilter filter)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    m2ProxyQuery q = MakeProxyQuery(castLocal, pose, (m2Vec2){0.0f, 0.0f});
+    m2AABB aabb;
+    aabb.lowerBound.x = q.pose.p.x - (double)q.boundRadius;
+    aabb.lowerBound.y = q.pose.p.y - (double)q.boundRadius;
+    aabb.upperBound.x = q.pose.p.x + (double)q.boundRadius;
+    aabb.upperBound.y = q.pose.p.y + (double)q.boundRadius;
+
+    int32_t total = 0;
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        int32_t base = total;
+        int32_t hits = m2Tree_Query(&world->trees[t], world->treeNodes[t], aabb,
+                                    world->queryScratch + base, world->shapeCapacity - base);
+        for (int32_t h = 0; h < hits; ++h)
+        {
+            int32_t shapeIndex = world->queryScratch[base + h];
+            if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, filter))
+            {
+                continue;
+            }
+            m2DistanceProxy target;
+            m2DistanceProxy cast;
+            m2Vec2 translationLocal;
+            m2Vec2 startLocal;
+            ProxiesInBodyFrame(world, shapeIndex, &q, &target, &cast, &translationLocal,
+                               &startLocal);
+            if (ChainGhostSide(world, shapeIndex, startLocal))
+            {
+                continue;
+            }
+            m2DistanceResult d = m2ShapeDistance(&target, &cast);
+            // Touching within the engine's linear slop skin counts as
+            // overlap: the same tolerance the solver's speculative
+            // margin uses, and it absorbs GJK witness noise on deeply
+            // contained pairs.
+            if (d.distance - target.radius - cast.radius > 0.005f)
+            {
+                continue;
+            }
+            world->queryScratch[total] = shapeIndex;
+            total += 1;
+        }
+    }
+    // Ascending slot order, whatever order the trees reported.
+    for (int32_t i = 1; i < total; ++i)
+    {
+        int32_t key = world->queryScratch[i];
+        int32_t j = i - 1;
+        while (j >= 0 && world->queryScratch[j] > key)
+        {
+            world->queryScratch[j + 1] = world->queryScratch[j];
+            j -= 1;
+        }
+        world->queryScratch[j + 1] = key;
+    }
+    int32_t fill = total < capacity ? total : capacity;
+    for (int32_t i = 0; i < fill && ids != NULL; ++i)
+    {
+        int32_t shapeIndex = world->queryScratch[i];
+        ids[i].index1 = shapeIndex + 1;
+        ids[i].world0 = worldId.index1;
+        ids[i].generation = world->shapeGenerations[shapeIndex];
+    }
+    return total;
+}
+
+m2RayCastResult m2World_CastCircleClosest(m2WorldId worldId, const m2Circle* circle,
+                                          m2Transform origin, m2Vec2 translation,
+                                          m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = circle->center;
+    p.count = 1;
+    p.radius = circle->radius;
+    return CastProxyClosest(worldId, &p, origin, translation, filter);
+}
+
+m2RayCastResult m2World_CastCapsuleClosest(m2WorldId worldId, const m2Capsule* capsule,
+                                           m2Transform origin, m2Vec2 translation,
+                                           m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = capsule->point1;
+    p.points[1] = capsule->point2;
+    p.count = 2;
+    p.radius = capsule->radius;
+    return CastProxyClosest(worldId, &p, origin, translation, filter);
+}
+
+m2RayCastResult m2World_CastPolygonClosest(m2WorldId worldId, const m2Polygon* polygon,
+                                           m2Transform origin, m2Vec2 translation,
+                                           m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    for (int32_t i = 0; i < polygon->count; ++i)
+    {
+        p.points[i] = polygon->vertices[i];
+    }
+    p.count = polygon->count;
+    p.radius = polygon->radius;
+    return CastProxyClosest(worldId, &p, origin, translation, filter);
+}
+
+int32_t m2World_OverlapCircle(m2WorldId worldId, const m2Circle* circle, m2Transform origin,
+                              m2ShapeId* ids, int32_t capacity, m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = circle->center;
+    p.count = 1;
+    p.radius = circle->radius;
+    return OverlapProxy(worldId, &p, origin, ids, capacity, filter);
+}
+
+int32_t m2World_OverlapCapsule(m2WorldId worldId, const m2Capsule* capsule, m2Transform origin,
+                               m2ShapeId* ids, int32_t capacity, m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = capsule->point1;
+    p.points[1] = capsule->point2;
+    p.count = 2;
+    p.radius = capsule->radius;
+    return OverlapProxy(worldId, &p, origin, ids, capacity, filter);
+}
+
+int32_t m2World_OverlapPolygon(m2WorldId worldId, const m2Polygon* polygon, m2Transform origin,
+                               m2ShapeId* ids, int32_t capacity, m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    for (int32_t i = 0; i < polygon->count; ++i)
+    {
+        p.points[i] = polygon->vertices[i];
+    }
+    p.count = polygon->count;
+    p.radius = polygon->radius;
+    return OverlapProxy(worldId, &p, origin, ids, capacity, filter);
+}

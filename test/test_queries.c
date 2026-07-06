@@ -53,6 +53,110 @@ static bool SameShape(m2ShapeId a, m2ShapeId b)
     return a.index1 == b.index1 && a.generation == b.generation;
 }
 
+// The query pack (slice 63): convex sweeps and overlaps through one
+// GJK kernel. Analytic fractions, the ray conventions (closest wins,
+// ties to lower index, fraction 0 with zero normal on initial
+// overlap), and the one-sided chain law extended to sweeps.
+static void TestShapeCastsAndOverlaps(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2ShapeDef gs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f); // top face at y = 0
+    m2ShapeId floor = m2CreatePolygonShape(ground, &gs, &slab);
+
+    m2Transform pose = {{0.0, 5.0}, {1.0f, 0.0f}};
+    m2QueryFilter all = m2DefaultQueryFilter();
+
+    // Circle drop: contact when the center reaches y = radius, so the
+    // fraction is about (5 - 0.5) / 10 (the slop skin shifts it a hair).
+    m2Circle ball = {{0.0f, 0.0f}, 0.5f};
+    m2RayCastResult drop =
+        m2World_CastCircleClosest(world, &ball, pose, (m2Vec2){0.0f, -10.0f}, all);
+    CHECK(drop.hit, "the falling circle finds the floor");
+    CHECK(drop.fraction > 0.43f && drop.fraction < 0.46f, "at the analytic fraction");
+    CHECK(drop.normal.y > 0.99f, "with the surface normal facing the sweep");
+    CHECK(drop.shapeId.index1 == floor.index1, "and names the floor");
+
+    // Capsule and polygon sweeps land on the same face.
+    m2Capsule pill = {{-0.4f, 0.0f}, {0.4f, 0.0f}, 0.3f};
+    m2RayCastResult pillDrop =
+        m2World_CastCapsuleClosest(world, &pill, pose, (m2Vec2){0.0f, -10.0f}, all);
+    CHECK(pillDrop.hit && pillDrop.fraction > 0.44f && pillDrop.fraction < 0.48f,
+          "the capsule lands where its radius says");
+    m2Polygon crate = m2MakeBox(0.4f, 0.4f);
+    m2RayCastResult crateDrop =
+        m2World_CastPolygonClosest(world, &crate, pose, (m2Vec2){0.0f, -10.0f}, all);
+    CHECK(crateDrop.hit && crateDrop.fraction > 0.44f && crateDrop.fraction < 0.47f,
+          "the box lands on its face");
+
+    // Initial overlap: pose the circle inside the floor.
+    m2Transform buried = {{0.0, -0.5}, {1.0f, 0.0f}};
+    m2RayCastResult inside =
+        m2World_CastCircleClosest(world, &ball, buried, (m2Vec2){0.0f, -1.0f}, all);
+    CHECK(inside.hit && inside.fraction == 0.0f && inside.normal.x == 0.0f &&
+              inside.normal.y == 0.0f,
+          "initial overlap follows the ray convention");
+
+    // A miss stays a miss.
+    m2RayCastResult away = m2World_CastCircleClosest(world, &ball, pose, (m2Vec2){0.0f, 8.0f}, all);
+    CHECK(!away.hit, "sweeping away hits nothing");
+
+    // One-sided chain: solid side up. From below, the sweep ghosts
+    // through; from above, it lands.
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){30.0, 0.0};
+    m2BodyId shelfBody = m2CreateBody(world, &cd);
+    m2Vec2 pts[5] = {{4.0f, 2.0f}, {2.0f, 2.0f}, {0.0f, 2.0f}, {-2.0f, 2.0f}, {-4.0f, 2.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5;
+    m2CreateChain(shelfBody, &chain);
+    m2Transform below = {{30.0, -2.0}, {1.0f, 0.0f}};
+    m2RayCastResult rising =
+        m2World_CastCircleClosest(world, &ball, below, (m2Vec2){0.0f, 8.0f}, all);
+    CHECK(!rising.hit, "sweeps from the ghost side pass through the shelf");
+    m2Transform above = {{30.0, 6.0}, {1.0f, 0.0f}};
+    m2RayCastResult diving =
+        m2World_CastCircleClosest(world, &ball, above, (m2Vec2){0.0f, -8.0f}, all);
+    CHECK(diving.hit, "and land from the solid side");
+
+    // Overlaps: a probe circle around the origin touches the floor,
+    // truthfully counts, and reports ascending.
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 0.45};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2ShapeId boxShape = m2CreatePolygonShape(box, &sd, &unit);
+    m2Transform probe = {{0.0, 0.2}, {1.0f, 0.0f}};
+    m2Circle area = {{0.0f, 0.0f}, 1.0f};
+    CHECK(m2World_OverlapCircle(world, &area, probe, NULL, 0, all) == 2,
+          "the probe touches floor and box, truthfully counted");
+    m2ShapeId found[4];
+    int32_t n = m2World_OverlapCircle(world, &area, probe, found, 4, all);
+    CHECK(n == 2 && found[0].index1 < found[1].index1, "ascending slot order");
+    CHECK(found[0].index1 == floor.index1 && found[1].index1 == boxShape.index1,
+          "and the right two");
+
+    // A far probe touches nothing; a capsule probe agrees with the
+    // circle; the polygon probe sees only the box when small.
+    m2Transform far = {{50.0, 50.0}, {1.0f, 0.0f}};
+    CHECK(m2World_OverlapCircle(world, &area, far, NULL, 0, all) == 0, "far probe is empty");
+    m2Transform tight = {{0.0, 0.45}, {1.0f, 0.0f}};
+    m2Polygon smallProbe = m2MakeBox(0.1f, 0.1f);
+    CHECK(m2World_OverlapPolygon(world, &smallProbe, tight, NULL, 0, all) == 1,
+          "a tight polygon probe sees only the box");
+
+    m2DestroyWorld(world);
+}
+
 static void TestRayClosest(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -416,6 +520,7 @@ int main(void)
     TestQueryFilters();
     TestContactData();
     TestRayClosest();
+    TestShapeCastsAndOverlaps();
     TestRayGeometries();
     TestRayFarFromOrigin();
     TestOverlap();

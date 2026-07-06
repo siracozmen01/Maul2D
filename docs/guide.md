@@ -147,6 +147,18 @@ mirroring its def field. The surface is complete in a provable sense:
 the mirror test rebuilds a world from public getters alone and holds
 hash equality with the original through 90 steps.
 
+## Sweeps and overlaps
+
+Character controllers live on `m2World_CastCircleClosest` and its
+capsule and polygon siblings: pose a shape, give it a translation,
+get the closest hit with the ray conventions (fraction, facing
+normal, ties to the lower shape index, fraction 0 with a zero normal
+on initial overlap). `m2World_OverlapCircle`/`Capsule`/`Polygon`
+list every shape touching a posed shape, ascending, with truthful
+totals; touching within the engine's slop skin counts. Chain
+segments stay one-sided for both: approach from the ghost side and
+you pass through, exactly like rays and contacts.
+
 ## Rollback netcode in one paragraph
 
 Snapshot every confirmed frame. When a late input arrives, restore,
