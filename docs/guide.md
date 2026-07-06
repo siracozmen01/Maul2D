@@ -152,6 +152,14 @@ honest. The mouse joint is a soft spring pulling a grab point toward
 a world target (`m2MouseJoint_SetTarget`): dragging, done
 deterministically and journaled like everything else.
 
+## Dominance
+
+Give a body a higher dominance and contacts stop pushing it around:
+in any pair, the higher side acts as unmovable toward the lower one,
+and statics outrank everything. Enemies stop bulldozing the player,
+the boss stands firm in a crate avalanche, and joints stay perfectly
+symmetric because dominance touches contacts only.
+
 ## Jointed bodies and collision
 
 Jointed bodies do not collide with each other by default (the

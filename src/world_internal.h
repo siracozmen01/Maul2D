@@ -44,6 +44,7 @@ typedef struct m2World
     uint8_t* sleepEnables;   // 0 = this body never sleeps (snapshot state)
     m2Vec2* forces;          // accumulated, cleared at step end (snapshot state)
     uint8_t* disabled;       // 1 = outside simulation, shapes proxy-less (snapshot state)
+    int8_t* dominances;      // contact priority (snapshot state)
     float* torques;          // (snapshot state)
     uint64_t* userData;
     uint8_t* types;
@@ -274,6 +275,7 @@ enum
     m2_opBodyUserData = 47,
     m2_opShapeUserData = 48,
     m2_opJointUserData = 49,
+    m2_opSetDominance = 50,
 };
 
 // Journaled joint parameter channel (op 16).

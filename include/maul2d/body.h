@@ -45,6 +45,7 @@ extern "C"
         bool fixedRotation; // never rotates: infinite rotational inertia
         bool enableSleep;   // false = this body never sleeps
         bool isEnabled;     // false = created dormant, outside simulation
+        int8_t dominance;   // higher wins contacts: it cannot be pushed by lower
         bool isBullet;      // continuous collision vs non-bullets (topic-07)
         uint64_t userData;  // opaque, copied verbatim through snapshots
         int32_t internalValue;
@@ -83,6 +84,13 @@ extern "C"
     void m2Body_SetAwake(m2BodyId bodyId, bool awake);
     void m2Body_SetBullet(m2BodyId bodyId, bool flag);
     void m2Body_SetUserData(m2BodyId bodyId, uint64_t userData);
+
+    /// Contact dominance (a rival lesson worth keeping): in a pair,
+    /// the higher-dominance body acts as unmovable toward the lower
+    /// one. Statics outrank everything. Enemies stop pushing the
+    /// player. Contacts only; joints are unaffected. Journaled.
+    void m2Body_SetDominance(m2BodyId bodyId, int8_t dominance);
+    int8_t m2Body_GetDominance(m2BodyId bodyId);
 
     /// Kinematic follow: sets the velocities that carry the body to
     /// the target pose over one step of the given dt. Applies via

@@ -30,7 +30,7 @@
 #define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
 #define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 24u
+#define M2_SNAPSHOT_VERSION 25u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1022,6 +1022,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(forces, cap, m2Vec2);
     M2_ALLOC(torques, cap, float);
     M2_ALLOC(disabled, cap, uint8_t);
+    M2_ALLOC(dominances, cap, int8_t);
     M2_ALLOC(shapeChain, shapeCap, int32_t);
     M2_ALLOC(chainAlive, shapeCap, uint8_t);
     M2_ALLOC(chainBody, shapeCap, int32_t);
@@ -1195,6 +1196,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->forces);
     m2Free(world->torques);
     m2Free(world->disabled);
+    m2Free(world->dominances);
     m2Free(world->shapeChain);
     m2Free(world->chainAlive);
     m2Free(world->chainBody);
@@ -1575,6 +1577,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->forces, (size_t)world->bodyCapacity * sizeof(m2Vec2));
     M2_BLOCK(world->torques, (size_t)world->bodyCapacity * sizeof(float));
     M2_BLOCK(world->disabled, (size_t)world->bodyCapacity * sizeof(uint8_t));
+    M2_BLOCK(world->dominances, (size_t)world->bodyCapacity * sizeof(int8_t));
     M2_BLOCK(world->shapeChain, (size_t)world->shapeCapacity * sizeof(int32_t));
     M2_BLOCK(world->chainAlive, (size_t)world->shapeCapacity * sizeof(uint8_t));
     M2_BLOCK(world->chainBody, (size_t)world->shapeCapacity * sizeof(int32_t));
@@ -1771,6 +1774,7 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->forces[index] = (m2Vec2){0.0f, 0.0f};
     world->torques[index] = 0.0f;
     world->disabled[index] = def->isEnabled ? 0 : 1;
+    world->dominances[index] = def->dominance;
     world->userData[index] = def->userData;
     world->types[index] = (uint8_t)def->type;
     world->alive[index] = 1;
@@ -4817,6 +4821,51 @@ void m2Body_Enable(m2BodyId bodyId)
     }
     world->asleep[index] = 0;
     world->sleepTimes[index] = 0.0f;
+}
+
+void m2Body_SetDominance(m2BodyId bodyId, int8_t dominance)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->dominances[index] == dominance)
+    {
+        return; // no-op stays unjournaled
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            int8_t dominance;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.dominance = dominance;
+        m2JournalRecord(world, m2_opSetDominance, &record, (int32_t)sizeof(record));
+    }
+    world->dominances[index] = dominance;
+    if (world->types[index] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[index] = 0;
+        world->sleepTimes[index] = 0.0f;
+    }
+}
+
+int8_t m2Body_GetDominance(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    return world->dominances[index];
 }
 
 bool m2Body_IsEnabled(m2BodyId bodyId)

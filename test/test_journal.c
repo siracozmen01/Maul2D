@@ -219,6 +219,7 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Body_SetBullet(bob, true);            // op 45
     m2Shape_SetDensity(reshapeShape, 1.5f); // op 46
     m2Body_SetUserData(bob, 999);           // op 47
+    m2Body_SetDominance(bob, 3);            // op 50
     m2Shape_SetUserData(reshapeShape, 111); // op 48
     m2Joint_SetUserData(gripper, 222);      // op 49
     m2BodyDef drd = m2DefaultBodyDef();

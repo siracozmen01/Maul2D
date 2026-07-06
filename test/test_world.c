@@ -777,6 +777,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
         bd.gravityScale = m2Body_GetGravityScale(bodies[i]);
         bd.isBullet = m2Body_IsBullet(bodies[i]);
         bd.userData = m2Body_GetUserData(bodies[i]);
+        bd.dominance = m2Body_GetDominance(bodies[i]);
         mirrored[i] = m2CreateBody(mirror, &bd);
 
         m2ShapeId shapes[16];
@@ -1030,6 +1031,7 @@ static void TestMirrorRebuild(void)
     ad.gravityScale = 0.7f;
     ad.isBullet = true;
     ad.userData = 21;
+    ad.dominance = 2;
     m2BodyId boxA = m2CreateBody(world, &ad);
     m2ShapeDef asd = m2DefaultShapeDef();
     asd.density = 2.0f;
@@ -1599,9 +1601,96 @@ static void TestLeftoverBasket(void)
     m2DestroyWorld(world);
 }
 
+// Dominance (slice 77, a rival lesson): the higher body cannot be
+// pushed by the lower one in contacts, statics outrank everyone,
+// joints stay symmetric.
+static void TestDominance(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    fs.friction = 0.2f;
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // A heavy runaway crate slams into a plain twin and into a
+    // dominant twin; only the plain one gets shoved.
+    m2BodyId targets[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 12.0;
+        m2BodyDef td = m2DefaultBodyDef();
+        td.type = m2_dynamicBody;
+        td.position = (m2Pos2){x, 0.45};
+        if (i == 1)
+        {
+            td.dominance = 5;
+        }
+        targets[i] = m2CreateBody(world, &td);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.friction = 0.2f;
+        m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+        m2CreatePolygonShape(targets[i], &sd, &unit);
+
+        m2BodyDef rd = m2DefaultBodyDef();
+        rd.type = m2_dynamicBody;
+        rd.position = (m2Pos2){x - 3.0, 0.45};
+        rd.linearVelocity = (m2Vec2){8.0f, 0.0f};
+        m2BodyId ram = m2CreateBody(world, &rd);
+        m2ShapeDef rs = m2DefaultShapeDef();
+        rs.density = 4.0f;
+        rs.friction = 0.2f;
+        m2Polygon heavy = m2MakeBox(0.5f, 0.4f);
+        m2CreatePolygonShape(ram, &rs, &heavy);
+    }
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double plainMoved = m2Body_GetPosition(targets[0]).x - 0.0;
+    double bossMoved = m2Body_GetPosition(targets[1]).x - 12.0;
+    CHECK(plainMoved > 0.5, "the plain crate gets shoved");
+    CHECK(bossMoved < 0.05 && bossMoved > -0.05, "the dominant crate does not budge");
+    CHECK(m2Body_GetDominance(targets[1]) == 5, "dominance reads back");
+
+    // The dominant crate still falls (gravity is not a contact) and
+    // still rests on the floor (statics outrank it).
+    m2Body_SetTransform(targets[1], (m2Pos2){12.0, 3.0}, (m2Rot){1.0f, 0.0f});
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(targets[1]).y < 0.6, "the boss still lands on the floor");
+
+    // Runtime demotion: drop the crown and the crate shoves again.
+    m2Body_SetDominance(targets[1], 0);
+    m2BodyDef rd2 = m2DefaultBodyDef();
+    rd2.type = m2_dynamicBody;
+    rd2.position = (m2Pos2){9.0, 0.45};
+    rd2.linearVelocity = (m2Vec2){8.0f, 0.0f};
+    m2BodyId ram2 = m2CreateBody(world, &rd2);
+    m2ShapeDef rs2 = m2DefaultShapeDef();
+    rs2.density = 4.0f;
+    m2Polygon heavy2 = m2MakeBox(0.5f, 0.4f);
+    m2CreatePolygonShape(ram2, &rs2, &heavy2);
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(targets[1]).x > 12.3, "demoted, it gets shoved like anyone");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestDominance();
     TestLeftoverBasket();
     TestSmallBasket();
     TestDormancyMassAndExplosions();

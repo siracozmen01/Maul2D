@@ -110,6 +110,12 @@ typedef struct m2ContactConstraint
     int32_t pairIndex;
     int32_t bodyA;
     int32_t bodyB;
+    // Pair-effective masses: usually the bodies' own, but dominance
+    // zeroes one side so the winner cannot be pushed in this pair.
+    float invMassA;
+    float invIA;
+    float invMassB;
+    float invIB;
     m2Vec2 normal; // world frame
     float friction;
     float restitution;
@@ -153,6 +159,24 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         float iA = world->invInertia[bodyA];
         float mB = world->invMass[bodyB];
         float iB = world->invInertia[bodyB];
+        // Dominance (contacts only): the higher side is unmovable in
+        // this pair; statics outrank every dynamic by construction.
+        int32_t domA = world->types[bodyA] == (uint8_t)m2_dynamicBody
+                           ? (int32_t)world->dominances[bodyA]
+                           : 128;
+        int32_t domB = world->types[bodyB] == (uint8_t)m2_dynamicBody
+                           ? (int32_t)world->dominances[bodyB]
+                           : 128;
+        if (domA > domB)
+        {
+            mA = 0.0f;
+            iA = 0.0f;
+        }
+        else if (domB > domA)
+        {
+            mB = 0.0f;
+            iB = 0.0f;
+        }
         if (mA + mB == 0.0f && iA + iB == 0.0f)
         {
             continue; // both non-dynamic
@@ -169,6 +193,10 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         c->pairIndex = i;
         c->bodyA = bodyA;
         c->bodyB = bodyB;
+        c->invMassA = mA;
+        c->invIA = iA;
+        c->invMassB = mB;
+        c->invIB = iB;
         // Geometric-mean friction, max restitution (reference mixing).
         c->friction = sqrtf(world->shapeFriction[shapeA] * world->shapeFriction[shapeB]);
         float restA = world->shapeRestitution[shapeA];
@@ -247,10 +275,10 @@ static void StoreBodyVelocities(m2World* world, const m2ContactConstraint* c, m2
 
 static void WarmStartOne(m2World* world, m2ContactConstraint* c)
 {
-    float mA = world->invMass[c->bodyA];
-    float iA = world->invInertia[c->bodyA];
-    float mB = world->invMass[c->bodyB];
-    float iB = world->invInertia[c->bodyB];
+    float mA = c->invMassA;
+    float iA = c->invIA;
+    float mB = c->invMassB;
+    float iB = c->invIB;
     m2Vec2 vA = world->linearVelocities[c->bodyA];
     float wA = world->angularVelocities[c->bodyA];
     m2Vec2 vB = world->linearVelocities[c->bodyB];
@@ -275,10 +303,10 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
                             bool useBias)
 {
     {
-        float mA = world->invMass[c->bodyA];
-        float iA = world->invInertia[c->bodyA];
-        float mB = world->invMass[c->bodyB];
-        float iB = world->invInertia[c->bodyB];
+        float mA = c->invMassA;
+        float iA = c->invIA;
+        float mB = c->invMassB;
+        float iB = c->invIB;
         m2Vec2 vA = world->linearVelocities[c->bodyA];
         float wA = world->angularVelocities[c->bodyA];
         m2Vec2 vB = world->linearVelocities[c->bodyB];
@@ -378,10 +406,10 @@ static void RestitutionOne(m2World* world, m2ContactConstraint* c)
         {
             return;
         }
-        float mA = world->invMass[c->bodyA];
-        float iA = world->invInertia[c->bodyA];
-        float mB = world->invMass[c->bodyB];
-        float iB = world->invInertia[c->bodyB];
+        float mA = c->invMassA;
+        float iA = c->invIA;
+        float mB = c->invMassB;
+        float iB = c->invIB;
         m2Vec2 vA = world->linearVelocities[c->bodyA];
         float wA = world->angularVelocities[c->bodyA];
         m2Vec2 vB = world->linearVelocities[c->bodyB];
@@ -634,10 +662,10 @@ static int32_t PackRun(m2World* world, m2ContactConstraint* constraints, const i
             block->bodyA[lane] = c->bodyA;
             block->bodyB[lane] = c->bodyB;
             block->pairIndex[lane] = c->pairIndex;
-            block->invMassA[lane] = world->invMass[c->bodyA];
-            block->invIA[lane] = world->invInertia[c->bodyA];
-            block->invMassB[lane] = world->invMass[c->bodyB];
-            block->invIB[lane] = world->invInertia[c->bodyB];
+            block->invMassA[lane] = c->invMassA;
+            block->invIA[lane] = c->invIA;
+            block->invMassB[lane] = c->invMassB;
+            block->invIB[lane] = c->invIB;
             block->normalX[lane] = c->normal.x;
             block->normalY[lane] = c->normal.y;
             block->friction[lane] = c->friction;

@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 20u
+#define M2_JOURNAL_VERSION 21u
 
 typedef struct m2JournalHeader
 {
@@ -727,6 +727,18 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_READ_OP(struct m2OpJointUserData, ju);
             ju.joint.world0 = here;
             m2Joint_SetUserData(ju.joint, ju.userData);
+            break;
+        }
+        case m2_opSetDominance:
+        {
+            struct m2OpSetDominance
+            {
+                m2BodyId body;
+                int8_t dominance;
+            };
+            M2_READ_OP(struct m2OpSetDominance, sd2);
+            sd2.body.world0 = here;
+            m2Body_SetDominance(sd2.body, sd2.dominance);
             break;
         }
         case m2_opApplyTorque:

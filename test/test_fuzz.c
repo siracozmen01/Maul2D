@@ -404,7 +404,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(12);
+        uint32_t which = Pick(13);
         if (which == 0)
         {
             float vx = (float)((int32_t)Pick(9) - 4);
@@ -469,6 +469,11 @@ static void DoRandomOp(m2WorldId world)
         else if (which == 10)
         {
             m2Body_SetAwake(body, Pick(3) != 0);
+        }
+        else if (which == 11)
+        {
+            int8_t dom = (int8_t)((int32_t)Pick(5) - 2);
+            m2Body_SetDominance(body, dom);
         }
         else
         {
