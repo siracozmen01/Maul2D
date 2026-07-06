@@ -820,6 +820,69 @@ static void ScenePlatformerTick(m2WorldId world, double simTime)
     }
 }
 
+static int32_t s_faucetTicks = 0;
+
+static void SceneWater(m2WorldId world)
+{
+    s_faucetTicks = 0;
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    floorDef.position = (m2Pos2){0.0, -0.1};
+    m2Polygon floorBox = m2MakeBox(3.0f, 0.1f);
+    m2CreatePolygonShape(m2CreateBody(world, &floorDef), &sd, &floorBox);
+    m2Polygon wallBox = m2MakeBox(0.1f, 1.6f);
+    m2BodyDef leftDef = m2DefaultBodyDef();
+    leftDef.position = (m2Pos2){-3.0, 1.5};
+    m2CreatePolygonShape(m2CreateBody(world, &leftDef), &sd, &wallBox);
+    m2BodyDef rightDef = m2DefaultBodyDef();
+    rightDef.position = (m2Pos2){3.0, 1.5};
+    m2CreatePolygonShape(m2CreateBody(world, &rightDef), &sd, &wallBox);
+
+    // Debris: two light crates that will float, one dense one that
+    // will sink, and a plank.
+    m2Polygon crate = m2MakeBox(0.15f, 0.15f);
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){-1.5 + (double)i * 1.2, 0.6};
+        m2ShapeDef cs = m2DefaultShapeDef();
+        cs.density = 0.15f;
+        m2CreatePolygonShape(m2CreateBody(world, &cd), &cs, &crate);
+    }
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.type = m2_dynamicBody;
+    hd.position = (m2Pos2){1.6, 0.6};
+    m2ShapeDef hs = m2DefaultShapeDef();
+    hs.density = 4.0f;
+    m2CreatePolygonShape(m2CreateBody(world, &hd), &hs, &crate);
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){0.5, 0.8};
+    m2ShapeDef ps = m2DefaultShapeDef();
+    ps.density = 0.1f;
+    m2Polygon plank = m2MakeBox(0.6f, 0.06f);
+    m2CreatePolygonShape(m2CreateBody(world, &pd), &ps, &plank);
+}
+
+static void SceneWaterTick(m2WorldId world, double simTime)
+{
+    (void)simTime;
+    // The faucet: three drops per tick until the pool is deep. The
+    // spread pattern is a pure function of the tick counter, so the
+    // pour is deterministic and the rewind ring replays it exactly.
+    if (m2World_GetParticleCount(world) < 1500)
+    {
+        for (int32_t j = 0; j < 3; ++j)
+        {
+            int32_t lane = (s_faucetTicks + j * 5) % 7;
+            double x = -0.27 + (double)lane * 0.09;
+            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f});
+        }
+    }
+    s_faucetTicks += 1;
+}
+
 static const tbScene s_scenes[] = {
     {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, NULL, false, false},
     {"car: arrows to drive, terrain is a chain", SceneCar, NULL, true, false},
@@ -832,6 +895,8 @@ static const tbScene s_scenes[] = {
     {"curtain: breakable ropes, one anvil", SceneCurtain, NULL, false, false},
     {"platformer: A/D run, W jump, ride the ferry (mover kit)", ScenePlatformer,
      ScenePlatformerTick, false, true},
+    {"water: the faucet fills the basin, light crates float; hold R", SceneWater, SceneWaterTick,
+     false, false},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
 
@@ -888,6 +953,7 @@ int main(void)
             def.bodyCapacity = 512;
             def.shapeCapacity = 1024;
             def.jointCapacity = 64;
+            def.particleCapacity = 2048; // the water scene pours into this
             world = m2CreateWorld(&def);
             free(ring);
             ringEntry = m2World_SnapshotSize(world);
@@ -1084,6 +1150,18 @@ int main(void)
         if (world.index1 != 0)
         {
             m2World_Draw(world, &draw);
+        }
+        if (world.index1 != 0 && m2World_GetParticleCount(world) > 0)
+        {
+            static m2ParticleId s_drops[2048];
+            int32_t drops = m2World_GetParticles(world, s_drops, 2048);
+            drops = drops <= 2048 ? drops : 2048;
+            float dotRadius = 0.05f * s_camera.pixelsPerMeter;
+            for (int32_t i = 0; i < drops; ++i)
+            {
+                Vector2 at = tbToScreen(m2Particle_GetPosition(s_drops[i]));
+                DrawCircleV(at, dotRadius, (Color){96, 156, 245, 200});
+            }
         }
         if (s_scenes[sceneIndex].hasCharacter)
         {

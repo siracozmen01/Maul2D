@@ -143,6 +143,27 @@ for that recompute by name. `m2World_Explode` is one deterministic
 blast: full impulse inside the radius, linear falloff to zero across
 the band, filtered by category, replayed by one journal op.
 
+## Water
+
+Fluids are opt-in at world creation: set particleCapacity on the
+world def (with the pinned physics knobs: radius, density, pressure,
+damping and viscous strengths, gravity scale) and the particle
+system exists for the world's whole lifetime, inside every snapshot,
+journal and hash the world produces. Emit with a position and
+velocity, destroy by id, read positions and velocities back, and
+enumerate with truthful totals; a full pool quietly returns the null
+id, so pace emitters off the count. Zero viscous strength is plain
+water; raise it for syrup.
+
+Water obeys the house laws: sensors are invisible to it, one-way
+chain platforms hold it only on their solid side, bodies push it and
+it pushes back (light things float, dense things sink), and anything
+it touches wakes up. Two speed facts are part of the contract: no
+particle ever moves more than one diameter per step (the stability
+law; the reference raises its iteration count for fast flows, Maul
+pins one iteration and keeps the law explicit), and a world with
+live particles never hibernates.
+
 ## Utility joints
 
 The gear joint couples two bodies' spins at a ratio (positive for

@@ -113,11 +113,42 @@ static void DoRandomOp(m2WorldId world)
     m2Counters counters = m2World_GetCounters(world);
     uint32_t roll = Pick(100);
 
-    if (roll < 30)
+    if (roll < 24)
     {
         float dt = Pick(2) == 0 ? 1.0f / 60.0f : 1.0f / 120.0f;
         int32_t substeps = 2 << Pick(2); // 2, 4, or 8
         m2World_Step(world, dt, substeps);
+        return;
+    }
+    if (roll < 30)
+    {
+        // Water ops: emit, retarget, destroy. Live targets come from
+        // the enumeration (a reader, draw-free), the victim by draw.
+        uint32_t which = Pick(3);
+        if (which == 0)
+        {
+            double px = PickCoord();
+            double py = (double)Pick(60) * 0.1;
+            float vx = (float)((int32_t)Pick(7) - 3);
+            float vy = (float)((int32_t)Pick(7) - 3);
+            m2World_EmitParticle(world, (m2Pos2){px, py}, (m2Vec2){vx, vy});
+            return;
+        }
+        m2ParticleId targets[128];
+        int32_t live = m2World_GetParticles(world, targets, 128);
+        if (live == 0)
+        {
+            return;
+        }
+        uint32_t victim = Pick((uint32_t)live);
+        if (which == 1)
+        {
+            float vx = (float)((int32_t)Pick(9) - 4);
+            float vy = (float)((int32_t)Pick(9) - 4);
+            m2Particle_SetVelocity(targets[victim], (m2Vec2){vx, vy});
+            return;
+        }
+        m2World_DestroyParticle(targets[victim]);
         return;
     }
     if (roll < 35)
@@ -682,6 +713,7 @@ static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapa
     def.bodyCapacity = 16;
     def.shapeCapacity = 32;
     def.jointCapacity = 8;
+    def.particleCapacity = 128; // the walks drive water too
     def.workerCount = workerCount;
     m2WorldId world = m2CreateWorld(&def);
     if (journal != NULL)
