@@ -372,11 +372,115 @@ static void TestPairOverflow(void)
     m2DestroyWorld(world);
 }
 
+// The coupling acceptance: water poured into a static basin stays
+// inside, calms down, and stacks a surface; the slice-84 promise
+// that needed walls.
+static void TestBasin(void)
+{
+    m2WorldDef def = FluidWorldDef(128);
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    floorDef.position = (m2Pos2){100.0, 49.9};
+    m2Polygon floorBox = m2MakeBox(0.7f, 0.1f);
+    m2CreatePolygonShape(m2CreateBody(world, &floorDef), &sd, &floorBox);
+    m2Polygon wallBox = m2MakeBox(0.1f, 0.8f);
+    m2BodyDef leftDef = m2DefaultBodyDef();
+    leftDef.position = (m2Pos2){99.3, 50.7};
+    m2CreatePolygonShape(m2CreateBody(world, &leftDef), &sd, &wallBox);
+    m2BodyDef rightDef = m2DefaultBodyDef();
+    rightDef.position = (m2Pos2){100.7, 50.7};
+    m2CreatePolygonShape(m2CreateBody(world, &rightDef), &sd, &wallBox);
+
+    m2ParticleId drops[60];
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        double x = 100.0 - 0.44 + (double)(i % 10) * 0.09;
+        double y = 50.3 + (double)(i / 10) * 0.09;
+        drops[i] = m2World_EmitParticle(world, (m2Pos2){x, y}, (m2Vec2){0.0f, 0.0f});
+    }
+    for (int32_t step = 0; step < 360; ++step)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float lateSpeed = 0.0f;
+    double lowest = 1.0e9;
+    double highest = -1.0e9;
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(drops[i]);
+        CHECK(p.x == p.x && p.y == p.y, "water stays finite");
+        CHECK(p.x > 99.15 && p.x < 100.85, "no particle leaks through a wall");
+        CHECK(p.y > 49.85, "no particle leaks through the floor");
+        m2Vec2 v = m2Particle_GetVelocity(drops[i]);
+        float speed = sqrtf(v.x * v.x + v.y * v.y);
+        lateSpeed = lateSpeed > speed ? lateSpeed : speed;
+        lowest = p.y < lowest ? p.y : lowest;
+        highest = p.y > highest ? p.y : highest;
+    }
+    CHECK(lateSpeed < 1.0f, "the pool calms down");
+    CHECK(lowest < 50.1, "water reaches the floor");
+    CHECK(highest < 51.0, "water pools instead of climbing the walls");
+    m2DestroyWorld(world);
+}
+
+// One-way platforms are one-way for water; sensors are invisible.
+static void TestWaterChainAndSensor(void)
+{
+    m2WorldDef def = FluidWorldDef(64);
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.position = (m2Pos2){0.0, 5.0};
+    m2BodyId ground = m2CreateBody(world, &bd);
+    // Solid side up: chain runs right to left (the winding law).
+    m2Vec2 points[4] = {{2.0f, 0.0f}, {1.0f, 0.0f}, {-1.0f, 0.0f}, {-2.0f, 0.0f}};
+    m2ChainDef cd = m2DefaultChainDef();
+    cd.points = points;
+    cd.count = 4;
+    m2CreateChain(ground, &cd);
+
+    // A sensor box hangs above the platform, in the fall path.
+    m2BodyDef sensorBody = m2DefaultBodyDef();
+    sensorBody.position = (m2Pos2){0.0, 6.5};
+    m2ShapeDef sensorDef = m2DefaultShapeDef();
+    sensorDef.isSensor = true;
+    m2Polygon sensorBox = m2MakeBox(0.5f, 0.2f);
+    m2CreatePolygonShape(m2CreateBody(world, &sensorBody), &sensorDef, &sensorBox);
+
+    m2ParticleId rain[10];
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        rain[i] = m2World_EmitParticle(world, (m2Pos2){-0.45 + (double)i * 0.09, 7.5},
+                                       (m2Vec2){0.0f, 0.0f});
+    }
+    m2ParticleId spray = m2World_EmitParticle(world, (m2Pos2){0.0, 3.0}, (m2Vec2){0.0f, 5.9f});
+    for (int32_t step = 0; step < 240; ++step)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(rain[i]);
+        CHECK(p.y > 4.95 && p.y < 5.6, "rain rests on the solid side, through the sensor");
+    }
+    m2Pos2 sp = m2Particle_GetPosition(spray);
+    CHECK(sp.y < 4.0, "spray from below passed the ghost side and fell back through");
+    m2DestroyWorld(world);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
     m2WorldDef def = FluidWorldDef(256);
     m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    floorDef.position = (m2Pos2){300.5, 39.0};
+    m2BodyId floorBody = m2CreateBody(world, &floorDef);
+    m2ShapeDef floorShape = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(2.0f, 0.2f);
+    m2CreatePolygonShape(floorBody, &floorShape, &slab);
     m2ParticleId ids[256];
     int32_t made = 0;
     for (int32_t i = 0; i < 120; ++i)
@@ -420,6 +524,8 @@ int main(void)
     TestPairStructure();
     TestPairOverflow();
     TestRelaxation();
+    TestBasin();
+    TestWaterChainAndSensor();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

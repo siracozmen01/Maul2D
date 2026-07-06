@@ -1060,6 +1060,12 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         M2_ALLOC(particlePairNormal, world->particlePairCapacity, m2Vec2);
         M2_ALLOC(particleWeights, particleCap, float);
         M2_ALLOC(particleAccumulation, particleCap, float);
+        world->particleBodyCapacity = 4 * particleCap;
+        M2_ALLOC(particleBodyParticle, world->particleBodyCapacity, int32_t);
+        M2_ALLOC(particleBodyBody, world->particleBodyCapacity, int32_t);
+        M2_ALLOC(particleBodyWeight, world->particleBodyCapacity, float);
+        M2_ALLOC(particleBodyNormal, world->particleBodyCapacity, m2Vec2);
+        M2_ALLOC(particleBodyMass, world->particleBodyCapacity, float);
     }
     M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
@@ -1254,6 +1260,11 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particlePairNormal);
     m2Free(world->particleWeights);
     m2Free(world->particleAccumulation);
+    m2Free(world->particleBodyParticle);
+    m2Free(world->particleBodyBody);
+    m2Free(world->particleBodyWeight);
+    m2Free(world->particleBodyNormal);
+    m2Free(world->particleBodyMass);
     m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);

@@ -935,6 +935,20 @@ int32_t m2World_OverlapPolygon(m2WorldId worldId, const m2Polygon* polygon, m2Tr
 }
 
 // One shape, the world ray conventions, the one-sided chain law: the
+// The particle projection pass borrows the per-shape kernel (chain
+// one-sided law included) without the tree walk.
+struct m2CastHitInternal m2RayCastShapeIndex(const m2World* world, int32_t shapeIndex,
+                                             m2Pos2 origin, m2Vec2 translation, float maxFraction)
+{
+    m2CastHit hit = RayCastShape(world, shapeIndex, origin, translation, maxFraction);
+    struct m2CastHitInternal out;
+    out.point = hit.point;
+    out.normal = hit.normal;
+    out.fraction = hit.fraction;
+    out.hit = hit.hit;
+    return out;
+}
+
 // same RayCastShape the world walk uses, minus the walk.
 m2RayCastResult m2Shape_RayCast(m2ShapeId shapeId, m2Pos2 origin, m2Vec2 translation)
 {

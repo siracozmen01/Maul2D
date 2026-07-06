@@ -31,6 +31,12 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
+
+static m2Vec2 Rotate(m2Rot q, m2Vec2 v)
+{
+    return (m2Vec2){q.c * v.x - q.s * v.y, q.s * v.x + q.c * v.y};
+}
 
 typedef struct m2ParticleProxy
 {
@@ -162,6 +168,141 @@ void m2UpdateParticlePairs(m2World* world)
     }
 }
 
+// Particle-vs-body contacts (chapter slice 4): for every particle,
+// every shape whose surface sits within one diameter contributes a
+// contact carrying the reference fields (weight, outward normal,
+// pair-effective mass). Candidates come from the three trees like
+// the CCD sweep does: sensors never touch water, one-way chain
+// links ignore particles on their ghost side, order is canonical
+// (particles in index order, candidate shapes ascending). One-way
+// for now: bodies push water, the water pushes back in the next
+// slice.
+#define M2_PARTICLE_CANDIDATES 32
+
+static void UpdateParticleBodyContacts(m2World* world)
+{
+    world->particleBodyCount = 0;
+    world->particleBodyOverflow = 0;
+    float diameter = 2.0f * world->particleRadius;
+    float stride = 0.75f * diameter;
+    float particleMass = world->particleDensity * stride * stride;
+    float invAm = 1.0f / particleMass;
+
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        m2Pos2 pp = world->particlePositions[i];
+        m2AABB box;
+        box.lowerBound.x = pp.x - (double)diameter;
+        box.lowerBound.y = pp.y - (double)diameter;
+        box.upperBound.x = pp.x + (double)diameter;
+        box.upperBound.y = pp.y + (double)diameter;
+
+        int32_t candidates[M2_PARTICLE_CANDIDATES];
+        int32_t candidateCount = 0;
+        for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+        {
+            int32_t results[M2_PARTICLE_CANDIDATES];
+            int32_t hits = m2Tree_Query(&world->trees[t], world->treeNodes[t], box, results,
+                                        M2_PARTICLE_CANDIDATES);
+            hits = hits <= M2_PARTICLE_CANDIDATES ? hits : M2_PARTICLE_CANDIDATES;
+            for (int32_t h = 0; h < hits && candidateCount < M2_PARTICLE_CANDIDATES; ++h)
+            {
+                int32_t shape = results[h];
+                if (world->shapeSensor[shape] != 0)
+                {
+                    continue; // sensors never touch water
+                }
+                candidates[candidateCount++] = shape;
+            }
+        }
+        // Canonical order regardless of tree traversal.
+        for (int32_t a = 1; a < candidateCount; ++a)
+        {
+            int32_t key = candidates[a];
+            int32_t j = a - 1;
+            while (j >= 0 && candidates[j] > key)
+            {
+                candidates[j + 1] = candidates[j];
+                j -= 1;
+            }
+            candidates[j + 1] = key;
+        }
+
+        for (int32_t c = 0; c < candidateCount; ++c)
+        {
+            int32_t shape = candidates[c];
+            int32_t body = world->shapeBody[shape];
+            m2Transform xf = world->transforms[body];
+            float dx = (float)(pp.x - xf.p.x);
+            float dy = (float)(pp.y - xf.p.y);
+            m2Vec2 local = {xf.q.c * dx + xf.q.s * dy, -xf.q.s * dx + xf.q.c * dy};
+
+            const m2ShapeGeometry* g = &world->shapeGeometry[shape];
+            if (g->type == m2_chainSegmentShape)
+            {
+                // Ghost side: the sign law shared with contacts, rays
+                // and CCD; water on the pass-through side ignores it.
+                const m2ChainSegment* link = &g->chainSegment;
+                m2Vec2 e = {link->segment.point2.x - link->segment.point1.x,
+                            link->segment.point2.y - link->segment.point1.y};
+                float offset = (local.x - link->segment.point1.x) * e.y -
+                               (local.y - link->segment.point1.y) * e.x;
+                if (offset < 0.0f)
+                {
+                    continue;
+                }
+            }
+
+            m2DistanceProxy shapeProxy = m2GeometryProxy(g);
+            m2DistanceProxy pointProxy;
+            memset(&pointProxy, 0, sizeof(pointProxy));
+            pointProxy.points[0] = local;
+            pointProxy.count = 1;
+            pointProxy.radius = 0.0f;
+            m2DistanceResult dist = m2ShapeDistance(&shapeProxy, &pointProxy);
+            float separation = dist.distance - shapeProxy.radius;
+            if (separation >= diameter)
+            {
+                continue;
+            }
+            m2Vec2 n;
+            if (dist.normal.x != 0.0f || dist.normal.y != 0.0f)
+            {
+                n = Rotate(xf.q, dist.normal); // shape toward particle
+            }
+            else
+            {
+                // Deep overlap: push from the body origin, the mover
+                // kit's fallback; coincident falls back canonically.
+                float len = sqrtf(dx * dx + dy * dy);
+                n = len > 1.0e-6f ? (m2Vec2){dx / len, dy / len} : (m2Vec2){0.0f, 1.0f};
+            }
+            if (world->particleBodyCount >= world->particleBodyCapacity)
+            {
+                world->particleBodyOverflow += 1;
+                continue;
+            }
+            m2Vec2 lc = world->localCenters[body];
+            m2Vec2 comArm = Rotate(xf.q, lc);
+            float rpx = dx - comArm.x;
+            float rpy = dy - comArm.y;
+            float rpn = rpx * n.y - rpy * n.x;
+            float invM = invAm + world->invMass[body] + world->invInertia[body] * rpn * rpn;
+            int32_t k = world->particleBodyCount;
+            world->particleBodyParticle[k] = i;
+            world->particleBodyBody[k] = body;
+            world->particleBodyWeight[k] = 1.0f - separation / diameter;
+            world->particleBodyNormal[k] = n;
+            world->particleBodyMass[k] = invM > 0.0f ? 1.0f / invM : 0.0f;
+            world->particleBodyCount = k + 1;
+        }
+    }
+}
+
 // The water pass (chapter slice 3), the reference relaxation solver
 // on the frozen pair list, once per step before the rigid solve:
 // weight (dimensionless density) -> viscosity (system-level strength;
@@ -172,10 +313,14 @@ void m2UpdateParticlePairs(m2World* world)
 void m2SolveParticles(m2World* world, float dt)
 {
     m2UpdateParticlePairs(world);
+    UpdateParticleBodyContacts(world);
     if (dt <= 0.0f)
     {
         return;
     }
+    float stride = 0.75f * 2.0f * world->particleRadius;
+    float particleInvMass = 1.0f / (world->particleDensity * stride * stride);
+    int32_t bodyContactCount = world->particleBodyCount;
     float invDt = 1.0f / dt;
     float diameter = 2.0f * world->particleRadius;
     int32_t pairCount = world->particlePairCount;
@@ -184,6 +329,10 @@ void m2SolveParticles(m2World* world, float dt)
     for (int32_t i = 0; i < world->maxParticleIndex; ++i)
     {
         world->particleWeights[i] = 0.0f;
+    }
+    for (int32_t k = 0; k < bodyContactCount; ++k)
+    {
+        world->particleWeights[world->particleBodyParticle[k]] += world->particleBodyWeight[k];
     }
     for (int32_t k = 0; k < pairCount; ++k)
     {
@@ -199,6 +348,26 @@ void m2SolveParticles(m2World* world, float dt)
     float viscous = world->particleViscousStrength;
     if (viscous > 0.0f)
     {
+        for (int32_t k = 0; k < bodyContactCount; ++k)
+        {
+            int32_t a = world->particleBodyParticle[k];
+            int32_t body = world->particleBodyBody[k];
+            float w = world->particleBodyWeight[k];
+            float m = world->particleBodyMass[k];
+            m2Pos2 pp = world->particlePositions[a];
+            m2Vec2 lc = world->localCenters[body];
+            m2Vec2 comArm = Rotate(world->transforms[body].q, lc);
+            float rx = (float)(pp.x - world->transforms[body].p.x) - comArm.x;
+            float ry = (float)(pp.y - world->transforms[body].p.y) - comArm.y;
+            float wb = world->angularVelocities[body];
+            float bvx = world->linearVelocities[body].x - wb * ry;
+            float bvy = world->linearVelocities[body].y + wb * rx;
+            float fx = viscous * m * w * (bvx - world->particleVelocities[a].x);
+            float fy = viscous * m * w * (bvy - world->particleVelocities[a].y);
+            world->particleVelocities[a].x += particleInvMass * fx;
+            world->particleVelocities[a].y += particleInvMass * fy;
+            // One-way for now: the body's reaction lands next slice.
+        }
         for (int32_t k = 0; k < pairCount; ++k)
         {
             int32_t a = world->particlePairA[k];
@@ -242,6 +411,18 @@ void m2SolveParticles(m2World* world, float dt)
         world->particleAccumulation[i] = m2MinF(h, maxPressure);
     }
     float velocityPerPressure = dt / (world->particleDensity * diameter);
+    for (int32_t k = 0; k < bodyContactCount; ++k)
+    {
+        int32_t a = world->particleBodyParticle[k];
+        float w = world->particleBodyWeight[k];
+        float m = world->particleBodyMass[k];
+        m2Vec2 n = world->particleBodyNormal[k];
+        float h = world->particleAccumulation[a] + pressurePerWeight * w;
+        float f = velocityPerPressure * w * m * h;
+        // n points from the shape toward the particle: push out.
+        world->particleVelocities[a].x += particleInvMass * f * n.x;
+        world->particleVelocities[a].y += particleInvMass * f * n.y;
+    }
     for (int32_t k = 0; k < pairCount; ++k)
     {
         int32_t a = world->particlePairA[k];
@@ -260,6 +441,34 @@ void m2SolveParticles(m2World* world, float dt)
     // quadratic, capped at half the approach per pass.
     float linearDamping = world->particleDampingStrength;
     float quadraticDamping = 1.0f / criticalVelocity;
+    for (int32_t k = 0; k < bodyContactCount; ++k)
+    {
+        int32_t a = world->particleBodyParticle[k];
+        int32_t body = world->particleBodyBody[k];
+        float w = world->particleBodyWeight[k];
+        float m = world->particleBodyMass[k];
+        m2Vec2 n = world->particleBodyNormal[k];
+        m2Pos2 pp = world->particlePositions[a];
+        m2Vec2 lc = world->localCenters[body];
+        m2Vec2 comArm = Rotate(world->transforms[body].q, lc);
+        float rx = (float)(pp.x - world->transforms[body].p.x) - comArm.x;
+        float ry = (float)(pp.y - world->transforms[body].p.y) - comArm.y;
+        float wb = world->angularVelocities[body];
+        float bvx = world->linearVelocities[body].x - wb * ry;
+        float bvy = world->linearVelocities[body].y + wb * rx;
+        float relx = bvx - world->particleVelocities[a].x;
+        float rely = bvy - world->particleVelocities[a].y;
+        float vn = relx * n.x + rely * n.y;
+        if (vn > 0.0f)
+        {
+            // Approaching along the outward normal from the particle's
+            // side; eat it like the pair pass does.
+            float damping = m2MaxF(linearDamping * w, m2MinF(quadraticDamping * vn, 0.5f));
+            float f = damping * m * vn;
+            world->particleVelocities[a].x += particleInvMass * f * n.x;
+            world->particleVelocities[a].y += particleInvMass * f * n.y;
+        }
+    }
     for (int32_t k = 0; k < pairCount; ++k)
     {
         int32_t a = world->particlePairA[k];
@@ -298,6 +507,64 @@ void m2SolveParticles(m2World* world, float dt)
             float scale = sqrtf(criticalSq / v2);
             world->particleVelocities[i].x = vx * scale;
             world->particleVelocities[i].y = vy * scale;
+        }
+    }
+
+    // The projection pass (reference SolveCollision): whoever would
+    // land inside a body this step gets its velocity redirected to a
+    // point one slop above the surface instead. Anti-tunneling for
+    // water; the chain one-sided law rides inside the ray kernel.
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        m2Pos2 p1 = world->particlePositions[i];
+        m2Vec2 move = {world->particleVelocities[i].x * dt, world->particleVelocities[i].y * dt};
+        m2AABB box;
+        box.lowerBound.x = p1.x + (move.x < 0.0f ? (double)move.x : 0.0);
+        box.lowerBound.y = p1.y + (move.y < 0.0f ? (double)move.y : 0.0);
+        box.upperBound.x = p1.x + (move.x > 0.0f ? (double)move.x : 0.0);
+        box.upperBound.y = p1.y + (move.y > 0.0f ? (double)move.y : 0.0);
+
+        float bestFraction = 1.0f;
+        int32_t bestShape = -1;
+        m2Vec2 bestNormal = {0.0f, 0.0f};
+        for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+        {
+            int32_t results[M2_PARTICLE_CANDIDATES];
+            int32_t hits = m2Tree_Query(&world->trees[t], world->treeNodes[t], box, results,
+                                        M2_PARTICLE_CANDIDATES);
+            hits = hits <= M2_PARTICLE_CANDIDATES ? hits : M2_PARTICLE_CANDIDATES;
+            for (int32_t h = 0; h < hits; ++h)
+            {
+                int32_t shape = results[h];
+                if (world->shapeSensor[shape] != 0)
+                {
+                    continue;
+                }
+                struct m2CastHitInternal hit = m2RayCastShapeIndex(world, shape, p1, move, 1.0f);
+                if (!hit.hit || (hit.normal.x == 0.0f && hit.normal.y == 0.0f))
+                {
+                    continue; // misses and initial overlaps (pressure owns those)
+                }
+                if (hit.fraction < bestFraction ||
+                    (hit.fraction == bestFraction && shape < bestShape))
+                {
+                    bestFraction = hit.fraction;
+                    bestShape = shape;
+                    bestNormal = hit.normal;
+                }
+            }
+        }
+        if (bestShape >= 0)
+        {
+            double tx = p1.x + (double)(bestFraction * move.x) + (double)(0.005f * bestNormal.x);
+            double ty = p1.y + (double)(bestFraction * move.y) + (double)(0.005f * bestNormal.y);
+            world->particleVelocities[i].x = (float)(tx - p1.x) * invDt;
+            world->particleVelocities[i].y = (float)(ty - p1.y) * invDt;
+            // One-way: the body feels nothing until the next slice.
         }
     }
 

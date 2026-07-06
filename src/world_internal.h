@@ -155,6 +155,16 @@ typedef struct m2World
     int32_t particlePairOverflow; // deterministic truncation counter
     float* particleWeights;       // step-transient dimensionless density
     float* particleAccumulation;  // step-transient pressure accumulator
+    // Step-transient particle-vs-body contacts (one per particle and
+    // touched shape, canonical particle-then-shape order).
+    int32_t* particleBodyParticle;
+    int32_t* particleBodyBody;
+    float* particleBodyWeight;
+    m2Vec2* particleBodyNormal;   // outward, shape toward particle, world frame
+    float* particleBodyMass;      // pair-effective mass (reference formula)
+    int32_t particleBodyCapacity; // 4 per particle of capacity
+    int32_t particleBodyCount;
+    int32_t particleBodyOverflow;
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;
@@ -393,5 +403,14 @@ int32_t m2ContactConstraintSize(void);
 m2World* m2World_GetInternal(m2WorldId worldId);
 void m2UpdateParticlePairs(m2World* world);
 void m2SolveParticles(m2World* world, float dt);
+struct m2CastHitInternal
+{
+    m2Vec2 point;
+    m2Vec2 normal;
+    float fraction;
+    bool hit;
+};
+struct m2CastHitInternal m2RayCastShapeIndex(const m2World* world, int32_t shapeIndex,
+                                             m2Pos2 origin, m2Vec2 translation, float maxFraction);
 
 #endif // MAUL2D_WORLD_INTERNAL_H
