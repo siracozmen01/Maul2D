@@ -1,0 +1,506 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Sirac Ozmen
+//
+// The Maul2D testbed: an interactive playground over the debug-draw
+// interface. Everything here is a VIEWER; the simulation stays inside
+// the engine's determinism contract and the testbed only calls the
+// public API. Controls:
+//   left drag   grab bodies (a mouse joint, of course)
+//   right drag  pan          wheel  zoom
+//   space       pause        S      single step
+//   tab         next scene   R      restart scene
+//   E           explosion at the cursor
+//   B           drop a box at the cursor
+//   arrows      drive (scenes with a car)
+
+#include "maul2d/maul2d.h"
+#include "raylib.h"
+
+#include <math.h>
+#include <stdio.h>
+
+// ---------------------------------------------------------------- camera
+// World positions are f64; the camera subtracts its center in double
+// and only then drops to float, so scenes far from the origin render
+// rock steady (the same hybrid-precision idea the engine uses).
+typedef struct tbCamera
+{
+    double cx;
+    double cy;
+    float pixelsPerMeter;
+} tbCamera;
+
+static tbCamera s_camera;
+static int s_screenWidth = 1280;
+static int s_screenHeight = 720;
+
+static Vector2 tbToScreen(m2Pos2 p)
+{
+    float x = (float)(p.x - s_camera.cx) * s_camera.pixelsPerMeter + (float)s_screenWidth * 0.5f;
+    float y = (float)s_screenHeight * 0.5f - (float)(p.y - s_camera.cy) * s_camera.pixelsPerMeter;
+    return (Vector2){x, y};
+}
+
+static m2Pos2 tbToWorld(Vector2 s)
+{
+    double x =
+        s_camera.cx + (double)((s.x - (float)s_screenWidth * 0.5f) / s_camera.pixelsPerMeter);
+    double y =
+        s_camera.cy + (double)(((float)s_screenHeight * 0.5f - s.y) / s_camera.pixelsPerMeter);
+    return (m2Pos2){x, y};
+}
+
+static Color tbColor(uint32_t rgb)
+{
+    return (Color){(unsigned char)(rgb >> 16), (unsigned char)(rgb >> 8), (unsigned char)rgb, 255};
+}
+
+// ------------------------------------------------------------ draw bridge
+static void tbDrawPolygon(const m2Vec2* localVertices, int32_t count, m2Pos2 origin, m2Rot q,
+                          uint32_t color, void* context)
+{
+    (void)context;
+    Vector2 pts[16];
+    for (int32_t i = 0; i < count && i < 16; ++i)
+    {
+        m2Vec2 r = {q.c * localVertices[i].x - q.s * localVertices[i].y,
+                    q.s * localVertices[i].x + q.c * localVertices[i].y};
+        pts[i] = tbToScreen((m2Pos2){origin.x + (double)r.x, origin.y + (double)r.y});
+    }
+    for (int32_t i = 0; i < count; ++i)
+    {
+        DrawLineV(pts[i], pts[(i + 1) % count], tbColor(color));
+    }
+}
+
+static void tbDrawCircle(m2Pos2 center, float radius, m2Rot q, uint32_t color, void* context)
+{
+    (void)context;
+    Vector2 c = tbToScreen(center);
+    DrawCircleLinesV(c, radius * s_camera.pixelsPerMeter, tbColor(color));
+    // Radius line so rotation is visible.
+    m2Pos2 rim = {center.x + (double)(q.c * radius), center.y + (double)(q.s * radius)};
+    DrawLineV(c, tbToScreen(rim), tbColor(color));
+}
+
+static void tbDrawCapsule(m2Pos2 p1, m2Pos2 p2, float radius, uint32_t color, void* context)
+{
+    (void)context;
+    Vector2 a = tbToScreen(p1);
+    Vector2 b = tbToScreen(p2);
+    float r = radius * s_camera.pixelsPerMeter;
+    DrawCircleLinesV(a, r, tbColor(color));
+    DrawCircleLinesV(b, r, tbColor(color));
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len > 0.0f)
+    {
+        float nx = -dy / len * r;
+        float ny = dx / len * r;
+        DrawLineV((Vector2){a.x + nx, a.y + ny}, (Vector2){b.x + nx, b.y + ny}, tbColor(color));
+        DrawLineV((Vector2){a.x - nx, a.y - ny}, (Vector2){b.x - nx, b.y - ny}, tbColor(color));
+    }
+}
+
+static void tbDrawSegment(m2Pos2 p1, m2Pos2 p2, uint32_t color, void* context)
+{
+    (void)context;
+    DrawLineV(tbToScreen(p1), tbToScreen(p2), tbColor(color));
+}
+
+static void tbDrawPoint(m2Pos2 p, float size, uint32_t color, void* context)
+{
+    (void)context;
+    DrawCircleV(tbToScreen(p), size, tbColor(color));
+}
+
+// ---------------------------------------------------------------- scenes
+typedef struct tbScene
+{
+    const char* name;
+    void (*setup)(m2WorldId world);
+    bool hasCar;
+} tbScene;
+
+static m2BodyId s_driveWheelA;
+static m2BodyId s_driveWheelB;
+static m2JointId s_driveJointA;
+static m2JointId s_driveJointB;
+
+static m2BodyId tbAddBox(m2WorldId world, double x, double y, float half, float density)
+{
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){x, y};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = density;
+    m2Polygon box = m2MakeBox(half, half);
+    m2CreatePolygonShape(body, &sd, &box);
+    return body;
+}
+
+static m2BodyId tbAddFloor(m2WorldId world, double x, double y, float halfW)
+{
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){x, y};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    fs.friction = 0.8f;
+    m2Polygon slab = m2MakeBox(halfW, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    return floor;
+}
+
+static void SceneWelcome(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    // A pyramid to shove, a chain shelf to bounce under, seesaw, and a
+    // breakable rope holding a wrecking ball: one of everything that
+    // reads well on screen.
+    for (int32_t row = 0; row < 10; ++row)
+    {
+        for (int32_t col = 0; col <= row; ++col)
+        {
+            tbAddBox(world, (double)col * 0.85 - (double)row * 0.425 - 6.0,
+                     0.4 + (double)(9 - row) * 0.81, 0.4f, 1.0f);
+        }
+    }
+    // One-way shelf: approach from below, land from above.
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){8.0, 3.0};
+    m2BodyId shelfBody = m2CreateBody(world, &cd);
+    m2Vec2 pts[6] = {{4.0f, 0.0f},  {2.5f, 0.0f},  {1.0f, 0.0f},
+                     {-1.0f, 0.0f}, {-2.5f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 6;
+    m2CreateChain(shelfBody, &chain);
+
+    // Wrecking ball on a breakable rope over the shelf.
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.position = (m2Pos2){8.0, 9.0};
+    m2BodyId hook = m2CreateBody(world, &hd);
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.type = m2_dynamicBody;
+    wd.position = (m2Pos2){8.0, 6.0};
+    m2BodyId ball = m2CreateBody(world, &wd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.density = 6.0f;
+    m2Circle heavy = {{0.0f, 0.0f}, 0.6f};
+    m2CreateCircleShape(ball, &bs, &heavy);
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hook;
+    dj.bodyIdB = ball;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    m2Joint_SetBreakLimits(rope, 260.0f, 0.0f); // yank it hard and it snaps
+}
+
+static void SceneCar(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 18.0);
+    // Rolling terrain out of a one-sided chain, then a car with two
+    // motored wheel joints; arrows drive it.
+    m2BodyDef td = m2DefaultBodyDef();
+    td.position = (m2Pos2){44.0, -1.0};
+    m2BodyId terrain = m2CreateBody(world, &td);
+    m2Vec2 hills[12];
+    for (int32_t i = 0; i < 12; ++i)
+    {
+        // Right to left: the solid side of the chain faces up.
+        hills[i].x = (float)(28.0 - (double)i * 5.0);
+        hills[i].y = (float)(1.2 * sin((double)i * 0.9) + 1.0);
+    }
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = hills;
+    chain.count = 12;
+    chain.friction = 0.9f;
+    m2CreateChain(terrain, &chain);
+
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){-8.0, 1.4};
+    m2BodyId chassis = m2CreateBody(world, &cd);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    cs.density = 1.6f;
+    m2Polygon hull = m2MakeBox(1.1f, 0.3f);
+    m2CreatePolygonShape(chassis, &cs, &hull);
+
+    m2ShapeDef ws = m2DefaultShapeDef();
+    ws.density = 1.0f;
+    ws.friction = 1.1f;
+    m2Circle tire = {{0.0f, 0.0f}, 0.38f};
+    m2BodyId wheels[2];
+    m2JointId axles[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){-8.0 + (i == 0 ? -0.75 : 0.75), 1.0};
+        wheels[i] = m2CreateBody(world, &wd);
+        m2CreateCircleShape(wheels[i], &ws, &tire);
+        m2WheelJointDef wj = m2DefaultWheelJointDef();
+        wj.bodyIdA = chassis;
+        wj.bodyIdB = wheels[i];
+        wj.localAnchorA = (m2Vec2){i == 0 ? -0.75f : 0.75f, -0.4f};
+        wj.localAxisA = (m2Vec2){0.0f, 1.0f};
+        wj.enableSpring = true;
+        wj.hertz = 4.0f;
+        wj.dampingRatio = 0.7f;
+        wj.enableMotor = true;
+        wj.motorSpeed = 0.0f;
+        wj.maxMotorTorque = 24.0f;
+        axles[i] = m2CreateWheelJoint(world, &wj);
+    }
+    s_driveWheelA = wheels[0];
+    s_driveWheelB = wheels[1];
+    s_driveJointA = axles[0];
+    s_driveJointB = axles[1];
+}
+
+static void SceneDemolition(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    // A tower and a motorized platform ferrying crates: press E near
+    // the tower and watch it come down; the platform keeps its route
+    // via m2MotorJoint_SetOffsets from the input loop below.
+    for (int32_t floor = 0; floor < 8; ++floor)
+    {
+        tbAddBox(world, -6.0, 0.45 + (double)floor * 0.92, 0.45f, 1.0f);
+        tbAddBox(world, -4.6, 0.45 + (double)floor * 0.92, 0.45f, 1.0f);
+        if (floor % 2 == 1)
+        {
+            tbAddBox(world, -5.3, 0.95 + (double)floor * 0.92, 0.45f, 0.8f);
+        }
+    }
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){6.0, 2.0};
+    m2BodyId anchor = m2CreateBody(world, &ad);
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){6.0, 2.0};
+    m2BodyId platform = m2CreateBody(world, &pd);
+    m2ShapeDef ps = m2DefaultShapeDef();
+    ps.density = 2.0f;
+    m2Polygon deck = m2MakeBox(1.4f, 0.15f);
+    m2CreatePolygonShape(platform, &ps, &deck);
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = anchor;
+    mj.bodyIdB = platform;
+    mj.maxForce = 400.0f;
+    mj.maxTorque = 150.0f;
+    mj.correctionFactor = 0.25f;
+    s_driveJointA = m2CreateMotorJoint(world, &mj); // reused as the platform handle
+    tbAddBox(world, 6.0, 2.6, 0.35f, 0.8f);
+}
+
+static const tbScene s_scenes[] = {
+    {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, false},
+    {"car: arrows to drive, terrain is a chain", SceneCar, true},
+    {"demolition: E to blast, motor platform ferries", SceneDemolition, false},
+};
+#define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
+
+// ------------------------------------------------------------------ main
+int main(void)
+{
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    InitWindow(s_screenWidth, s_screenHeight, "Maul2D testbed");
+    SetTargetFPS(60);
+
+    m2WorldId world = {0, 0};
+    int32_t sceneIndex = 0;
+    bool paused = false;
+    double simTime = 0.0;
+    m2JointId grip = m2_nullJointId;
+
+    m2DebugDraw draw = {0};
+    draw.drawPolygon = tbDrawPolygon;
+    draw.drawCircle = tbDrawCircle;
+    draw.drawCapsule = tbDrawCapsule;
+    draw.drawSegment = tbDrawSegment;
+    draw.drawPoint = tbDrawPoint;
+    draw.drawShapes = true;
+    draw.drawJoints = true;
+    draw.drawContacts = false;
+
+    // Scene loader inline (recreate the world, run setup).
+    int32_t pendingScene = 0;
+    bool reload = true;
+
+    while (!WindowShouldClose())
+    {
+        if (reload)
+        {
+            if (world.index1 != 0)
+            {
+                m2DestroyWorld(world);
+            }
+            m2WorldDef def = m2DefaultWorldDef();
+            def.bodyCapacity = 512;
+            def.shapeCapacity = 1024;
+            def.jointCapacity = 64;
+            world = m2CreateWorld(&def);
+            s_driveWheelA = m2_nullBodyId;
+            s_driveWheelB = m2_nullBodyId;
+            s_driveJointA = m2_nullJointId;
+            s_driveJointB = m2_nullJointId;
+            grip = m2_nullJointId;
+            sceneIndex = pendingScene;
+            s_scenes[sceneIndex].setup(world);
+            s_camera = (tbCamera){0.0, 4.0, 40.0f};
+            simTime = 0.0;
+            reload = false;
+        }
+
+        // ---- input ----
+        if (IsKeyPressed(KEY_TAB))
+        {
+            pendingScene = (sceneIndex + 1) % TB_SCENE_COUNT;
+            reload = true;
+        }
+        if (IsKeyPressed(KEY_R))
+        {
+            pendingScene = sceneIndex;
+            reload = true;
+        }
+        if (IsKeyPressed(KEY_SPACE))
+        {
+            paused = !paused;
+        }
+        float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f)
+        {
+            float factor = wheel > 0.0f ? 1.1f : 1.0f / 1.1f;
+            s_camera.pixelsPerMeter *= factor;
+            if (s_camera.pixelsPerMeter < 4.0f)
+            {
+                s_camera.pixelsPerMeter = 4.0f;
+            }
+        }
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
+        {
+            Vector2 d = GetMouseDelta();
+            s_camera.cx -= (double)(d.x / s_camera.pixelsPerMeter);
+            s_camera.cy += (double)(d.y / s_camera.pixelsPerMeter);
+        }
+
+        m2Pos2 cursor = tbToWorld(GetMousePosition());
+
+        // Grab: a mouse joint, naturally.
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && world.index1 != 0)
+        {
+            m2Circle probe = {{0.0f, 0.0f}, 0.05f};
+            m2Transform pose = {cursor, {1.0f, 0.0f}};
+            m2ShapeId hit[1];
+            if (m2World_OverlapCircle(world, &probe, pose, hit, 1, m2DefaultQueryFilter()) > 0)
+            {
+                m2BodyId body = m2Shape_GetBody(hit[0]);
+                if (m2Body_GetType(body) == m2_dynamicBody)
+                {
+                    m2MouseJointDef sj = m2DefaultMouseJointDef();
+                    sj.bodyIdA = body; // bookkeeping anchor only
+                    sj.bodyIdB = body;
+                    // Two distinct bodies are required; grab against a
+                    // throwaway static anchor instead.
+                    m2BodyDef ad = m2DefaultBodyDef();
+                    ad.position = cursor;
+                    m2BodyId anchor = m2CreateBody(world, &ad);
+                    sj.bodyIdA = anchor;
+                    sj.target = cursor;
+                    sj.hertz = 6.0f;
+                    sj.maxForce = 120.0f * m2Body_GetMass(body);
+                    grip = m2CreateMouseJoint(world, &sj);
+                }
+            }
+        }
+        if (grip.index1 != 0 && IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+        {
+            m2MouseJoint_SetTarget(grip, cursor);
+        }
+        if (grip.index1 != 0 && IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
+        {
+            if (m2Joint_IsValid(grip))
+            {
+                m2BodyId anchor = m2Joint_GetBodyA(grip);
+                m2DestroyJoint(grip);
+                m2DestroyBody(anchor);
+            }
+            grip = m2_nullJointId;
+        }
+
+        if (IsKeyPressed(KEY_E) && world.index1 != 0)
+        {
+            m2ExplosionDef boom = m2DefaultExplosionDef();
+            boom.position = cursor;
+            boom.radius = 2.0f;
+            boom.falloff = 1.5f;
+            boom.impulse = 8.0f;
+            m2World_Explode(world, &boom);
+        }
+        if (IsKeyPressed(KEY_B) && world.index1 != 0)
+        {
+            tbAddBox(world, cursor.x, cursor.y, 0.4f, 1.0f);
+        }
+
+        // Drive: wheel motors on the car scene, platform offsets on the
+        // demolition scene.
+        if (s_scenes[sceneIndex].hasCar && m2Joint_IsValid(s_driveJointA))
+        {
+            float speed = 0.0f;
+            if (IsKeyDown(KEY_RIGHT))
+            {
+                speed = -22.0f;
+            }
+            if (IsKeyDown(KEY_LEFT))
+            {
+                speed = 22.0f;
+            }
+            m2Joint_SetMotorSpeed(s_driveJointA, speed);
+            m2Joint_SetMotorSpeed(s_driveJointB, speed);
+        }
+        if (!s_scenes[sceneIndex].hasCar && m2Joint_IsValid(s_driveJointA) &&
+            m2Joint_GetType(s_driveJointA) == m2_motorJoint)
+        {
+            float ferry = (float)(2.5 * sin(simTime * 0.7));
+            m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ferry, 0.0f}, 0.0f);
+        }
+
+        // ---- step ----
+        bool single = IsKeyPressed(KEY_S);
+        if ((!paused || single) && world.index1 != 0)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+            simTime += 1.0 / 60.0;
+        }
+
+        // ---- render ----
+        BeginDrawing();
+        ClearBackground((Color){24, 26, 32, 255});
+        if (world.index1 != 0)
+        {
+            m2World_Draw(world, &draw);
+        }
+        m2Counters counters = m2World_GetCounters(world);
+        m2Profile profile = m2World_GetProfile(world);
+        DrawText(
+            TextFormat("[%d/%d] %s", sceneIndex + 1, TB_SCENE_COUNT, s_scenes[sceneIndex].name), 12,
+            10, 20, RAYWHITE);
+        DrawText(TextFormat("bodies %d (awake %d)  shapes %d  joints %d  step %.2f ms%s",
+                            counters.bodies, counters.awakeBodies, counters.shapes, counters.joints,
+                            profile.stepMs, paused ? "  [paused]" : ""),
+                 12, 36, 16, GRAY);
+        DrawText("drag: grab   rmb: pan   wheel: zoom   tab: scene   r: reset   space: pause   "
+                 "s: step   e: boom   b: box",
+                 12, s_screenHeight - 26, 14, GRAY);
+        EndDrawing();
+    }
+
+    if (world.index1 != 0)
+    {
+        m2DestroyWorld(world);
+    }
+    CloseWindow();
+    return 0;
+}

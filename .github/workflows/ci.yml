@@ -133,6 +133,20 @@ jobs:
           name: hash-sanitize-scalar
           path: hash-sanitize-scalar.txt
 
+  testbed:
+    name: testbed build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMAUL2D_TESTBED=ON
+      - name: Build
+        run: cmake --build build -j 4
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

@@ -124,6 +124,11 @@ if(MAUL2D_SAMPLES)
 endif()
 
 option(MAUL2D_BENCHMARKS "Build the dual-backend harness (fetches Box2D)" OFF)
+option(MAUL2D_TESTBED "Build the interactive testbed (fetches raylib)" OFF)
+if(MAUL2D_TESTBED)
+    add_subdirectory(testbed)
+endif()
+
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)
 endif()
