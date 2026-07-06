@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: MIT
+// Windows: SRWLocks and condition variables require Vista-or-later
+// to be declared BEFORE any system header. MSVC assumes it; MinGW
+// must be told (both knobs, some header chains check either).
+#ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#ifndef WINVER
+#define WINVER 0x0601
+#endif
+#endif
 // Copyright (c) 2026 Sirac Ozmen
 
 // For clock_gettime/CLOCK_MONOTONIC under strict C17.
