@@ -823,7 +823,7 @@ int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* pol
     // The whole fill is ONE journal op (inner emits suppressed, the
     // chain-create precedent): replay must rebuild the springs and
     // triads too, and those are captured here, not in the emits.
-    int32_t journalWas = world->journalActive;
+    uint8_t journalWas = world->journalActive;
     world->journalActive = 0;
 
     int32_t* emitted = (int32_t*)world->particleProxies; // borrowed scratch
