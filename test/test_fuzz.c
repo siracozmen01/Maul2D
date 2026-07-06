@@ -208,10 +208,20 @@ static void DoRandomOp(m2WorldId world)
         m2Vec2 anchorA = {aax, aay};
         m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
-        uint32_t type = Pick(5);
+        bool collide = Pick(4) == 0;
+        uint32_t type = Pick(6);
+        if (type == 5)
+        {
+            m2FilterJointDef jd = m2DefaultFilterJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            m2CreateFilterJoint(world, &jd);
+            return;
+        }
         if (type == 0)
         {
             m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+            jd.collideConnected = collide;
             jd.bodyIdA = a;
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;
@@ -223,6 +233,7 @@ static void DoRandomOp(m2WorldId world)
         else if (type == 1)
         {
             m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+            jd.collideConnected = collide;
             jd.bodyIdA = a;
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;
@@ -238,6 +249,7 @@ static void DoRandomOp(m2WorldId world)
         else if (type == 2)
         {
             m2PrismaticJointDef jd = m2DefaultPrismaticJointDef();
+            jd.collideConnected = collide;
             jd.bodyIdA = a;
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;
@@ -251,6 +263,7 @@ static void DoRandomOp(m2WorldId world)
         else if (type == 3)
         {
             m2WeldJointDef jd = m2DefaultWeldJointDef();
+            jd.collideConnected = collide;
             jd.bodyIdA = a;
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;
@@ -264,6 +277,7 @@ static void DoRandomOp(m2WorldId world)
         else
         {
             m2WheelJointDef jd = m2DefaultWheelJointDef();
+            jd.collideConnected = collide;
             jd.bodyIdA = a;
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;

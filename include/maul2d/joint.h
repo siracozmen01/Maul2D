@@ -18,6 +18,7 @@ extern "C"
         m2_prismaticJoint = 2,
         m2_weldJoint = 3,
         m2_wheelJoint = 4,
+        m2_filterJoint = 5,
     } m2JointType;
 
     typedef struct m2JointId
@@ -38,6 +39,7 @@ extern "C"
         float length; // meters; <= 0 derives from spawn poses
         float hertz;  // 0 = stiff default
         float dampingRatio;
+        bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2DistanceJointDef;
 
@@ -58,6 +60,7 @@ extern "C"
         bool enableLimit;
         float lowerAngle; // radians relative to the creation angle
         float upperAngle;
+        bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2RevoluteJointDef;
 
@@ -80,6 +83,7 @@ extern "C"
         bool enableLimit;
         float lowerTranslation; // meters from the creation separation
         float upperTranslation;
+        bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2PrismaticJointDef;
 
@@ -98,6 +102,7 @@ extern "C"
         float linearDampingRatio;
         float angularHertz; // 0 = rigid
         float angularDampingRatio;
+        bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2WeldJointDef;
 
@@ -120,14 +125,25 @@ extern "C"
         bool enableLimit;
         float lowerTranslation; // meters from the creation separation
         float upperTranslation;
+        bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2WheelJointDef;
+
+    /// No rows at all: its only effect is collideConnected=false,
+    /// switching collision OFF between two bodies for its lifetime.
+    typedef struct m2FilterJointDef
+    {
+        m2BodyId bodyIdA;
+        m2BodyId bodyIdB;
+        int32_t internalValue;
+    } m2FilterJointDef;
 
     m2DistanceJointDef m2DefaultDistanceJointDef(void);
     m2RevoluteJointDef m2DefaultRevoluteJointDef(void);
     m2PrismaticJointDef m2DefaultPrismaticJointDef(void);
     m2WeldJointDef m2DefaultWeldJointDef(void);
     m2WheelJointDef m2DefaultWheelJointDef(void);
+    m2FilterJointDef m2DefaultFilterJointDef(void);
 
     /// Joints join their bodies' sleep island: connected bodies sleep and
     /// wake together. Destroying either body destroys the joint.
@@ -137,6 +153,7 @@ extern "C"
     m2JointId m2CreatePrismaticJoint(m2WorldId worldId, const m2PrismaticJointDef* def);
     m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def);
     m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def);
+    m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def);
     void m2DestroyJoint(m2JointId jointId);
 
     /// Runtime joint tuning. Motor speed is rad/s on revolute and
@@ -187,6 +204,7 @@ extern "C"
     void m2Joint_GetBreakLimits(m2JointId jointId, float* maxForce, float* maxTorque);
     m2BodyId m2Joint_GetBodyA(m2JointId jointId);
     m2BodyId m2Joint_GetBodyB(m2JointId jointId);
+    bool m2Joint_GetCollideConnected(m2JointId jointId);
 
     /// Editor and integration walk: ascending slot order, truthful
     /// total (same contract as m2World_GetBodies). Thread class:

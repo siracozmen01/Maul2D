@@ -1103,6 +1103,10 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
         {
             continue;
         }
+        if (world->jointType[j] == 5)
+        {
+            continue; // filter joints have no rows at all
+        }
         int32_t bodyA = world->jointBodyA[j];
         int32_t bodyB = world->jointBodyB[j];
         if ((world->types[bodyA] != (uint8_t)m2_dynamicBody || world->asleep[bodyA] != 0) &&
@@ -1748,6 +1752,8 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
     case 3: // weld: point block linear, angle row in the motor slot
         *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
         *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+        break;
+    case 5: // filter: no rows, no loads, by definition
         break;
     default: // wheel: (perp, spring) linear, motor as torque
     {

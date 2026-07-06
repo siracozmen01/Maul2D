@@ -25,8 +25,9 @@
 #define M2_WJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2WeldJointDef) << 8) ^ 7)
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
+#define M2_FJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2FilterJointDef) << 8) ^ 10)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 20u
+#define M2_SNAPSHOT_VERSION 21u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -128,6 +129,50 @@ static void PushMoved(m2World* world, int32_t shapeIndex)
     world->inMoved[shapeIndex] = 1;
     world->moved[world->movedCount] = shapeIndex;
     world->movedCount += 1;
+}
+
+// Reference default: jointed bodies do not collide. A linear scan is
+// fine at Maul's joint counts; worlds without joints skip it via the
+// maxJointIndex fast path at the call site.
+static bool JointsForbidPair(const m2World* world, int32_t bodyA, int32_t bodyB)
+{
+    for (int32_t j = 0; j < world->maxJointIndex; ++j)
+    {
+        if (world->jointAlive[j] == 0 || world->jointCollide[j] != 0)
+        {
+            continue;
+        }
+        if ((world->jointBodyA[j] == bodyA && world->jointBodyB[j] == bodyB) ||
+            (world->jointBodyA[j] == bodyB && world->jointBodyB[j] == bodyA))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The filter takes effect through the normal rebuild road: wake both
+// ends and push their shapes, and the pair diff emits the M19 ends.
+static void RefilterJointedBodies(m2World* world, int32_t bodyA, int32_t bodyB)
+{
+    if (world->types[bodyA] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyA] = 0;
+        world->sleepTimes[bodyA] = 0.0f;
+    }
+    if (world->types[bodyB] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyB] = 0;
+        world->sleepTimes[bodyB] = 0.0f;
+    }
+    for (int32_t s = world->bodyShapeHead[bodyA]; s != -1; s = world->shapeNext[s])
+    {
+        PushMoved(world, s);
+    }
+    for (int32_t s = world->bodyShapeHead[bodyB]; s != -1; s = world->shapeNext[s])
+    {
+        PushMoved(world, s);
+    }
 }
 
 static uint64_t PairKey(int32_t a, int32_t b)
@@ -318,6 +363,11 @@ static void UpdatePairs(m2World* world)
                          (world->shapeCategory[other] & world->shapeMask[shapeIndex]) == 0)
                 {
                     continue; // filtered out (category/mask, both ways)
+                }
+                if (world->maxJointIndex > 0 &&
+                    JointsForbidPair(world, world->shapeBody[shapeIndex], world->shapeBody[other]))
+                {
+                    continue; // connected without collideConnected
                 }
                 if (collected < world->pairCapacity)
                 {
@@ -953,6 +1003,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointLowerImpulse, jointCap, float);
     M2_ALLOC(jointUpperImpulse, jointCap, float);
     M2_ALLOC(jointBreakForce, jointCap, float);
+    M2_ALLOC(jointCollide, jointCap, uint8_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
@@ -1122,6 +1173,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointLowerImpulse);
     m2Free(world->jointUpperImpulse);
     m2Free(world->jointBreakForce);
+    m2Free(world->jointCollide);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
     m2Free(world->jointFreeQueue);
@@ -1489,6 +1541,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointLowerImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointUpperImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointCollide, (size_t)world->jointCapacity * sizeof(uint8_t));
     M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
@@ -3276,6 +3329,7 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointUpperImpulse[index] = 0.0f;
     world->jointBreakForce[index] = 0.0f;
     world->jointBreakTorque[index] = 0.0f;
+    world->jointCollide[index] = 1;
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
     world->asleep[bodyA] = 0;
@@ -3338,6 +3392,11 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 0, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, length, def->hertz, def->dampingRatio);
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
     if (world->journalActive != 0)
     {
         struct
@@ -3375,6 +3434,11 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 1, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
     world->jointFlags[index] = (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u);
     world->jointMotorSpeed[index] = def->motorSpeed;
     world->jointMaxMotor[index] = def->maxMotorTorque;
@@ -3435,6 +3499,11 @@ m2JointId m2CreatePrismaticJoint(m2WorldId worldId, const m2PrismaticJointDef* d
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 2, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
     world->jointFlags[index] = (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u);
     world->jointMotorSpeed[index] = def->motorSpeed;
     world->jointMaxMotor[index] = def->maxMotorForce;
@@ -3490,6 +3559,11 @@ m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def)
     m2JointId jointId =
         FinishJoint(world, worldId, index, 3, bodyA, bodyB, def->localAnchorA, def->localAnchorB,
                     0.0f, def->linearHertz, def->linearDampingRatio);
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
     world->jointHertz2[index] = def->angularHertz;
     world->jointDamping2[index] = def->angularDampingRatio;
     world->jointRefAngle[index] =
@@ -3550,6 +3624,11 @@ m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def)
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 4, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
     world->jointFlags[index] =
         (def->enableMotor ? 1u : 0u) | (def->enableLimit ? 2u : 0u) | (def->enableSpring ? 4u : 0u);
     world->jointMotorSpeed[index] = def->motorSpeed;
@@ -3732,6 +3811,10 @@ void m2DestroyJointInternal(m2World* world, int32_t index)
         world->sleepTimes[bodyB] = 0.0f;
     }
     world->jointAlive[index] = 0;
+    if (world->jointCollide[index] == 0)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB); // pairs may return
+    }
     if (world->jointGenerations[index] == UINT16_MAX)
     {
         world->jointRetiredCount += 1;
@@ -3741,6 +3824,67 @@ void m2DestroyJointInternal(m2World* world, int32_t index)
     world->jointFreeQueue[world->jointFreeTail] = index;
     world->jointFreeTail = (world->jointFreeTail + 1) % world->jointCapacity;
     world->jointFreeCount += 1;
+}
+
+m2FilterJointDef m2DefaultFilterJointDef(void)
+{
+    m2FilterJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.internalValue = M2_FJOINT_COOKIE;
+    return def;
+}
+
+m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_FJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2JointId jointId =
+        FinishJoint(world, worldId, index, 5, bodyA, bodyB, zero, zero, 0.0f, 0.0f, 0.0f);
+    world->jointCollide[index] = 0; // its entire purpose
+    RefilterJointedBodies(world, bodyA, bodyB);
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2FilterJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateFilterJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+bool m2Joint_GetCollideConnected(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = jointId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->jointCapacity ||
+        world->jointAlive[index] == 0 || world->jointGenerations[index] != jointId.generation)
+    {
+        M2_ASSERT(false);
+        return false;
+    }
+    return world->jointCollide[index] != 0;
 }
 
 float m2Joint_GetReactionForce(m2JointId jointId)

@@ -862,7 +862,14 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
         m2BodyId b = MirrorOf(bodies, mirrored, bodyCount, m2Joint_GetBodyB(id));
         m2JointId made = {0, 0, 0};
         m2JointType type = m2Joint_GetType(id);
-        if (type == m2_distanceJoint)
+        if (type == m2_filterJoint)
+        {
+            m2FilterJointDef jd = m2DefaultFilterJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            made = m2CreateFilterJoint(mirror, &jd);
+        }
+        else if (type == m2_distanceJoint)
         {
             m2DistanceJointDef jd = m2DefaultDistanceJointDef();
             jd.bodyIdA = a;
@@ -870,6 +877,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
             jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
             jd.length = m2Joint_GetLength(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
             jd.hertz = m2Joint_GetHertz(id);
             jd.dampingRatio = m2Joint_GetDampingRatio(id);
             made = m2CreateDistanceJoint(mirror, &jd);
@@ -888,6 +896,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.maxMotorTorque = m2Joint_GetMaxMotor(id);
             jd.enableLimit = m2Joint_IsLimitEnabled(id);
             m2Joint_GetLimits(id, &jd.lowerAngle, &jd.upperAngle);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
             made = m2CreateRevoluteJoint(mirror, &jd);
         }
         else if (type == m2_prismaticJoint)
@@ -905,6 +914,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.maxMotorForce = m2Joint_GetMaxMotor(id);
             jd.enableLimit = m2Joint_IsLimitEnabled(id);
             m2Joint_GetLimits(id, &jd.lowerTranslation, &jd.upperTranslation);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
             made = m2CreatePrismaticJoint(mirror, &jd);
         }
         else if (type == m2_weldJoint)
@@ -918,6 +928,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.linearDampingRatio = m2Joint_GetDampingRatio(id);
             jd.angularHertz = m2Joint_GetAngularHertz(id);
             jd.angularDampingRatio = m2Joint_GetAngularDampingRatio(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
             made = m2CreateWeldJoint(mirror, &jd);
         }
         else
@@ -936,6 +947,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.maxMotorTorque = m2Joint_GetMaxMotor(id);
             jd.enableLimit = m2Joint_IsLimitEnabled(id);
             m2Joint_GetLimits(id, &jd.lowerTranslation, &jd.upperTranslation);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
             made = m2CreateWheelJoint(mirror, &jd);
         }
         float breakForce = 0.0f;
@@ -1062,6 +1074,10 @@ static void TestMirrorRebuild(void)
     wj.angularHertz = 6.0f;
     wj.angularDampingRatio = 0.8f;
     m2CreateWeldJoint(world, &wj);
+    m2FilterJointDef pact = m2DefaultFilterJointDef();
+    pact.bodyIdA = boxA;
+    pact.bodyIdB = boxC;
+    m2CreateFilterJoint(world, &pact);
     m2WheelJointDef whj = m2DefaultWheelJointDef();
     whj.bodyIdA = ground;
     whj.bodyIdB = boxD;
@@ -1075,6 +1091,7 @@ static void TestMirrorRebuild(void)
     whj.enableLimit = true;
     whj.lowerTranslation = -0.3f;
     whj.upperTranslation = 0.3f;
+    whj.collideConnected = true;
     m2CreateWheelJoint(world, &whj);
 
     m2WorldId mirror = MirrorWorld(world, &def);

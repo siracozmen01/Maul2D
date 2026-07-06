@@ -121,6 +121,15 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Jointed bodies and collision
+
+Jointed bodies do not collide with each other by default (the
+reference convention ragdolls expect); set `collideConnected` on any
+joint def to restore contact. The filter joint is that switch with
+nothing else attached: `m2CreateFilterJoint` turns collision off
+between two bodies for the joint's lifetime, and destroying it turns
+collision back on, with end and begin events flowing as usual.
+
 ## Body dynamics
 
 Forces accumulate across calls and live for exactly one step

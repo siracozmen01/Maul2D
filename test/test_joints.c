@@ -99,6 +99,9 @@ static void TestRevoluteChain(void)
         jd.bodyIdB = links[i];
         jd.localAnchorA = i == 0 ? (m2Vec2){0.5f, 0.0f} : (m2Vec2){0.5f, 0.0f};
         jd.localAnchorB = (m2Vec2){-0.5f, 0.0f};
+        // This scene predates collideConnected and its gap band assumes
+        // adjacent links bounce off each other; opt into that explicitly.
+        jd.collideConnected = true;
         CHECK(m2Joint_IsValid(m2CreateRevoluteJoint(world, &jd)), "link joint created");
         previous = links[i];
     }
@@ -826,6 +829,107 @@ static void TestReactionGetters(void)
     m2DestroyWorld(world);
 }
 
+// collideConnected (parity sprint 3a): the reference default is that
+// jointed bodies pass through each other; the flag restores contact,
+// and the filter joint is nothing but this switch with a lifetime.
+static void TestCollideConnectedAndFilterJoint(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(12.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // A crate resting on a pedestal; a filter joint makes the pedestal
+    // intangible to it and the crate falls through to the floor.
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.position = (m2Pos2){0.0, 0.5};
+    m2BodyId pedestal = m2CreateBody(world, &pd);
+    m2Polygon top = m2MakeBox(1.0f, 0.5f);
+    m2CreatePolygonShape(pedestal, &fs, &top);
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){0.0, 1.45};
+    m2BodyId crate = m2CreateBody(world, &cd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(crate, &sd, &unit);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(crate).y > 1.2, "the crate rests on the pedestal");
+
+    m2FilterJointDef fj = m2DefaultFilterJointDef();
+    fj.bodyIdA = pedestal;
+    fj.bodyIdB = crate;
+    m2JointId ghostPact = m2CreateFilterJoint(world, &fj);
+    CHECK(m2Joint_GetType(ghostPact) == m2_filterJoint, "the pact reads as a filter joint");
+    CHECK(!m2Joint_GetCollideConnected(ghostPact), "and never collides");
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(crate).y < 0.9, "the crate falls through the pedestal");
+    CHECK(m2Body_GetPosition(crate).y > 0.2, "and lands on the floor");
+    CHECK(m2Joint_GetReactionForce(ghostPact) == 0.0f, "a filter joint carries nothing");
+
+    // Destroy the pact: collision returns and the crate pops back out
+    // on top the next time it is dropped onto the pedestal.
+    m2DestroyJoint(ghostPact);
+    m2Body_SetTransform(crate, (m2Pos2){0.0, 2.0}, (m2Rot){1.0f, 0.0f});
+    m2Body_SetLinearVelocity(crate, (m2Vec2){0.0f, 0.0f});
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(crate).y > 1.2, "with the pact gone it rests on top again");
+
+    // The flag on a real joint: two touching crates tied by a slack
+    // rope. Default false lets them interpenetrate; true keeps them
+    // apart. Same scene, one flag.
+    for (int32_t pass = 0; pass < 2; ++pass)
+    {
+        m2BodyDef ad = m2DefaultBodyDef();
+        ad.type = m2_dynamicBody;
+        ad.position = (m2Pos2){6.0 + 4.0 * (double)pass, 0.45};
+        m2BodyId left = m2CreateBody(world, &ad);
+        m2CreatePolygonShape(left, &sd, &unit);
+        m2BodyDef bd2 = ad;
+        bd2.position = (m2Pos2){6.0 + 4.0 * (double)pass, 1.25};
+        m2BodyId right = m2CreateBody(world, &bd2);
+        m2CreatePolygonShape(right, &sd, &unit);
+        m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+        dj.bodyIdA = left;
+        dj.bodyIdB = right;
+        dj.length = 0.1f; // a short soft rod pulling them together
+        dj.hertz = 5.0f;
+        dj.dampingRatio = 0.7f;
+        dj.collideConnected = pass == 1;
+        m2CreateDistanceJoint(world, &dj);
+        for (int32_t i = 0; i < 120; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        double gap = m2Body_GetPosition(right).y - m2Body_GetPosition(left).y;
+        if (pass == 0)
+        {
+            CHECK(gap < 0.5, "default false: the top crate sinks into the bottom one");
+        }
+        else
+        {
+            CHECK(gap > 0.7, "true: contact keeps them stacked");
+        }
+    }
+    m2DestroyWorld(world);
+}
+
 static void TestJointBreaking(void)
 {
     // Twin ropes carry the same heavy crate; one has a break limit
@@ -1150,6 +1254,7 @@ int main(void)
     TestJointRuntimeTuning();
     TestSoftWeld();
     TestReactionGetters();
+    TestCollideConnectedAndFilterJoint();
     TestJointBreaking();
     TestBreakRollback();
 
