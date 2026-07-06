@@ -26,8 +26,10 @@
 #define M2_WHJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2WheelJointDef) << 8) ^ 8)
 #define M2_CHAIN_COOKIE     (M2_COOKIE ^ ((int32_t)sizeof(m2ChainDef) << 8) ^ 9)
 #define M2_FJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2FilterJointDef) << 8) ^ 10)
+#define M2_MOJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MotorJointDef) << 8) ^ 11)
+#define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 21u
+#define M2_SNAPSHOT_VERSION 22u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1004,6 +1006,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointUpperImpulse, jointCap, float);
     M2_ALLOC(jointBreakForce, jointCap, float);
     M2_ALLOC(jointCollide, jointCap, uint8_t);
+    M2_ALLOC(jointTargets, jointCap, m2Pos2);
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
@@ -1174,6 +1177,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointUpperImpulse);
     m2Free(world->jointBreakForce);
     m2Free(world->jointCollide);
+    m2Free(world->jointTargets);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
     m2Free(world->jointFreeQueue);
@@ -1542,6 +1546,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointUpperImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointCollide, (size_t)world->jointCapacity * sizeof(uint8_t));
+    M2_BLOCK(world->jointTargets, (size_t)world->jointCapacity * sizeof(m2Pos2));
     M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
@@ -3330,6 +3335,7 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointBreakForce[index] = 0.0f;
     world->jointBreakTorque[index] = 0.0f;
     world->jointCollide[index] = 1;
+    world->jointTargets[index] = (m2Pos2){0.0, 0.0};
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
     world->asleep[bodyA] = 0;
@@ -3872,6 +3878,256 @@ m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def)
         m2JournalRecord(world, m2_opCreateFilterJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
+}
+
+m2MotorJointDef m2DefaultMotorJointDef(void)
+{
+    m2MotorJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.maxForce = 1.0f;
+    def.maxTorque = 1.0f;
+    def.correctionFactor = 0.3f;
+    def.internalValue = M2_MOJOINT_COOKIE;
+    return def;
+}
+
+m2MouseJointDef m2DefaultMouseJointDef(void)
+{
+    m2MouseJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.hertz = 4.0f;
+    def.dampingRatio = 1.0f;
+    def.maxForce = 35.0f;
+    def.internalValue = M2_MSJOINT_COOKIE;
+    return def;
+}
+
+// Registry mapping for the utility joints (documented deviations from
+// the slot names): motor keeps linearOffset in jointLocalAxisA,
+// angularOffset in jointRefAngle, maxForce in jointLength and
+// correctionFactor in jointDamping; mouse keeps maxForce in
+// jointLength and its world target in jointTargets.
+m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_MOJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2JointId jointId =
+        FinishJoint(world, worldId, index, 6, bodyA, bodyB, zero, zero, 0.0f, 0.0f, 0.0f);
+    world->jointLocalAxisA[index] = def->linearOffset;
+    world->jointRefAngle[index] = def->angularOffset;
+    world->jointMaxMotor[index] = def->maxTorque;
+    world->jointLength[index] = def->maxForce;
+    world->jointDamping[index] = def->correctionFactor;
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2MotorJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateMotorJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+m2JointId m2CreateMouseJoint(m2WorldId worldId, const m2MouseJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_MSJOINT_COOKIE)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    // The grab point is where the target sits at creation, in B's
+    // local frame (the single f64 crossing).
+    m2Transform xfB = world->transforms[bodyB];
+    m2Vec2 rel = {(float)(def->target.x - xfB.p.x), (float)(def->target.y - xfB.p.y)};
+    m2Vec2 grab = {xfB.q.c * rel.x + xfB.q.s * rel.y, -xfB.q.s * rel.x + xfB.q.c * rel.y};
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2JointId jointId = FinishJoint(world, worldId, index, 7, bodyA, bodyB, zero, grab, 0.0f,
+                                    def->hertz, def->dampingRatio);
+    world->jointLength[index] = def->maxForce;
+    world->jointTargets[index] = def->target;
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2MouseJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateMouseJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+static int32_t TypedJointSlot(m2World* world, m2JointId jointId, uint8_t type)
+{
+    int32_t index = jointId.index1 - 1;
+    if (index < 0 || index >= world->jointCapacity || world->jointAlive[index] == 0 ||
+        world->jointGenerations[index] != jointId.generation || world->jointType[index] != type)
+    {
+        return -1;
+    }
+    return index;
+}
+
+void m2MotorJoint_SetOffsets(m2JointId jointId, m2Vec2 linearOffset, float angularOffset)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 6) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2JointId joint;
+            m2Vec2 linear;
+            float angular;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.joint = jointId;
+        record.linear = linearOffset;
+        record.angular = angularOffset;
+        m2JournalRecord(world, m2_opMotorOffsets, &record, (int32_t)sizeof(record));
+    }
+    world->jointLocalAxisA[index] = linearOffset;
+    world->jointRefAngle[index] = angularOffset;
+    // Retargeting wakes both ends: the platform starts moving.
+    int32_t bodyA = world->jointBodyA[index];
+    int32_t bodyB = world->jointBodyB[index];
+    if (world->types[bodyA] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyA] = 0;
+        world->sleepTimes[bodyA] = 0.0f;
+    }
+    if (world->types[bodyB] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyB] = 0;
+        world->sleepTimes[bodyB] = 0.0f;
+    }
+}
+
+m2Vec2 m2MotorJoint_GetLinearOffset(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 6) : -1;
+    m2Vec2 zero = {0.0f, 0.0f};
+    return index >= 0 ? world->jointLocalAxisA[index] : zero;
+}
+
+float m2MotorJoint_GetAngularOffset(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 6) : -1;
+    return index >= 0 ? world->jointRefAngle[index] : 0.0f;
+}
+
+float m2MotorJoint_GetMaxForce(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 6) : -1;
+    return index >= 0 ? world->jointLength[index] : 0.0f;
+}
+
+float m2MotorJoint_GetCorrectionFactor(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 6) : -1;
+    return index >= 0 ? world->jointDamping[index] : 0.0f;
+}
+
+void m2MouseJoint_SetTarget(m2JointId jointId, m2Pos2 target)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 7) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2JointId joint;
+            m2Pos2 target;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.joint = jointId;
+        record.target = target;
+        m2JournalRecord(world, m2_opMouseTarget, &record, (int32_t)sizeof(record));
+    }
+    world->jointTargets[index] = target;
+    int32_t bodyB = world->jointBodyB[index];
+    if (world->types[bodyB] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[bodyB] = 0;
+        world->sleepTimes[bodyB] = 0.0f;
+    }
+}
+
+m2Pos2 m2MouseJoint_GetTarget(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 7) : -1;
+    m2Pos2 zero = {0.0, 0.0};
+    return index >= 0 ? world->jointTargets[index] : zero;
+}
+
+float m2MouseJoint_GetMaxForce(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 7) : -1;
+    return index >= 0 ? world->jointLength[index] : 0.0f;
 }
 
 bool m2Joint_GetCollideConnected(m2JointId jointId)

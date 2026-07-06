@@ -115,6 +115,7 @@ typedef struct m2World
     float* jointUpperImpulse;
     float* jointBreakForce; // 0 = unbreakable (snapshot state)
     uint8_t* jointCollide;  // 0 = connected bodies never pair (snapshot state)
+    m2Pos2* jointTargets;   // mouse joints: world target (snapshot state)
     float* jointBreakTorque;
     uint16_t* jointGenerations;
     int32_t* jointFreeQueue;
@@ -252,6 +253,10 @@ enum
     m2_opApplyForceCenter = 28,
     m2_opApplyTorque = 29,
     m2_opCreateFilterJoint = 30,
+    m2_opCreateMotorJoint = 31,
+    m2_opCreateMouseJoint = 32,
+    m2_opMotorOffsets = 33,
+    m2_opMouseTarget = 34,
 };
 
 // Journaled joint parameter channel (op 16).

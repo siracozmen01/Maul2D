@@ -121,6 +121,15 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Utility joints
+
+The motor joint drives one body's transform toward offsets from
+another with force and torque budgets: moving platforms retarget
+with `m2MotorJoint_SetOffsets` every frame and the physics stays
+honest. The mouse joint is a soft spring pulling a grab point toward
+a world target (`m2MouseJoint_SetTarget`): dragging, done
+deterministically and journaled like everything else.
+
 ## Jointed bodies and collision
 
 Jointed bodies do not collide with each other by default (the

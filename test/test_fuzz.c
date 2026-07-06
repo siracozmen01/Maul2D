@@ -209,7 +209,36 @@ static void DoRandomOp(m2WorldId world)
         m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
         bool collide = Pick(4) == 0;
-        uint32_t type = Pick(6);
+        uint32_t type = Pick(8);
+        if (type == 6)
+        {
+            m2MotorJointDef jd = m2DefaultMotorJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.collideConnected = collide;
+            float ox = (float)((int32_t)Pick(7) - 3) * 0.5f;
+            float oy = (float)((int32_t)Pick(7) - 3) * 0.5f;
+            jd.linearOffset = (m2Vec2){ox, oy};
+            jd.angularOffset = (float)((int32_t)Pick(5) - 2) * 0.2f;
+            jd.maxForce = 10.0f + (float)Pick(50);
+            jd.maxTorque = 5.0f + (float)Pick(20);
+            m2CreateMotorJoint(world, &jd);
+            return;
+        }
+        if (type == 7)
+        {
+            m2MouseJointDef jd = m2DefaultMouseJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.collideConnected = collide;
+            m2Pos2 bp = m2Body_GetPosition(b);
+            double tx = (double)((int32_t)Pick(9) - 4) * 0.5;
+            double ty = (double)((int32_t)Pick(9) - 4) * 0.5;
+            jd.target = (m2Pos2){bp.x + tx, bp.y + ty};
+            jd.maxForce = 20.0f + (float)Pick(60);
+            m2CreateMouseJoint(world, &jd);
+            return;
+        }
         if (type == 5)
         {
             m2FilterJointDef jd = m2DefaultFilterJointDef();
@@ -477,7 +506,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(4);
+        uint32_t which = Pick(6);
         if (which == 0)
         {
             m2Joint_SetMotorSpeed(joint, (float)((int32_t)Pick(9) - 4));
@@ -491,11 +520,31 @@ static void DoRandomOp(m2WorldId world)
             float lower = -0.2f - (float)Pick(8) * 0.1f;
             m2Joint_SetLimits(joint, lower, lower + 0.4f + (float)Pick(8) * 0.1f);
         }
-        else
+        else if (which == 3)
         {
             float bf = 20.0f + (float)Pick(80);
             float bt = 10.0f + (float)Pick(40);
             m2Joint_SetBreakLimits(joint, bf, bt);
+        }
+        else if (which == 4)
+        {
+            float ox = (float)((int32_t)Pick(7) - 3) * 0.5f;
+            float oy = (float)((int32_t)Pick(7) - 3) * 0.5f;
+            float oa = (float)((int32_t)Pick(5) - 2) * 0.2f;
+            if (m2Joint_GetType(joint) == m2_motorJoint)
+            {
+                m2MotorJoint_SetOffsets(joint, (m2Vec2){ox, oy}, oa);
+            }
+        }
+        else
+        {
+            double tx = (double)((int32_t)Pick(9) - 4) * 0.5;
+            double ty = (double)((int32_t)Pick(9) - 4) * 0.5;
+            if (m2Joint_GetType(joint) == m2_mouseJoint)
+            {
+                m2Pos2 base = m2Body_GetPosition(m2Joint_GetBodyB(joint));
+                m2MouseJoint_SetTarget(joint, (m2Pos2){base.x + tx, base.y + ty});
+            }
         }
     }
 }

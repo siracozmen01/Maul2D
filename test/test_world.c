@@ -869,6 +869,31 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.bodyIdB = b;
             made = m2CreateFilterJoint(mirror, &jd);
         }
+        else if (type == m2_motorJoint)
+        {
+            m2MotorJointDef jd = m2DefaultMotorJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.linearOffset = m2MotorJoint_GetLinearOffset(id);
+            jd.angularOffset = m2MotorJoint_GetAngularOffset(id);
+            jd.maxForce = m2MotorJoint_GetMaxForce(id);
+            jd.maxTorque = m2Joint_GetMaxMotor(id);
+            jd.correctionFactor = m2MotorJoint_GetCorrectionFactor(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
+            made = m2CreateMotorJoint(mirror, &jd);
+        }
+        else if (type == m2_mouseJoint)
+        {
+            m2MouseJointDef jd = m2DefaultMouseJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.target = m2MouseJoint_GetTarget(id);
+            jd.hertz = m2Joint_GetHertz(id);
+            jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            jd.maxForce = m2MouseJoint_GetMaxForce(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
+            made = m2CreateMouseJoint(mirror, &jd);
+        }
         else if (type == m2_distanceJoint)
         {
             m2DistanceJointDef jd = m2DefaultDistanceJointDef();
@@ -1074,6 +1099,24 @@ static void TestMirrorRebuild(void)
     wj.angularHertz = 6.0f;
     wj.angularDampingRatio = 0.8f;
     m2CreateWeldJoint(world, &wj);
+    m2MotorJointDef chase = m2DefaultMotorJointDef();
+    chase.bodyIdA = hook;
+    chase.bodyIdB = boxC;
+    chase.linearOffset = (m2Vec2){0.5f, -0.25f};
+    chase.angularOffset = 0.2f;
+    chase.maxForce = 77.0f;
+    chase.maxTorque = 33.0f;
+    chase.correctionFactor = 0.4f;
+    m2CreateMotorJoint(world, &chase);
+    m2MouseJointDef grip = m2DefaultMouseJointDef();
+    grip.bodyIdA = ground;
+    grip.bodyIdB = boxD;
+    grip.target = (m2Pos2){-6.0, 2.5};
+    grip.hertz = 5.0f;
+    grip.dampingRatio = 0.8f;
+    grip.maxForce = 44.0f;
+    grip.collideConnected = true;
+    m2CreateMouseJoint(world, &grip);
     m2FilterJointDef pact = m2DefaultFilterJointDef();
     pact.bodyIdA = boxA;
     pact.bodyIdB = boxC;

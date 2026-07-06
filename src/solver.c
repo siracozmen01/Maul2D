@@ -1107,6 +1107,12 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
         {
             continue; // filter joints have no rows at all
         }
+        if (world->jointType[j] == 7 &&
+            (world->types[world->jointBodyB[j]] != (uint8_t)m2_dynamicBody ||
+             world->asleep[world->jointBodyB[j]] != 0))
+        {
+            continue; // a mouse joint only ever moves body B
+        }
         int32_t bodyA = world->jointBodyA[j];
         int32_t bodyB = world->jointBodyB[j];
         if ((world->types[bodyA] != (uint8_t)m2_dynamicBody || world->asleep[bodyA] != 0) &&
@@ -1163,12 +1169,28 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = mA + mB + iA * crA * crA + iB * crB * crB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
-        else if (c->type == 1 || c->type == 3)
+        else if (c->type == 1 || c->type == 3 || c->type == 6)
         {
             c->baseCVec = (m2Vec2){dx, dy};
             c->k11 = mA + mB + iA * c->rA.y * c->rA.y + iB * c->rB.y * c->rB.y;
             c->k12 = -iA * c->rA.x * c->rA.y - iB * c->rB.x * c->rB.y;
             c->k22 = mA + mB + iA * c->rA.x * c->rA.x + iB * c->rB.x * c->rB.x;
+            if (c->type == 6)
+            {
+                // Motor: separations are measured against the offsets.
+                // linearOffset lives in A's frame (the documented
+                // contract; the reference's code disagrees with its own
+                // comment and we side with the comment).
+                m2Vec2 offset = Rotate(qA, world->jointLocalAxisA[j]);
+                c->baseCVec = (m2Vec2){dx - offset.x, dy - offset.y};
+                c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
+                float ki = iA + iB;
+                c->axialMass = ki > 0.0f ? 1.0f / ki : 0.0f;
+                // correctionFactor rides the motorSpeed slot into the
+                // solve; the linear budget rides lower.
+                c->motorSpeed = world->jointDamping[j];
+                c->lower = h * world->jointLength[j];
+            }
             float k = iA + iB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
             c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
@@ -1177,6 +1199,21 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             c->softness2 = c->angularSpring
                                ? MakeSoft(world->jointHertz2[j], world->jointDamping2[j], h)
                                : MakeSoft(60.0f, 2.0f, h);
+        }
+        else if (c->type == 7)
+        {
+            // Mouse: only body B has rows. Grab arm rB comes from the
+            // generic anchors; the target separation base is the f64
+            // crossing between B's center and the stored target.
+            c->k11 = mB + iB * c->rB.y * c->rB.y;
+            c->k12 = -iB * c->rB.x * c->rB.y;
+            c->k22 = mB + iB * c->rB.x * c->rB.x;
+            m2Vec2 comB2 = Rotate(qB, lcB);
+            float cbx = (float)(world->transforms[bodyB].p.x - world->jointTargets[j].x);
+            float cby = (float)(world->transforms[bodyB].p.y - world->jointTargets[j].y);
+            c->baseCVec = (m2Vec2){cbx + comB2.x, cby + comB2.y};
+            c->softness2 = MakeSoft(0.5f, 0.1f, h); // reference spin damper
+            c->lower = h * world->jointLength[j];   // force budget
         }
         else if (c->type == 2)
         {
@@ -1267,13 +1304,24 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
             ApplyJointImpulse(world, c,
                               (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y});
         }
-        else if (c->type == 1 || c->type == 3)
+        else if (c->type == 1 || c->type == 3 || c->type == 6)
         {
-            // Weld's angle-lock accumulator rides the motor slot.
+            // Weld's angle-lock and the motor joint's torque both ride
+            // the motor slot; limits are zero where unused.
             ApplyJointImpulse(world, c, c->impulse);
             float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
             world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * axial;
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * axial;
+        }
+        else if (c->type == 7)
+        {
+            // Mouse: body B only.
+            int32_t bodyB = c->bodyB;
+            float mB = world->invMass[bodyB];
+            float iB = world->invInertia[bodyB];
+            world->linearVelocities[bodyB].x += mB * c->impulse.x;
+            world->linearVelocities[bodyB].y += mB * c->impulse.y;
+            world->angularVelocities[bodyB] += iB * (Cross(c->rB, c->impulse) + c->motorImpulse);
         }
         else if (c->type == 2)
         {
@@ -1468,6 +1516,117 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             c->impulse.x += impulse.x;
             c->impulse.y += impulse.y;
             ApplyJointImpulse(world, c, impulse);
+        }
+        else if (c->type == 6)
+        {
+            // Motor joint (reference solve, always biased): angular row
+            // first, then the clamped linear block. correctionFactor
+            // rides the motorSpeed slot, the force budget rides lower.
+            float mA = world->invMass[c->bodyA];
+            float iA = world->invInertia[c->bodyA];
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            {
+                float angC =
+                    m2UnwindAngle(c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                                  world->deltaRotations[c->bodyB]));
+                float angBias = invH * c->motorSpeed * angC;
+                float impulse = -c->axialMass * ((wB - wA) + angBias);
+                float old = c->motorImpulse;
+                c->motorImpulse = m2ClampF(old + impulse, -c->maxMotorImpulse, c->maxMotorImpulse);
+                impulse = c->motorImpulse - old;
+                wA -= iA * impulse;
+                wB += iB * impulse;
+            }
+            {
+                m2Vec2 sep = {c->baseCVec.x + ds.x, c->baseCVec.y + ds.y};
+                m2Vec2 bias = {invH * c->motorSpeed * sep.x, invH * c->motorSpeed * sep.y};
+                m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
+                m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
+                m2Vec2 cdot = {vrB.x - vrA.x + bias.x, vrB.y - vrA.y + bias.y};
+                // Solve K impulse = -cdot with the 2x2 from prepare.
+                float det = c->k11 * c->k22 - c->k12 * c->k12;
+                float invDet = det != 0.0f ? 1.0f / det : 0.0f;
+                m2Vec2 impulse = {-invDet * (c->k22 * cdot.x - c->k12 * cdot.y),
+                                  -invDet * (c->k11 * cdot.y - c->k12 * cdot.x)};
+                m2Vec2 old = c->impulse;
+                c->impulse.x += impulse.x;
+                c->impulse.y += impulse.y;
+                float budget = c->lower;
+                float mag2 = c->impulse.x * c->impulse.x + c->impulse.y * c->impulse.y;
+                if (mag2 > budget * budget)
+                {
+                    float mag = sqrtf(mag2);
+                    float scale = mag > 0.0f ? budget / mag : 0.0f;
+                    c->impulse.x *= scale;
+                    c->impulse.y *= scale;
+                }
+                impulse.x = c->impulse.x - old.x;
+                impulse.y = c->impulse.y - old.y;
+                vA.x -= mA * impulse.x;
+                vA.y -= mA * impulse.y;
+                wA -= iA * Cross(c->rA, impulse);
+                vB.x += mB * impulse.x;
+                vB.y += mB * impulse.y;
+                wB += iB * Cross(c->rB, impulse);
+            }
+            if (world->types[c->bodyA] == (uint8_t)m2_dynamicBody)
+            {
+                world->linearVelocities[c->bodyA] = vA;
+                world->angularVelocities[c->bodyA] = wA;
+            }
+            if (world->types[c->bodyB] == (uint8_t)m2_dynamicBody)
+            {
+                world->linearVelocities[c->bodyB] = vB;
+                world->angularVelocities[c->bodyB] = wB;
+            }
+        }
+        else if (c->type == 7)
+        {
+            // Mouse joint (reference solve, always biased): a soft spin
+            // damper, then the soft pull toward the target, clamped to
+            // the force budget in lower.
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            {
+                float impulse = iB > 0.0f ? -wB / iB : 0.0f;
+                impulse =
+                    c->softness2.massScale * impulse - c->softness2.impulseScale * c->motorImpulse;
+                c->motorImpulse += impulse;
+                wB += iB * impulse;
+            }
+            {
+                m2Vec2 sep = {c->baseCVec.x + world->deltaPositions[c->bodyB].x + drB.x,
+                              c->baseCVec.y + world->deltaPositions[c->bodyB].y + drB.y};
+                m2Vec2 bias = {c->softness.biasRate * sep.x, c->softness.biasRate * sep.y};
+                m2Vec2 cdot = {vB.x - wB * drB.y + bias.x, vB.y + wB * drB.x + bias.y};
+                float det = c->k11 * c->k22 - c->k12 * c->k12;
+                float invDet = det != 0.0f ? 1.0f / det : 0.0f;
+                m2Vec2 raw = {invDet * (c->k22 * cdot.x - c->k12 * cdot.y),
+                              invDet * (c->k11 * cdot.y - c->k12 * cdot.x)};
+                m2Vec2 impulse = {
+                    -c->softness.massScale * raw.x - c->softness.impulseScale * c->impulse.x,
+                    -c->softness.massScale * raw.y - c->softness.impulseScale * c->impulse.y};
+                m2Vec2 old = c->impulse;
+                c->impulse.x += impulse.x;
+                c->impulse.y += impulse.y;
+                float budget = c->lower;
+                float mag2 = c->impulse.x * c->impulse.x + c->impulse.y * c->impulse.y;
+                if (mag2 > budget * budget)
+                {
+                    float mag = sqrtf(mag2);
+                    float scale = mag > 0.0f ? budget / mag : 0.0f;
+                    c->impulse.x *= scale;
+                    c->impulse.y *= scale;
+                }
+                impulse.x = c->impulse.x - old.x;
+                impulse.y = c->impulse.y - old.y;
+                vB.x += mB * impulse.x;
+                vB.y += mB * impulse.y;
+                wB += iB * Cross(drB, impulse);
+            }
+            world->linearVelocities[c->bodyB] = vB;
+            world->angularVelocities[c->bodyB] = wB;
         }
         else if (c->type == 2)
         {
@@ -1754,6 +1913,11 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
         *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
         break;
     case 5: // filter: no rows, no loads, by definition
+        break;
+    case 6: // motor: linear block + pure torque in the motor slot
+    case 7: // mouse: same accumulator shape, body B only
+        *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
+        *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
         break;
     default: // wheel: (perp, spring) linear, motor as torque
     {

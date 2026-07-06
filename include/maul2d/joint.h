@@ -19,6 +19,8 @@ extern "C"
         m2_weldJoint = 3,
         m2_wheelJoint = 4,
         m2_filterJoint = 5,
+        m2_motorJoint = 6,
+        m2_mouseJoint = 7,
     } m2JointType;
 
     typedef struct m2JointId
@@ -129,6 +131,38 @@ extern "C"
         int32_t internalValue;
     } m2WheelJointDef;
 
+    /// Drives body B's transform toward an offset from body A with
+    /// force and torque budgets: moving platforms, magnetic grips,
+    /// soft body-follow. Offsets are in body A's frame; correction
+    /// pulls position error at correctionFactor per step.
+    typedef struct m2MotorJointDef
+    {
+        m2BodyId bodyIdA;
+        m2BodyId bodyIdB;
+        m2Vec2 linearOffset;    // target of B minus A, in A's frame
+        float angularOffset;    // target angle of B minus A, radians
+        float maxForce;         // newtons
+        float maxTorque;        // newton meters
+        float correctionFactor; // [0,1] position correction per step
+        bool collideConnected;
+        int32_t internalValue;
+    } m2MotorJointDef;
+
+    /// A soft spring pulling one point of body B toward a world-space
+    /// target: dragging. Body A is only a bookkeeping anchor. The grab
+    /// point is where the target sits at creation.
+    typedef struct m2MouseJointDef
+    {
+        m2BodyId bodyIdA;
+        m2BodyId bodyIdB;
+        m2Pos2 target; // world space, f64
+        float hertz;
+        float dampingRatio;
+        float maxForce;
+        bool collideConnected;
+        int32_t internalValue;
+    } m2MouseJointDef;
+
     /// No rows at all: its only effect is collideConnected=false,
     /// switching collision OFF between two bodies for its lifetime.
     typedef struct m2FilterJointDef
@@ -144,6 +178,8 @@ extern "C"
     m2WeldJointDef m2DefaultWeldJointDef(void);
     m2WheelJointDef m2DefaultWheelJointDef(void);
     m2FilterJointDef m2DefaultFilterJointDef(void);
+    m2MotorJointDef m2DefaultMotorJointDef(void);
+    m2MouseJointDef m2DefaultMouseJointDef(void);
 
     /// Joints join their bodies' sleep island: connected bodies sleep and
     /// wake together. Destroying either body destroys the joint.
@@ -154,6 +190,8 @@ extern "C"
     m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def);
     m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def);
     m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def);
+    m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def);
+    m2JointId m2CreateMouseJoint(m2WorldId worldId, const m2MouseJointDef* def);
     void m2DestroyJoint(m2JointId jointId);
 
     /// Runtime joint tuning. Motor speed is rad/s on revolute and
@@ -205,6 +243,18 @@ extern "C"
     m2BodyId m2Joint_GetBodyA(m2JointId jointId);
     m2BodyId m2Joint_GetBodyB(m2JointId jointId);
     bool m2Joint_GetCollideConnected(m2JointId jointId);
+
+    /// Motor joint runtime control (platforms retarget every frame)
+    /// and readback; max torque rides m2Joint_SetMaxMotor/GetMaxMotor.
+    /// Mouse joints retarget with SetTarget. All journaled.
+    void m2MotorJoint_SetOffsets(m2JointId jointId, m2Vec2 linearOffset, float angularOffset);
+    m2Vec2 m2MotorJoint_GetLinearOffset(m2JointId jointId);
+    float m2MotorJoint_GetAngularOffset(m2JointId jointId);
+    float m2MotorJoint_GetMaxForce(m2JointId jointId);
+    float m2MotorJoint_GetCorrectionFactor(m2JointId jointId);
+    void m2MouseJoint_SetTarget(m2JointId jointId, m2Pos2 target);
+    m2Pos2 m2MouseJoint_GetTarget(m2JointId jointId);
+    float m2MouseJoint_GetMaxForce(m2JointId jointId);
 
     /// Editor and integration walk: ascending slot order, truthful
     /// total (same contract as m2World_GetBodies). Thread class:

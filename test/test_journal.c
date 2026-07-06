@@ -172,6 +172,19 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Body_SetFixedRotation(bob, true);                   // op 25
     m2World_EnableSleeping(world, false);                 // op 26
     m2World_EnableSleeping(world, true);
+    m2MotorJointDef chase = m2DefaultMotorJointDef(); // op 31
+    chase.bodyIdA = anchor;
+    chase.bodyIdB = bob;
+    chase.maxForce = 60.0f;
+    chase.maxTorque = 20.0f;
+    m2JointId chaser = m2CreateMotorJoint(world, &chase);
+    m2MotorJoint_SetOffsets(chaser, (m2Vec2){0.5f, 0.5f}, 0.1f); // op 33
+    m2MouseJointDef grip = m2DefaultMouseJointDef();             // op 32
+    grip.bodyIdA = floor;
+    grip.bodyIdB = ram;
+    grip.target = (m2Pos2){2.0, 1.0};
+    m2JointId gripper = m2CreateMouseJoint(world, &grip);
+    m2MouseJoint_SetTarget(gripper, (m2Pos2){3.0, 2.0}); // op 34
     for (int32_t i = 0; i < 30; ++i)
     {
         m2World_Step(world, 1.0f / 120.0f, 2); // second dt flavor

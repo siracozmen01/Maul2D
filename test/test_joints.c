@@ -930,6 +930,92 @@ static void TestCollideConnectedAndFilterJoint(void)
     m2DestroyWorld(world);
 }
 
+// Motor and mouse joints (parity sprint 3b): a platform that chases
+// offsets under gravity, and a crate dragged around by a soft target
+// spring. Reference solves on Maul's delta tracking.
+static void TestMotorAndMouseJoints(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    // Motor platform: anchor at the origin, platform driven to an
+    // offset and held there against gravity.
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 4.0};
+    m2BodyId anchor = m2CreateBody(world, &ad);
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId platform = m2CreateBody(world, &pd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon deck = m2MakeBox(0.8f, 0.1f);
+    m2CreatePolygonShape(platform, &sd, &deck);
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = anchor;
+    mj.bodyIdB = platform;
+    mj.linearOffset = (m2Vec2){2.0f, 1.0f};
+    mj.maxForce = 200.0f;
+    mj.maxTorque = 50.0f;
+    m2JointId mover = m2CreateMotorJoint(world, &mj);
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 at = m2Body_GetPosition(platform);
+    CHECK(at.x > 1.8 && at.x < 2.2, "the platform chases the x offset");
+    CHECK(at.y > 4.7 && at.y < 5.2, "and holds the y offset against gravity");
+    m2Vec2 off = m2MotorJoint_GetLinearOffset(mover);
+    CHECK(off.x == 2.0f && off.y == 1.0f, "offsets read back");
+    CHECK(m2MotorJoint_GetMaxForce(mover) == 200.0f, "and the force budget too");
+
+    // Retarget: the platform follows.
+    m2MotorJoint_SetOffsets(mover, (m2Vec2){-2.0f, 0.5f}, 0.0f);
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    at = m2Body_GetPosition(platform);
+    CHECK(at.x < -1.7, "retargeted platform crosses over");
+
+    // Mouse drag: a crate on the floor gets pulled up and sideways.
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){10.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(6.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){10.0, 0.45};
+    m2BodyId crate = m2CreateBody(world, &cd);
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(crate, &sd, &unit);
+    m2MouseJointDef sj = m2DefaultMouseJointDef();
+    sj.bodyIdA = floor;
+    sj.bodyIdB = crate;
+    sj.target = (m2Pos2){10.0, 0.45};
+    sj.maxForce = 200.0f;
+    m2JointId grip = m2CreateMouseJoint(world, &sj);
+    m2MouseJoint_SetTarget(grip, (m2Pos2){12.0, 3.0});
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    at = m2Body_GetPosition(crate);
+    CHECK(at.x > 11.3 && at.x < 12.7, "the drag pulls the crate sideways");
+    CHECK(at.y > 2.2 && at.y < 3.6, "and lifts it off the floor");
+    m2Pos2 target = m2MouseJoint_GetTarget(grip);
+    CHECK(target.x == 12.0 && target.y == 3.0, "the target reads back");
+    CHECK(m2Joint_GetReactionForce(grip) > 1.0f, "the spring carries real load");
+    CHECK(m2Joint_GetType(mover) == m2_motorJoint && m2Joint_GetType(grip) == m2_mouseJoint,
+          "types read back");
+
+    m2DestroyWorld(world);
+}
+
 static void TestJointBreaking(void)
 {
     // Twin ropes carry the same heavy crate; one has a break limit
@@ -1255,6 +1341,7 @@ int main(void)
     TestSoftWeld();
     TestReactionGetters();
     TestCollideConnectedAndFilterJoint();
+    TestMotorAndMouseJoints();
     TestJointBreaking();
     TestBreakRollback();
 

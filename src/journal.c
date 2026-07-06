@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 16u
+#define M2_JOURNAL_VERSION 17u
 
 typedef struct m2JournalHeader
 {
@@ -503,6 +503,61 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             m2JointId made = m2CreateFilterJoint(worldId, &fj.def);
             M2_ASSERT(made.index1 == fj.expected.index1);
             (void)made;
+            break;
+        }
+        case m2_opCreateMotorJoint:
+        {
+            struct m2OpMotorJoint
+            {
+                m2MotorJointDef def;
+                m2JointId expected;
+            };
+            M2_READ_OP(struct m2OpMotorJoint, mj);
+            mj.def.bodyIdA.world0 = here;
+            mj.def.bodyIdB.world0 = here;
+            m2JointId made = m2CreateMotorJoint(worldId, &mj.def);
+            M2_ASSERT(made.index1 == mj.expected.index1);
+            (void)made;
+            break;
+        }
+        case m2_opCreateMouseJoint:
+        {
+            struct m2OpMouseJoint
+            {
+                m2MouseJointDef def;
+                m2JointId expected;
+            };
+            M2_READ_OP(struct m2OpMouseJoint, sj);
+            sj.def.bodyIdA.world0 = here;
+            sj.def.bodyIdB.world0 = here;
+            m2JointId made = m2CreateMouseJoint(worldId, &sj.def);
+            M2_ASSERT(made.index1 == sj.expected.index1);
+            (void)made;
+            break;
+        }
+        case m2_opMotorOffsets:
+        {
+            struct m2OpMotorOffsets
+            {
+                m2JointId joint;
+                m2Vec2 linear;
+                float angular;
+            };
+            M2_READ_OP(struct m2OpMotorOffsets, mo);
+            mo.joint.world0 = here;
+            m2MotorJoint_SetOffsets(mo.joint, mo.linear, mo.angular);
+            break;
+        }
+        case m2_opMouseTarget:
+        {
+            struct m2OpMouseTarget
+            {
+                m2JointId joint;
+                m2Pos2 target;
+            };
+            M2_READ_OP(struct m2OpMouseTarget, mt);
+            mt.joint.world0 = here;
+            m2MouseJoint_SetTarget(mt.joint, mt.target);
             break;
         }
         case m2_opApplyTorque:
