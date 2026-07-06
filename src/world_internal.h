@@ -143,6 +143,16 @@ typedef struct m2World
     float particlePressureStrength;
     float particleDampingStrength;
     float particleViscousStrength;
+    // Step-transient fluid scratch: rebuilt from positions every
+    // step, never walked, never hashed (the island precedent).
+    void* particleProxies; // capacity * 16 bytes (key, index, pad)
+    int32_t* particlePairA;
+    int32_t* particlePairB;
+    float* particlePairWeight;
+    m2Vec2* particlePairNormal;
+    int32_t particlePairCapacity; // 12 per particle of capacity
+    int32_t particlePairCount;
+    int32_t particlePairOverflow; // deterministic truncation counter
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;
@@ -379,5 +389,6 @@ int32_t m2ContactConstraintSize(void);
 // White-box accessor for tests and internal modules. Returns NULL for a
 // stale or null id. Not part of the public ABI.
 m2World* m2World_GetInternal(m2WorldId worldId);
+void m2UpdateParticlePairs(m2World* world);
 
 #endif // MAUL2D_WORLD_INTERNAL_H

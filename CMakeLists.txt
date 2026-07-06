@@ -14,6 +14,7 @@ add_library(maul2d STATIC
     src/dynamic_tree.c
     src/island.c
     src/journal.c
+    src/particle.c
     src/query.c
     src/platform_thread.c
     src/draw.c

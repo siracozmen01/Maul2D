@@ -1051,6 +1051,13 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         M2_ALLOC(particleAlive, particleCap, uint8_t);
         M2_ALLOC(particleGenerations, particleCap, uint16_t);
         M2_ALLOC(particleFreeQueue, particleCap, int32_t);
+        world->particlePairCapacity = 12 * particleCap;
+        world->particleProxies = m2AllocZeroed((size_t)particleCap * 16);
+        ok = ok && world->particleProxies != NULL;
+        M2_ALLOC(particlePairA, world->particlePairCapacity, int32_t);
+        M2_ALLOC(particlePairB, world->particlePairCapacity, int32_t);
+        M2_ALLOC(particlePairWeight, world->particlePairCapacity, float);
+        M2_ALLOC(particlePairNormal, world->particlePairCapacity, m2Vec2);
     }
     M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
@@ -1238,6 +1245,11 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particleAlive);
     m2Free(world->particleGenerations);
     m2Free(world->particleFreeQueue);
+    m2Free(world->particleProxies);
+    m2Free(world->particlePairA);
+    m2Free(world->particlePairB);
+    m2Free(world->particlePairWeight);
+    m2Free(world->particlePairNormal);
     m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
@@ -1441,6 +1453,12 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     }
 
     m2UpdateIslandsAndWake(world);
+    if (world->particleCount > 0)
+    {
+        // Neighbor pairs freeze at step start, the reference cadence:
+        // the substep solver reads one canonical list per step.
+        m2UpdateParticlePairs(world);
+    }
     uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);
     uint64_t tSolve = m2TimeNowNs();
