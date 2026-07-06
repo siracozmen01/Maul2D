@@ -409,6 +409,7 @@ int main(void)
     int32_t ringEntry = 0; // bytes per snapshot
     int32_t ringCapacity = 0;
     int32_t ringCount = 0;  // valid entries behind the present
+    int32_t ringStart = 0;  // oldest entry (true circular ring, no sliding)
     int32_t ringStride = 2; // capture every Nth step
     int32_t stepParity = 0;
 
@@ -446,6 +447,7 @@ int main(void)
             ringCapacity = fit < 30 ? 30 : (fit > 400 ? 400 : (int32_t)fit);
             ring = malloc((size_t)ringCapacity * (size_t)ringEntry);
             ringCount = 0;
+            ringStart = 0;
             stepParity = 0;
             s_driveWheelA = m2_nullBodyId;
             s_driveWheelB = m2_nullBodyId;
@@ -582,7 +584,8 @@ int main(void)
             // definition; drop them and let the registries be the truth.
             grip = m2_nullJointId;
             ringCount -= 1;
-            m2World_Restore(world, ring + (size_t)ringCount * (size_t)ringEntry, ringEntry);
+            int32_t slot = (ringStart + ringCount) % ringCapacity;
+            m2World_Restore(world, ring + (size_t)slot * (size_t)ringEntry, ringEntry);
             simTime -= (double)ringStride / 60.0;
         }
         else if ((!paused || single) && world.index1 != 0)
@@ -594,11 +597,12 @@ int main(void)
             {
                 if (ringCount == ringCapacity)
                 {
-                    // Slide the window: forget the oldest snapshot.
-                    memmove(ring, ring + ringEntry, (size_t)(ringCapacity - 1) * (size_t)ringEntry);
+                    // Forget the oldest by moving the ring start: O(1).
+                    ringStart = (ringStart + 1) % ringCapacity;
                     ringCount -= 1;
                 }
-                m2World_Snapshot(world, ring + (size_t)ringCount * (size_t)ringEntry, ringEntry);
+                int32_t slot = (ringStart + ringCount) % ringCapacity;
+                m2World_Snapshot(world, ring + (size_t)slot * (size_t)ringEntry, ringEntry);
                 ringCount += 1;
             }
         }
