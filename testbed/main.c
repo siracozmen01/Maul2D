@@ -821,6 +821,7 @@ static void ScenePlatformerTick(m2WorldId world, double simTime)
 }
 
 static int32_t s_faucetTicks = 0;
+static bool s_faucetTensile = false;
 
 static void SceneWater(m2WorldId world)
 {
@@ -877,10 +878,149 @@ static void SceneWaterTick(m2WorldId world, double simTime)
         {
             int32_t lane = (s_faucetTicks + j * 5) % 7;
             double x = -0.27 + (double)lane * 0.09;
-            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f}, 0);
+            uint32_t flags = s_faucetTensile ? m2_tensileParticle : 0;
+            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f}, flags);
         }
     }
     s_faucetTicks += 1;
+}
+
+static void SceneMachinery(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = 1.0f;
+
+    // Gear rig: two flywheels with visible spokes, motor on the left
+    // one, gear ratio 2: the right wheel counter-spins twice as fast.
+    m2Circle hub = {{0.0f, 0.0f}, 0.5f};
+    m2Polygon spoke = m2MakeBox(0.45f, 0.06f);
+    m2BodyId wheels[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = -10.0 + (double)i * 2.2;
+        m2BodyDef postDef = m2DefaultBodyDef();
+        postDef.position = (m2Pos2){x, 3.0};
+        m2BodyId post = m2CreateBody(world, &postDef);
+        m2BodyDef wheelDef = m2DefaultBodyDef();
+        wheelDef.type = m2_dynamicBody;
+        wheelDef.position = (m2Pos2){x, 3.0};
+        wheels[i] = m2CreateBody(world, &wheelDef);
+        m2CreateCircleShape(wheels[i], &sd, &hub);
+        m2CreatePolygonShape(wheels[i], &sd, &spoke);
+        m2RevoluteJointDef pin = m2DefaultRevoluteJointDef();
+        pin.bodyIdA = post;
+        pin.bodyIdB = wheels[i];
+        if (i == 0)
+        {
+            pin.enableMotor = true;
+            pin.motorSpeed = 2.5f;
+            pin.maxMotorTorque = 80.0f;
+        }
+        m2CreateRevoluteJoint(world, &pin);
+    }
+    m2GearJointDef cog = m2DefaultGearJointDef();
+    cog.bodyIdA = wheels[0];
+    cog.bodyIdB = wheels[1];
+    cog.ratio = 2.0f;
+    m2CreateGearJoint(world, &cog);
+
+    // Pulley elevator: two platforms on vertical prismatic rails,
+    // coupled by a rope over two anchors. Drop the crate onto a
+    // platform (or grab it) and watch the counterweight answer.
+    m2Polygon platform = m2MakeBox(0.8f, 0.1f);
+    m2BodyId cars[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = -3.5 + (double)i * 3.0;
+        m2BodyDef railDef = m2DefaultBodyDef();
+        railDef.position = (m2Pos2){x, 0.0};
+        m2BodyId rail = m2CreateBody(world, &railDef);
+        m2BodyDef carDef = m2DefaultBodyDef();
+        carDef.type = m2_dynamicBody;
+        carDef.position = (m2Pos2){x, 2.0};
+        cars[i] = m2CreateBody(world, &carDef);
+        m2ShapeDef ps = m2DefaultShapeDef();
+        ps.density = 1.0f;
+        m2CreatePolygonShape(cars[i], &ps, &platform);
+        m2PrismaticJointDef rails = m2DefaultPrismaticJointDef();
+        rails.bodyIdA = rail;
+        rails.bodyIdB = cars[i];
+        rails.localAxisA = (m2Vec2){0.0f, 1.0f};
+        m2CreatePrismaticJoint(world, &rails);
+    }
+    m2PulleyJointDef rope = m2DefaultPulleyJointDef();
+    rope.bodyIdA = cars[0];
+    rope.bodyIdB = cars[1];
+    rope.groundAnchorA = (m2Pos2){-3.5, 6.0};
+    rope.groundAnchorB = (m2Pos2){-0.5, 6.0};
+    m2CreatePulleyJoint(world, &rope);
+    m2BodyDef cargoDef = m2DefaultBodyDef();
+    cargoDef.type = m2_dynamicBody;
+    cargoDef.position = (m2Pos2){-3.5, 2.5};
+    m2BodyId cargo = m2CreateBody(world, &cargoDef);
+    m2Polygon cargoBox = m2MakeBox(0.25f, 0.25f);
+    m2ShapeDef cargoShape = m2DefaultShapeDef();
+    cargoShape.density = 2.0f;
+    m2CreatePolygonShape(cargo, &cargoShape, &cargoBox);
+
+    // Sprung paddle: an angular spring holds it level; drop of balls
+    // to bat away, or drag it down and let it snap back.
+    m2BodyDef paddlePostDef = m2DefaultBodyDef();
+    paddlePostDef.position = (m2Pos2){3.5, 1.6};
+    m2BodyId paddlePost = m2CreateBody(world, &paddlePostDef);
+    m2BodyDef paddleDef = m2DefaultBodyDef();
+    paddleDef.type = m2_dynamicBody;
+    paddleDef.position = (m2Pos2){4.6, 1.6};
+    m2BodyId paddle = m2CreateBody(world, &paddleDef);
+    m2Polygon blade = m2MakeBox(1.1f, 0.08f);
+    m2CreatePolygonShape(paddle, &sd, &blade);
+    m2RevoluteJointDef springPin = m2DefaultRevoluteJointDef();
+    springPin.bodyIdA = paddlePost;
+    springPin.bodyIdB = paddle;
+    springPin.localAnchorB = (m2Vec2){-1.1f, 0.0f};
+    springPin.springHertz = 5.0f;
+    springPin.springDampingRatio = 0.4f;
+    m2CreateRevoluteJoint(world, &springPin);
+    m2Circle pebble = {{0.0f, 0.0f}, 0.15f};
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        m2BodyDef ballDef = m2DefaultBodyDef();
+        ballDef.type = m2_dynamicBody;
+        ballDef.position = (m2Pos2){4.0 + (double)i * 0.5, 4.0 + (double)i * 0.7};
+        m2BodyId ball = m2CreateBody(world, &ballDef);
+        m2ShapeDef bs = m2DefaultShapeDef();
+        bs.density = 0.4f;
+        bs.restitution = 0.5f;
+        m2CreateCircleShape(ball, &bs, &pebble);
+    }
+
+    // Shrapnel twins: the same plus outline, once as a single body
+    // of decomposed pieces, once pre-shattered into one body per
+    // piece. Shove the right one and it crumbles.
+    m2Vec2 plus[12] = {{0.6f, -1.2f}, {0.6f, -0.4f},  {1.4f, -0.4f},  {1.4f, 0.4f},
+                       {0.6f, 0.4f},  {0.6f, 1.2f},   {-0.6f, 1.2f},  {-0.6f, 0.4f},
+                       {-1.4f, 0.4f}, {-1.4f, -0.4f}, {-0.6f, -0.4f}, {-0.6f, -1.2f}};
+    m2Polygon pieces[8];
+    int32_t pieceCount = m2DecomposeOutline(plus, 12, pieces, 8);
+    m2BodyDef statueDef = m2DefaultBodyDef();
+    statueDef.type = m2_dynamicBody;
+    statueDef.position = (m2Pos2){8.5, 0.9};
+    m2BodyId statue = m2CreateBody(world, &statueDef);
+    for (int32_t i = 0; i < pieceCount; ++i)
+    {
+        m2ShapeDef ss = m2DefaultShapeDef();
+        m2CreatePolygonShape(statue, &ss, &pieces[i]);
+    }
+    for (int32_t i = 0; i < pieceCount; ++i)
+    {
+        m2BodyDef shardDef = m2DefaultBodyDef();
+        shardDef.type = m2_dynamicBody;
+        shardDef.position = (m2Pos2){12.0, 0.9};
+        m2BodyId shard = m2CreateBody(world, &shardDef);
+        m2ShapeDef ss = m2DefaultShapeDef();
+        m2CreatePolygonShape(shard, &ss, &pieces[i]);
+    }
 }
 
 static const tbScene s_scenes[] = {
@@ -895,7 +1035,9 @@ static const tbScene s_scenes[] = {
     {"curtain: breakable ropes, one anvil", SceneCurtain, NULL, false, false},
     {"platformer: A/D run, W jump, ride the ferry (mover kit)", ScenePlatformer,
      ScenePlatformerTick, false, true},
-    {"water: the faucet fills the basin, light crates float; hold R", SceneWater, SceneWaterTick,
+    {"water: faucet fills the basin, crates float; T = sticky water", SceneWater, SceneWaterTick,
+     false, false},
+    {"machinery: gears, pulley elevator, sprung paddle, shrapnel twins", SceneMachinery, NULL,
      false, false},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
@@ -1002,6 +1144,10 @@ int main(void)
         if (IsKeyPressed(KEY_H))
         {
             showHelp = !showHelp;
+        }
+        if (IsKeyPressed(KEY_T))
+        {
+            s_faucetTensile = !s_faucetTensile;
         }
         if (IsKeyPressed(KEY_I))
         {
