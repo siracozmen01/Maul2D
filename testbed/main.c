@@ -661,6 +661,7 @@ static void SceneCurtain(m2WorldId world)
 // a moving platform inherits its velocity, one-way shelves work from
 // both sides, and none of it perturbs the simulation.
 static m2Pos2 s_charPos;
+static m2Pos2 s_charPrevPos; // for render interpolation
 static m2Vec2 s_charVel;
 static bool s_charGrounded;
 static const m2Capsule s_charShape = {{0.0f, -0.35f}, {0.0f, 0.35f}, 0.3f};
@@ -668,6 +669,7 @@ static const m2Capsule s_charShape = {{0.0f, -0.35f}, {0.0f, 0.35f}, 0.3f};
 static void CharacterReset(double x, double y)
 {
     s_charPos = (m2Pos2){x, y};
+    s_charPrevPos = s_charPos;
     s_charVel = (m2Vec2){0.0f, 0.0f};
     s_charGrounded = false;
 }
@@ -695,6 +697,8 @@ static void CharacterUpdate(m2WorldId world, float dt)
     {
         s_charVel.y = 11.0f;
     }
+
+    s_charPrevPos = s_charPos;
 
     // Gather planes at the current pose.
     m2Transform pose = {s_charPos, {1.0f, 0.0f}};
@@ -739,12 +743,15 @@ static void CharacterUpdate(m2WorldId world, float dt)
     }
 }
 
-static void CharacterDraw(void)
+static void CharacterDraw(double alpha)
 {
-    m2Pos2 p1 = {s_charPos.x + (double)s_charShape.point1.x,
-                 s_charPos.y + (double)s_charShape.point1.y};
-    m2Pos2 p2 = {s_charPos.x + (double)s_charShape.point2.x,
-                 s_charPos.y + (double)s_charShape.point2.y};
+    // The fixed-step presentation rule integrators need: draw
+    // between the previous and current poses by the accumulator
+    // fraction. alpha 1 = raw current pose.
+    m2Pos2 at = {s_charPrevPos.x + (s_charPos.x - s_charPrevPos.x) * alpha,
+                 s_charPrevPos.y + (s_charPos.y - s_charPrevPos.y) * alpha};
+    m2Pos2 p1 = {at.x + (double)s_charShape.point1.x, at.y + (double)s_charShape.point1.y};
+    m2Pos2 p2 = {at.x + (double)s_charShape.point2.x, at.y + (double)s_charShape.point2.y};
     tbDrawCapsule(p1, p2, s_charShape.radius, s_charGrounded ? 0x50E080u : 0xE0B050u, NULL);
 }
 
@@ -839,6 +846,8 @@ int main(void)
     int32_t sceneIndex = 0;
     bool paused = false;
     bool showHelp = false;
+    int32_t simMode = 0; // 0 = 60 Hz, 1 = 30 Hz snapped, 2 = 30 Hz interpolated
+    int32_t frameParity = 0;
     double simTime = 0.0;
     m2JointId grip = m2_nullJointId;
 
@@ -927,6 +936,10 @@ int main(void)
         if (IsKeyPressed(KEY_H))
         {
             showHelp = !showHelp;
+        }
+        if (IsKeyPressed(KEY_I))
+        {
+            simMode = (simMode + 1) % 3;
         }
         float wheel = GetMouseWheelMove();
         if (wheel != 0.0f)
@@ -1023,6 +1036,8 @@ int main(void)
         // ---- step or rewind ----
         bool rewinding = IsKeyDown(KEY_R) && ring != NULL && ringCount > 0;
         bool single = IsKeyPressed(KEY_S);
+        frameParity = (frameParity + 1) % 2;
+        bool halfRateSkip = simMode != 0 && frameParity != 0;
         if (rewinding)
         {
             // Pop the newest snapshot and live there. Local handles into
@@ -1034,9 +1049,9 @@ int main(void)
             m2World_Restore(world, ring + (size_t)slot * (size_t)ringEntry, ringEntry);
             simTime -= (double)ringStride / 60.0;
         }
-        else if ((!paused || single) && world.index1 != 0)
+        else if ((!paused || single) && !halfRateSkip && world.index1 != 0)
         {
-            m2World_Step(world, 1.0f / 60.0f, 4);
+            m2World_Step(world, simMode == 0 ? 1.0f / 60.0f : 1.0f / 30.0f, 4);
             simTime += 1.0 / 60.0;
             if (s_scenes[sceneIndex].tick != NULL)
             {
@@ -1072,16 +1087,20 @@ int main(void)
         }
         if (s_scenes[sceneIndex].hasCharacter)
         {
-            CharacterDraw();
+            double alpha = simMode == 2 && frameParity != 0 ? 0.5 : 1.0;
+            CharacterDraw(alpha);
         }
         m2Counters counters = m2World_GetCounters(world);
         m2Profile profile = m2World_GetProfile(world);
         DrawText(
             TextFormat("[%d/%d] %s", sceneIndex + 1, TB_SCENE_COUNT, s_scenes[sceneIndex].name), 12,
             10, 20, RAYWHITE);
-        DrawText(TextFormat("bodies %d (awake %d)  shapes %d  joints %d  step %.2f ms%s",
-                            counters.bodies, counters.awakeBodies, counters.shapes, counters.joints,
-                            profile.stepMs, paused ? "  [paused]" : ""),
+        DrawText(TextFormat(
+                     "bodies %d (awake %d)  shapes %d  joints %d  step %.2f ms%s", counters.bodies,
+                     counters.awakeBodies, counters.shapes, counters.joints, profile.stepMs,
+                     simMode == 0
+                         ? (paused ? "  [paused]" : "")
+                         : (simMode == 1 ? "  [30 Hz snapped: I]" : "  [30 Hz interpolated: I]")),
                  12, 36, 16, GRAY);
         DrawText("drag: grab   rmb: pan   wheel: zoom   tab: scene   f5: reset   space: pause  "
                  " s: step   e: boom   b: box   HOLD R: REWIND TIME",

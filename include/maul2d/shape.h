@@ -139,6 +139,12 @@ extern "C"
     /// Validated constructors (topic-03 D4: relative thresholds, reject
     /// loudly). A returned polygon with count == 0 is invalid input.
     m2Polygon m2MakePolygon(const m2Vec2* points, int32_t count, float radius);
+
+    /// Convex hull of a loose point cloud (welding, collinear
+    /// merging, deterministic quickhull): the doorway from sprite
+    /// outlines to collision shapes. Degenerate input returns a
+    /// polygon with count == 0, the loud-invalid convention.
+    m2Polygon m2ComputeHull(const m2Vec2* points, int32_t count, float radius);
     m2Polygon m2MakeBox(float halfWidth, float halfHeight);
 
     /// Attach a shape to a body. Validation failure or exhausted capacity

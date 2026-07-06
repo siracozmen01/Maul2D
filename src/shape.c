@@ -103,6 +103,213 @@ bool m2ValidatePolygon(const m2Polygon* polygon)
     return area > M2_MIN_THINNESS * perimeter * perimeter;
 }
 
+// Quickhull with aggressive welding and collinear merging, ported
+// from the reference (hull.c) under Maul's loud-invalid convention.
+static int32_t RecurseHull(m2Vec2 p1, m2Vec2 p2, const m2Vec2* ps, int32_t count, m2Vec2* out)
+{
+    if (count == 0)
+    {
+        return 0;
+    }
+    float ex = p2.x - p1.x;
+    float ey = p2.y - p1.y;
+    float len = sqrtf(ex * ex + ey * ey);
+    if (!(len > 0.0f))
+    {
+        return 0;
+    }
+    ex /= len;
+    ey /= len;
+
+    m2Vec2 rightPoints[M2_MAX_POLYGON_VERTICES];
+    int32_t rightCount = 0;
+    int32_t bestIndex = 0;
+    float bestDistance = (ps[0].x - p1.x) * ey - (ps[0].y - p1.y) * ex;
+    if (bestDistance > 0.0f)
+    {
+        rightPoints[rightCount++] = ps[0];
+    }
+    for (int32_t i = 1; i < count; ++i)
+    {
+        float distance = (ps[i].x - p1.x) * ey - (ps[i].y - p1.y) * ex;
+        if (distance > bestDistance)
+        {
+            bestIndex = i;
+            bestDistance = distance;
+        }
+        if (distance > 0.0f)
+        {
+            rightPoints[rightCount++] = ps[i];
+        }
+    }
+    if (bestDistance < 2.0f * M2_LINEAR_SLOP)
+    {
+        return 0;
+    }
+    m2Vec2 bestPoint = ps[bestIndex];
+    int32_t n1 = RecurseHull(p1, bestPoint, rightPoints, rightCount, out);
+    out[n1] = bestPoint;
+    int32_t n2 = RecurseHull(bestPoint, p2, rightPoints, rightCount, out + n1 + 1);
+    return n1 + 1 + n2;
+}
+
+m2Polygon m2ComputeHull(const m2Vec2* points, int32_t count, float radius)
+{
+    m2Polygon invalid;
+    memset(&invalid, 0, sizeof(invalid));
+    if (points == NULL || count < 3)
+    {
+        return invalid; // check your data: count == 0 is the loud sign
+    }
+    count = count < M2_MAX_POLYGON_VERTICES ? count : M2_MAX_POLYGON_VERTICES;
+
+    // Aggressive welding; track the bounds for the seed pick.
+    m2Vec2 ps[M2_MAX_POLYGON_VERTICES];
+    int32_t n = 0;
+    float loX = 3.4e38f;
+    float loY = 3.4e38f;
+    float hiX = -3.4e38f;
+    float hiY = -3.4e38f;
+    float tolSqr = 16.0f * M2_LINEAR_SLOP * M2_LINEAR_SLOP;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        loX = points[i].x < loX ? points[i].x : loX;
+        loY = points[i].y < loY ? points[i].y : loY;
+        hiX = points[i].x > hiX ? points[i].x : hiX;
+        hiY = points[i].y > hiY ? points[i].y : hiY;
+        bool unique = true;
+        for (int32_t j = 0; j < n; ++j)
+        {
+            float dx = points[i].x - ps[j].x;
+            float dy = points[i].y - ps[j].y;
+            if (dx * dx + dy * dy < tolSqr)
+            {
+                unique = false;
+                break;
+            }
+        }
+        if (unique)
+        {
+            ps[n++] = points[i];
+        }
+    }
+    if (n < 3)
+    {
+        return invalid; // welded away: scale problem, be loud
+    }
+
+    // Seed with the point farthest from the bounds center, then its
+    // farthest partner; split the rest left/right of that line.
+    m2Vec2 c = {0.5f * (loX + hiX), 0.5f * (loY + hiY)};
+    int32_t f1 = 0;
+    float dsq1 = (ps[0].x - c.x) * (ps[0].x - c.x) + (ps[0].y - c.y) * (ps[0].y - c.y);
+    for (int32_t i = 1; i < n; ++i)
+    {
+        float dsq = (ps[i].x - c.x) * (ps[i].x - c.x) + (ps[i].y - c.y) * (ps[i].y - c.y);
+        if (dsq > dsq1)
+        {
+            f1 = i;
+            dsq1 = dsq;
+        }
+    }
+    m2Vec2 p1 = ps[f1];
+    ps[f1] = ps[n - 1];
+    n -= 1;
+
+    int32_t f2 = 0;
+    float dsq2 = (ps[0].x - p1.x) * (ps[0].x - p1.x) + (ps[0].y - p1.y) * (ps[0].y - p1.y);
+    for (int32_t i = 1; i < n; ++i)
+    {
+        float dsq = (ps[i].x - p1.x) * (ps[i].x - p1.x) + (ps[i].y - p1.y) * (ps[i].y - p1.y);
+        if (dsq > dsq2)
+        {
+            f2 = i;
+            dsq2 = dsq;
+        }
+    }
+    m2Vec2 p2 = ps[f2];
+    ps[f2] = ps[n - 1];
+    n -= 1;
+
+    m2Vec2 rightPoints[M2_MAX_POLYGON_VERTICES - 2];
+    int32_t rightCount = 0;
+    m2Vec2 leftPoints[M2_MAX_POLYGON_VERTICES - 2];
+    int32_t leftCount = 0;
+    float ex = p2.x - p1.x;
+    float ey = p2.y - p1.y;
+    float elen = sqrtf(ex * ex + ey * ey);
+    ex /= elen;
+    ey /= elen;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        float d = (ps[i].x - p1.x) * ey - (ps[i].y - p1.y) * ex;
+        if (d >= 2.0f * M2_LINEAR_SLOP)
+        {
+            rightPoints[rightCount++] = ps[i];
+        }
+        else if (d <= -2.0f * M2_LINEAR_SLOP)
+        {
+            leftPoints[leftCount++] = ps[i];
+        }
+    }
+
+    m2Vec2 hull[M2_MAX_POLYGON_VERTICES];
+    int32_t hullCount = 0;
+    hull[hullCount++] = p1;
+    int32_t n1 = RecurseHull(p1, p2, rightPoints, rightCount, hull + hullCount);
+    hullCount += n1;
+    hull[hullCount++] = p2;
+    int32_t n2 = RecurseHull(p2, p1, leftPoints, leftCount, hull + hullCount);
+    hullCount += n2;
+    if (n1 == 0 && n2 == 0)
+    {
+        return invalid; // all collinear
+    }
+
+    // Merge collinear runs until stable.
+    bool searching = true;
+    while (searching && hullCount > 2)
+    {
+        searching = false;
+        for (int32_t i = 0; i < hullCount; ++i)
+        {
+            int32_t i1 = i;
+            int32_t i2 = (i + 1) % hullCount;
+            int32_t i3 = (i + 2) % hullCount;
+            m2Vec2 s1 = hull[i1];
+            m2Vec2 s2 = hull[i2];
+            m2Vec2 s3 = hull[i3];
+            float rx = s3.x - s1.x;
+            float ry = s3.y - s1.y;
+            float rlen = sqrtf(rx * rx + ry * ry);
+            if (!(rlen > 0.0f))
+            {
+                continue;
+            }
+            rx /= rlen;
+            ry /= rlen;
+            float distance = (s2.x - s1.x) * ry - (s2.y - s1.y) * rx;
+            if (distance <= 2.0f * M2_LINEAR_SLOP)
+            {
+                for (int32_t j = i2; j < hullCount - 1; ++j)
+                {
+                    hull[j] = hull[j + 1];
+                }
+                hullCount -= 1;
+                searching = true;
+                break;
+            }
+        }
+    }
+    if (hullCount < 3)
+    {
+        return invalid;
+    }
+    // The existing constructor does the rest: normals, centroid, and
+    // its own loud validation.
+    return m2MakePolygon(hull, hullCount, radius);
+}
+
 m2Polygon m2MakePolygon(const m2Vec2* points, int32_t count, float radius)
 {
     m2Polygon polygon;

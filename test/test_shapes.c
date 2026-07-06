@@ -326,9 +326,50 @@ static void TestGeometryReadback(void)
     m2DestroyWorld(world);
 }
 
+// m2ComputeHull: welding, collinear rejection, and a noisy cloud
+// collapsing to the square it always was.
+static void TestComputeHull(void)
+{
+    // A square with duplicates, an interior point, and jitter on one
+    // edge that should weld or merge away.
+    m2Vec2 cloud[8] = {{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f},  {-1.0f, 1.0f},
+                       {0.0f, 0.2f},   {1.0f, -1.0f}, {0.0f, -1.0f}, {-1.0f, -0.999f}};
+    m2Polygon hull = m2ComputeHull(cloud, 8, 0.0f);
+    CHECK(hull.count == 4, "the noisy cloud is a square");
+    float loX = 3.4e38f;
+    float hiX = -3.4e38f;
+    for (int32_t i = 0; i < hull.count; ++i)
+    {
+        loX = hull.vertices[i].x < loX ? hull.vertices[i].x : loX;
+        hiX = hull.vertices[i].x > hiX ? hull.vertices[i].x : hiX;
+    }
+    CHECK(loX == -1.0f && hiX == 1.0f, "with the original extremes");
+
+    // The hull feeds shape creation directly.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 4;
+    def.shapeCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 5.0};
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2ShapeId shape = m2CreatePolygonShape(body, &sd, &hull);
+    CHECK(m2Shape_IsValid(shape), "and the world accepts it");
+    m2DestroyWorld(world);
+
+    // Degenerates are loud, not quiet.
+    m2Vec2 line[4] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {2.0f, 0.0f}, {3.0f, 0.0f}};
+    CHECK(m2ComputeHull(line, 4, 0.0f).count == 0, "collinear input returns count zero");
+    m2Vec2 blob[3] = {{0.0f, 0.0f}, {0.001f, 0.001f}, {0.002f, 0.0f}};
+    CHECK(m2ComputeHull(blob, 3, 0.0f).count == 0, "a welded-away blob returns count zero");
+}
+
 int main(void)
 {
     TestValidation();
+    TestComputeHull();
     TestGeometryReadback();
     TestAabbAndMass();
     TestCompoundAndRollback();

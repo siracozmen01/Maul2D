@@ -234,6 +234,17 @@ manage. Per-body sleep thresholds stay pinned for the same reason
 the world tuning knobs do. One rival idea is parked for later rather
 than rejected: conveyor-style surface speed on shapes.
 
+## Fixed steps and smooth rendering
+
+Step the world at a fixed dt and never tie it to the frame rate.
+For presentation, keep last step's transforms application-side
+(enumerate bodies, copy poses), and each frame draw the blend
+between previous and current by alpha = accumulator / dt. The
+readers are pure and cheap; the simulation stays bit-exact because
+interpolation never feeds back. The testbed's platformer shows the
+difference: press I to cycle 60 Hz, 30 Hz snapped, and 30 Hz
+interpolated.
+
 ## Rollback netcode in one paragraph
 
 Snapshot every confirmed frame. When a late input arrives, restore,
