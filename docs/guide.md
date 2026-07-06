@@ -202,6 +202,12 @@ retuning the ratio recaptures the total from the current geometry so
 the machine re-decides instead of snapping, and a side that fully
 unspools goes limp near its ground anchor rather than pushing.
 
+The ratchet joint lets relative rotation run free in its sign
+direction, clicking tooth by tooth, and never gives back more than
+the last engaged tooth: socket wrenches, winches, turnstiles. Pin
+the bodies with their own joints; the ratchet only owns rotation
+and stays exact across any number of turns.
+
 The revolute joint can carry an angular spring (springHertz and
 springDampingRatio on the def, zero hertz means off) pulling toward
 the creation angle; it runs alongside the motor and limits, retunes

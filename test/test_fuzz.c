@@ -244,7 +244,18 @@ static void DoRandomOp(m2WorldId world)
         m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
         bool collide = Pick(4) == 0;
-        uint32_t type = Pick(10);
+        uint32_t type = Pick(11);
+        if (type == 10)
+        {
+            m2RatchetJointDef jd = m2DefaultRatchetJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.collideConnected = collide;
+            float tooth = 0.2f + (float)Pick(5) * 0.1f;
+            jd.ratchet = Pick(2) == 0 ? tooth : -tooth;
+            m2CreateRatchetJoint(world, &jd);
+            return;
+        }
         if (type == 9)
         {
             m2PulleyJointDef jd = m2DefaultPulleyJointDef();

@@ -871,6 +871,16 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.bodyIdB = b;
             made = m2CreateFilterJoint(mirror, &jd);
         }
+        else if (type == m2_ratchetJoint)
+        {
+            m2RatchetJointDef jd = m2DefaultRatchetJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.ratchet = m2RatchetJoint_GetRatchet(id);
+            jd.phase = m2RatchetJoint_GetPhase(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
+            made = m2CreateRatchetJoint(mirror, &jd);
+        }
         else if (type == m2_pulleyJoint)
         {
             m2PulleyJointDef jd = m2DefaultPulleyJointDef();
@@ -1129,6 +1139,12 @@ static void TestMirrorRebuild(void)
     wj.angularHertz = 6.0f;
     wj.angularDampingRatio = 0.8f;
     m2CreateWeldJoint(world, &wj);
+    m2RatchetJointDef pawl = m2DefaultRatchetJointDef();
+    pawl.bodyIdA = boxB;
+    pawl.bodyIdB = boxD;
+    pawl.ratchet = 0.4f;
+    pawl.phase = 0.1f;
+    m2CreateRatchetJoint(world, &pawl);
     m2PulleyJointDef hoist = m2DefaultPulleyJointDef();
     hoist.bodyIdA = boxB;
     hoist.bodyIdB = boxD;

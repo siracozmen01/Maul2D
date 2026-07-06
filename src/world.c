@@ -31,6 +31,7 @@
 #define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
 #define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
+#define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
 #define M2_SNAPSHOT_VERSION 30u
 
@@ -5509,6 +5510,89 @@ m2Pos2 m2PulleyJoint_GetGroundAnchorB(m2JointId jointId)
     m2World* world = WorldFromIndex(jointId.world0);
     int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
     return index >= 0 ? world->jointTargetsB[index] : zero;
+}
+
+m2RatchetJointDef m2DefaultRatchetJointDef(void)
+{
+    m2RatchetJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.ratchet = 0.5f;
+    def.internalValue = M2_RTJOINT_COOKIE;
+    return def;
+}
+
+// Ratchet registry mapping: tooth angle rides jointLength, phase
+// rides jointRefAngle, the accumulated relative angle rides
+// jointUpper (multi-turn exact via the gear trick: previous body
+// rotations live in the anchor slots as (c, s) pairs), and the
+// engaged tooth rides jointLower. All snapshot state.
+m2JointId m2CreateRatchetJoint(m2WorldId worldId, const m2RatchetJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_RTJOINT_COOKIE ||
+        !(def->ratchet != 0.0f))
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2JointId jointId =
+        FinishJoint(world, worldId, index, 10, bodyA, bodyB, zero, zero, 0.0f, 0.0f, 0.0f);
+    world->jointLength[index] = def->ratchet;
+    world->jointRefAngle[index] = def->phase;
+    m2Rot qA = world->transforms[bodyA].q;
+    m2Rot qB = world->transforms[bodyB].q;
+    world->jointLocalAnchorA[index] = (m2Vec2){qA.c, qA.s};
+    world->jointLocalAnchorB[index] = (m2Vec2){qB.c, qB.s};
+    world->jointUpper[index] = 0.0f; // accumulated relative angle
+    // Engage the tooth at or behind the spawn angle (reference click).
+    world->jointLower[index] =
+        floorf((0.0f - def->phase) / def->ratchet) * def->ratchet + def->phase;
+    world->jointUserData[index] = def->userData;
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2RatchetJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateRatchetJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+float m2RatchetJoint_GetRatchet(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 10) : -1;
+    return index >= 0 ? world->jointLength[index] : 0.0f;
+}
+
+float m2RatchetJoint_GetPhase(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 10) : -1;
+    return index >= 0 ? world->jointRefAngle[index] : 0.0f;
 }
 
 m2MotorJointDef m2DefaultMotorJointDef(void)

@@ -1300,6 +1300,75 @@ static void TestPulleyJoint(void)
     m2DestroyWorld(world);
 }
 
+// Unwound relative rotation magnitude between two rotations.
+static float m2Atan2Test(m2Rot before, m2Rot after)
+{
+    float sin = before.c * after.s - before.s * after.c;
+    float cos = before.c * after.c + before.s * after.s;
+    float angle = atan2f(sin, cos);
+    return angle < 0.0f ? -angle : angle;
+}
+
+// The ratchet: forward spins free and clicks tooth by tooth;
+// forced back-spin holds at the last engaged tooth, multi-turn.
+static void TestRatchetJoint(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, 0.0f});
+    m2BodyDef postDef = m2DefaultBodyDef();
+    postDef.position = (m2Pos2){0.0, 2.0};
+    m2BodyId post = m2CreateBody(world, &postDef);
+    m2BodyDef wheelDef = m2DefaultBodyDef();
+    wheelDef.type = m2_dynamicBody;
+    wheelDef.position = (m2Pos2){0.0, 2.0};
+    m2BodyId wheel = m2CreateBody(world, &wheelDef);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle disc = {{0.0f, 0.0f}, 0.5f};
+    m2CreateCircleShape(wheel, &sd, &disc);
+    m2RevoluteJointDef pinDef = m2DefaultRevoluteJointDef();
+    pinDef.bodyIdA = post;
+    pinDef.bodyIdB = wheel;
+    m2CreateRevoluteJoint(world, &pinDef);
+    m2RatchetJointDef ratchetDef = m2DefaultRatchetJointDef();
+    ratchetDef.bodyIdA = post;
+    ratchetDef.bodyIdB = wheel;
+    ratchetDef.ratchet = 0.5f;
+    m2JointId ratchet = m2CreateRatchetJoint(world, &ratchetDef);
+    CHECK(m2RatchetJoint_GetRatchet(ratchet) == 0.5f, "the tooth angle reads back");
+    CHECK(m2RatchetJoint_GetPhase(ratchet) == 0.0f, "the phase reads back");
+
+    // Forward: free spin, more than a full turn (multi-turn law).
+    m2Body_SetAngularVelocity(wheel, 3.0f);
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetAngularVelocity(wheel) > 2.9f, "the free direction never engages");
+
+    // Reverse under a CONTINUOUS torque (an instantaneous shove is
+    // consumed in the first substep and reads zero at step end, the
+    // honest bookkeeping of speculative rows): the wheel gives back
+    // less than one tooth, stalls on it, and carries the load.
+    m2Rot before = m2Body_GetRotation(wheel);
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2Body_ApplyTorque(wheel, -2.0f);
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Rot after = m2Body_GetRotation(wheel);
+    float backSpin = m2Atan2Test(before, after);
+    CHECK(backSpin < 0.51f, "back-spin never passes one tooth");
+    CHECK(m2Body_GetAngularVelocity(wheel) > -0.05f && m2Body_GetAngularVelocity(wheel) < 0.05f,
+          "the tooth stalls the loaded reverse");
+    float hold = m2Joint_GetReactionTorque(ratchet);
+    CHECK(hold > 1.5f && hold < 2.5f, "the ratchet reports the load it carries");
+    m2DestroyWorld(world);
+}
+
 // The gear joint: two pinned flywheels coupled at a ratio; drive
 // one, the other counter-spins scaled; retune the ratio live; the
 // phase survives many full turns.
@@ -1709,6 +1778,7 @@ int main(void)
     TestMotorAndMouseJoints();
     TestDistanceRange();
     TestGearJoint();
+    TestRatchetJoint();
     TestPulleyJoint();
     TestRevoluteSpring();
     TestJointBreaking();

@@ -1277,6 +1277,34 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = ratio * ratio * iA + iB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
+        else if (c->type == 10)
+        {
+            // Ratchet (Chipmunk cpRatchetJoint reconciliation): track
+            // the relative angle multi-turn exact via previous-rotation
+            // slots, click the engaged tooth forward when the angle
+            // passes it, and hold a one-sided row against back-spin.
+            float ratchet = world->jointLength[j];
+            float phase = world->jointRefAngle[j];
+            m2Rot prevA = {world->jointLocalAnchorA[j].x, world->jointLocalAnchorA[j].y};
+            m2Rot prevB = {world->jointLocalAnchorB[j].x, world->jointLocalAnchorB[j].y};
+            float angle = world->jointUpper[j];
+            angle += RelativeRotAngle(prevB, qB) - RelativeRotAngle(prevA, qA);
+            world->jointUpper[j] = angle;
+            world->jointLocalAnchorA[j] = (m2Vec2){qA.c, qA.s};
+            world->jointLocalAnchorB[j] = (m2Vec2){qB.c, qB.s};
+            float engaged = world->jointLower[j];
+            float diff = engaged - angle;
+            if (!(diff * ratchet > 0.0f))
+            {
+                // Free direction: click to the tooth at or behind us.
+                engaged = floorf((angle - phase) / ratchet) * ratchet + phase;
+                world->jointLower[j] = engaged;
+            }
+            c->baseAngle = angle - engaged; // C0, sign-adjusted in solve
+            c->motorSpeed = ratchet;        // carries the free direction
+            float k = iA + iB;
+            c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
+        }
         else if (c->type == 9)
         {
             // Pulley (b2 v2.4 reconciliation): equality constraint
@@ -1426,6 +1454,14 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
             // Gear: one angular impulse, ratio-weighted on side A.
             float L = c->impulse.x;
             world->angularVelocities[c->bodyA] += world->invInertia[c->bodyA] * (c->motorSpeed * L);
+            world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * L;
+        }
+        else if (c->type == 10)
+        {
+            // Ratchet: one-sided angular impulse in the hold direction.
+            float s = c->motorSpeed > 0.0f ? 1.0f : -1.0f;
+            float L = s * c->impulse.x;
+            world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * L;
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * L;
         }
         else if (c->type == 9)
@@ -1826,6 +1862,39 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             world->angularVelocities[c->bodyA] = wA + iA * (ratio * impulse);
             world->angularVelocities[c->bodyB] = wB + iB * impulse;
         }
+        else if (c->type == 10)
+        {
+            // Ratchet: the revolute limit row, sign-folded so the free
+            // direction never feels it: C' = s*(angle - engaged) >= 0,
+            // speculative when open, stiff-soft when violated.
+            float s = c->motorSpeed > 0.0f ? 1.0f : -1.0f;
+            float iA = world->invInertia[c->bodyA];
+            float iB = world->invInertia[c->bodyB];
+            float angleNow = c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                             world->deltaRotations[c->bodyB]);
+            float C = s * angleNow;
+            float bias = 0.0f;
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (C > 0.0f)
+            {
+                bias = C * invH; // speculative: stop exactly at the tooth
+            }
+            else if (useBias)
+            {
+                bias = c->softness.biasRate * C;
+                massScale = c->softness.massScale;
+                impulseScale = c->softness.impulseScale;
+            }
+            float cdot = s * (wB - wA);
+            float impulse = -massScale * c->axialMass * (cdot + bias) - impulseScale * c->impulse.x;
+            float next = c->impulse.x + impulse;
+            next = next > 0.0f ? next : 0.0f;
+            impulse = next - c->impulse.x;
+            c->impulse.x = next;
+            world->angularVelocities[c->bodyA] = wA - iA * (s * impulse);
+            world->angularVelocities[c->bodyB] = wB + iB * (s * impulse);
+        }
         else if (c->type == 9)
         {
             // Pulley: Cdot = -dot(uA, vpA) - ratio * dot(uB, vpB),
@@ -2217,6 +2286,9 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
         break;
     case 9: // pulley: A-side rope tension (B side feels ratio times this)
         *force = m2AbsF(impulse.x) * invH;
+        break;
+    case 10: // ratchet: pure holding torque
+        *torque = m2AbsF(impulse.x) * invH;
         break;
     default: // wheel: (perp, spring) linear, motor as torque
     {

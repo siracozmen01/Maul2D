@@ -23,6 +23,7 @@ extern "C"
         m2_mouseJoint = 7,
         m2_gearJoint = 8,
         m2_pulleyJoint = 9,
+        m2_ratchetJoint = 10,
     } m2JointType;
 
     typedef struct m2JointId
@@ -214,6 +215,23 @@ extern "C"
         int32_t internalValue;
     } m2PulleyJointDef;
 
+    /// A ratchet: relative rotation runs free in the ratchet's sign
+    /// direction and clicks tooth by tooth; it cannot run back past
+    /// the last engaged tooth (socket wrench, winch, turnstile).
+    /// ratchet = tooth angle in radians, sign = the free direction;
+    /// phase offsets the tooth positions. Pin the bodies with their
+    /// own joints; the ratchet only owns rotation, multi-turn exact.
+    typedef struct m2RatchetJointDef
+    {
+        m2BodyId bodyIdA;
+        m2BodyId bodyIdB;
+        float ratchet; // nonzero tooth angle, sign = free direction
+        float phase;
+        uint64_t userData;
+        bool collideConnected;
+        int32_t internalValue;
+    } m2RatchetJointDef;
+
     /// No rows at all: its only effect is collideConnected=false,
     /// switching collision OFF between two bodies for its lifetime.
     typedef struct m2FilterJointDef
@@ -232,6 +250,7 @@ extern "C"
     m2FilterJointDef m2DefaultFilterJointDef(void);
     m2GearJointDef m2DefaultGearJointDef(void);
     m2PulleyJointDef m2DefaultPulleyJointDef(void);
+    m2RatchetJointDef m2DefaultRatchetJointDef(void);
     m2MotorJointDef m2DefaultMotorJointDef(void);
     m2MouseJointDef m2DefaultMouseJointDef(void);
 
@@ -246,6 +265,7 @@ extern "C"
     m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def);
     m2JointId m2CreateGearJoint(m2WorldId worldId, const m2GearJointDef* def);
     m2JointId m2CreatePulleyJoint(m2WorldId worldId, const m2PulleyJointDef* def);
+    m2JointId m2CreateRatchetJoint(m2WorldId worldId, const m2RatchetJointDef* def);
     m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def);
     m2JointId m2CreateMouseJoint(m2WorldId worldId, const m2MouseJointDef* def);
     void m2DestroyJoint(m2JointId jointId);
@@ -344,6 +364,9 @@ extern "C"
     float m2PulleyJoint_GetLengthB(m2JointId jointId);
     m2Pos2 m2PulleyJoint_GetGroundAnchorA(m2JointId jointId);
     m2Pos2 m2PulleyJoint_GetGroundAnchorB(m2JointId jointId);
+
+    float m2RatchetJoint_GetRatchet(m2JointId jointId);
+    float m2RatchetJoint_GetPhase(m2JointId jointId);
     void m2MouseJoint_SetTarget(m2JointId jointId, m2Pos2 target);
     m2Pos2 m2MouseJoint_GetTarget(m2JointId jointId);
     float m2MouseJoint_GetMaxForce(m2JointId jointId);

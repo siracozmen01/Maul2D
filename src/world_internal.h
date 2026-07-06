@@ -333,6 +333,7 @@ enum
     m2_opEmitParticle = 53,
     m2_opDestroyParticle = 54,
     m2_opSetParticleVelocity = 55,
+    m2_opCreateRatchetJoint = 56,
 };
 
 // Journaled joint parameter channel (op 16).

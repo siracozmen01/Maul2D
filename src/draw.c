@@ -130,10 +130,10 @@ void m2World_Draw(m2WorldId worldId, const m2DebugDraw* draw)
             {
                 continue; // a filter joint is the absence of contact: nothing to draw
             }
-            if (type == 8)
+            if (type == 8 || type == 10)
             {
-                // Gear: the anchor slots carry phase-tracking rotation
-                // state, not anchors; draw the coupling hub to hub.
+                // Gear and ratchet: the anchor slots carry phase-tracking
+                // rotation state, not anchors; draw the coupling hub to hub.
                 m2Pos2 ca = world->transforms[world->jointBodyA[j]].p;
                 m2Pos2 cb = world->transforms[world->jointBodyB[j]].p;
                 draw->drawSegment(ca, cb, m2_colorJoint, draw->context);
