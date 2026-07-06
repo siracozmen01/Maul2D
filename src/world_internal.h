@@ -118,6 +118,7 @@ typedef struct m2World
     float* jointBreakForce;  // 0 = unbreakable (snapshot state)
     uint8_t* jointCollide;   // 0 = connected bodies never pair (snapshot state)
     m2Pos2* jointTargets;    // mouse joints: world target (snapshot state)
+    m2Pos2* jointTargetsB;   // pulley: second ground anchor (snapshot state)
     uint64_t* jointUserData; // opaque (snapshot state)
     float* jointBreakTorque;
     uint16_t* jointGenerations;
@@ -277,6 +278,7 @@ enum
     m2_opJointUserData = 49,
     m2_opSetDominance = 50,
     m2_opCreateGearJoint = 51,
+    m2_opCreatePulleyJoint = 52,
 };
 
 // Journaled joint parameter channel (op 16).
@@ -298,6 +300,7 @@ enum
     m2_jointParamMinLength = 13, // distance only; resets impulses
     m2_jointParamMaxLength = 14,
     m2_jointParamGearRatio = 15,
+    m2_jointParamPulleyRatio = 16,
 };
 
 // Convex distance and casts (src/distance.c, slice 63): one GJK

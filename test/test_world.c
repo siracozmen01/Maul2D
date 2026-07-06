@@ -870,6 +870,19 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.bodyIdB = b;
             made = m2CreateFilterJoint(mirror, &jd);
         }
+        else if (type == m2_pulleyJoint)
+        {
+            m2PulleyJointDef jd = m2DefaultPulleyJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.groundAnchorA = m2PulleyJoint_GetGroundAnchorA(id);
+            jd.groundAnchorB = m2PulleyJoint_GetGroundAnchorB(id);
+            jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
+            jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
+            jd.ratio = m2PulleyJoint_GetRatio(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
+            made = m2CreatePulleyJoint(mirror, &jd);
+        }
         else if (type == m2_gearJoint)
         {
             m2GearJointDef jd = m2DefaultGearJointDef();
@@ -1113,6 +1126,13 @@ static void TestMirrorRebuild(void)
     wj.angularHertz = 6.0f;
     wj.angularDampingRatio = 0.8f;
     m2CreateWeldJoint(world, &wj);
+    m2PulleyJointDef hoist = m2DefaultPulleyJointDef();
+    hoist.bodyIdA = boxB;
+    hoist.bodyIdB = boxD;
+    hoist.groundAnchorA = (m2Pos2){-1.0, 9.0};
+    hoist.groundAnchorB = (m2Pos2){3.0, 9.0};
+    hoist.ratio = 1.5f;
+    m2CreatePulleyJoint(world, &hoist);
     m2GearJointDef cog = m2DefaultGearJointDef();
     cog.bodyIdA = boxB;
     cog.bodyIdB = boxD;

@@ -1131,6 +1131,111 @@ static void TestDistanceRange(void)
     m2DestroyWorld(world);
 }
 
+// The pulley: a rope over two fixed world points. Heavy side sinks,
+// light side rises, the rope total is conserved; a ratio-2 machine
+// balances double the mass; a live retune recaptures the total and
+// the machine re-decides without snapping.
+static void TestPulleyJoint(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, -10.0f});
+
+    m2Circle disc = {{0.0f, 0.0f}, 0.4f};
+
+    // Machine 1: equal ratio, unequal masses. The heavy side wins.
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.type = m2_dynamicBody;
+    hd.position = (m2Pos2){-2.0, 2.0};
+    m2BodyId heavy = m2CreateBody(world, &hd);
+    m2ShapeDef hs = m2DefaultShapeDef();
+    hs.density = 4.0f;
+    m2CreateCircleShape(heavy, &hs, &disc);
+    m2BodyDef ld = m2DefaultBodyDef();
+    ld.type = m2_dynamicBody;
+    ld.position = (m2Pos2){2.0, 2.0};
+    m2BodyId light = m2CreateBody(world, &ld);
+    m2ShapeDef ls = m2DefaultShapeDef();
+    ls.density = 1.0f;
+    m2CreateCircleShape(light, &ls, &disc);
+    m2PulleyJointDef pd = m2DefaultPulleyJointDef();
+    pd.bodyIdA = heavy;
+    pd.bodyIdB = light;
+    pd.groundAnchorA = (m2Pos2){-2.0, 4.0};
+    pd.groundAnchorB = (m2Pos2){2.0, 4.0};
+    m2JointId rope = m2CreatePulleyJoint(world, &pd);
+    CHECK(m2PulleyJoint_GetRatio(rope) == 1.0f, "the ratio reads back");
+    float spawnA = m2PulleyJoint_GetLengthA(rope);
+    CHECK(spawnA > 1.9f && spawnA < 2.1f, "the A rope measures its spawn length");
+    m2Pos2 gA = m2PulleyJoint_GetGroundAnchorA(rope);
+    CHECK(gA.x == -2.0 && gA.y == 4.0, "the ground anchor reads back");
+
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 pHeavy = m2Body_GetPosition(heavy);
+    m2Pos2 pLight = m2Body_GetPosition(light);
+    CHECK(pHeavy.y < 1.7, "the heavy side sinks");
+    CHECK(pLight.y > 2.3, "the light side rises");
+    float total = m2PulleyJoint_GetLengthA(rope) + m2PulleyJoint_GetLengthB(rope);
+    CHECK(total > 3.95f && total < 4.05f, "the rope total is conserved");
+    CHECK(m2Joint_GetReactionForce(rope) > 0.0f, "the rope carries tension");
+
+    // Machine 2: ratio 2 balances double the mass (the B side feels
+    // twice the A-side tension).
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.type = m2_dynamicBody;
+    ad.position = (m2Pos2){6.0, 2.0};
+    m2BodyId counter = m2CreateBody(world, &ad);
+    m2ShapeDef as = m2DefaultShapeDef();
+    as.density = 1.0f;
+    m2CreateCircleShape(counter, &as, &disc);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){10.0, 2.0};
+    m2BodyId load = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.density = 2.0f;
+    m2CreateCircleShape(load, &bs, &disc);
+    m2PulleyJointDef bal = m2DefaultPulleyJointDef();
+    bal.bodyIdA = counter;
+    bal.bodyIdB = load;
+    bal.groundAnchorA = (m2Pos2){6.0, 4.0};
+    bal.groundAnchorB = (m2Pos2){10.0, 4.0};
+    bal.ratio = 2.0f;
+    m2JointId scale = m2CreatePulleyJoint(world, &bal);
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 pCounter = m2Body_GetPosition(counter);
+    m2Pos2 pLoad = m2Body_GetPosition(load);
+    CHECK(pCounter.y > 1.85 && pCounter.y < 2.15, "the counterweight holds its height");
+    CHECK(pLoad.y > 1.85 && pLoad.y < 2.15, "double mass balances at ratio 2");
+
+    // Live retune: at ratio 1 the double-mass side wins; the total is
+    // recaptured at the retune so the machine re-decides, no snap.
+    m2PulleyJoint_SetRatio(scale, 1.0f);
+    CHECK(m2PulleyJoint_GetRatio(scale) == 1.0f, "the new ratio reads back");
+    float c0 = m2PulleyJoint_GetLengthA(scale) + m2PulleyJoint_GetLengthB(scale);
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 pCounter2 = m2Body_GetPosition(counter);
+    m2Pos2 pLoad2 = m2Body_GetPosition(load);
+    CHECK(pLoad2.y < pLoad.y - 0.1, "the heavy side wins after the retune");
+    CHECK(pCounter2.y > pCounter.y + 0.1, "the counterweight gives way");
+    float c1 = m2PulleyJoint_GetLengthA(scale) + m2PulleyJoint_GetLengthB(scale);
+    CHECK(c1 > c0 - 0.05f && c1 < c0 + 0.05f, "the recaptured total is conserved");
+
+    m2DestroyWorld(world);
+}
+
 // The gear joint: two pinned flywheels coupled at a ratio; drive
 // one, the other counter-spins scaled; retune the ratio live; the
 // phase survives many full turns.
@@ -1540,6 +1645,7 @@ int main(void)
     TestMotorAndMouseJoints();
     TestDistanceRange();
     TestGearJoint();
+    TestPulleyJoint();
     TestJointBreaking();
     TestBreakRollback();
 

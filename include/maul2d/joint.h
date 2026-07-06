@@ -22,6 +22,7 @@ extern "C"
         m2_motorJoint = 6,
         m2_mouseJoint = 7,
         m2_gearJoint = 8,
+        m2_pulleyJoint = 9,
     } m2JointType;
 
     typedef struct m2JointId
@@ -190,6 +191,27 @@ extern "C"
         int32_t internalValue;
     } m2GearJointDef;
 
+    /// A rope over two fixed world points: lengthA + ratio * lengthB
+    /// stays at the total measured when the joint is created (the rope
+    /// is as long as you spawned it; there is no length knob). ratio
+    /// gives mechanical advantage: the B side feels ratio times the
+    /// A-side tension. The constraint is an equality, the classic
+    /// counterweight machine; a fully slack side goes limp near its
+    /// ground anchor instead of pushing.
+    typedef struct m2PulleyJointDef
+    {
+        m2BodyId bodyIdA;
+        m2BodyId bodyIdB;
+        m2Pos2 groundAnchorA; // world point the A rope hangs from
+        m2Pos2 groundAnchorB;
+        m2Vec2 localAnchorA; // rope attach point in body A's frame
+        m2Vec2 localAnchorB;
+        float ratio; // must be positive
+        uint64_t userData;
+        bool collideConnected;
+        int32_t internalValue;
+    } m2PulleyJointDef;
+
     /// No rows at all: its only effect is collideConnected=false,
     /// switching collision OFF between two bodies for its lifetime.
     typedef struct m2FilterJointDef
@@ -207,6 +229,7 @@ extern "C"
     m2WheelJointDef m2DefaultWheelJointDef(void);
     m2FilterJointDef m2DefaultFilterJointDef(void);
     m2GearJointDef m2DefaultGearJointDef(void);
+    m2PulleyJointDef m2DefaultPulleyJointDef(void);
     m2MotorJointDef m2DefaultMotorJointDef(void);
     m2MouseJointDef m2DefaultMouseJointDef(void);
 
@@ -220,6 +243,7 @@ extern "C"
     m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def);
     m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def);
     m2JointId m2CreateGearJoint(m2WorldId worldId, const m2GearJointDef* def);
+    m2JointId m2CreatePulleyJoint(m2WorldId worldId, const m2PulleyJointDef* def);
     m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def);
     m2JointId m2CreateMouseJoint(m2WorldId worldId, const m2MouseJointDef* def);
     void m2DestroyJoint(m2JointId jointId);
@@ -308,6 +332,16 @@ extern "C"
     float m2MotorJoint_GetCorrectionFactor(m2JointId jointId);
     void m2GearJoint_SetRatio(m2JointId jointId, float ratio); // journaled
     float m2GearJoint_GetRatio(m2JointId jointId);
+
+    /// Retuning a pulley recaptures the rope total from the current
+    /// geometry so the machine does not snap; accumulated impulse is
+    /// dropped like a distance retarget. Lengths read live.
+    void m2PulleyJoint_SetRatio(m2JointId jointId, float ratio); // journaled
+    float m2PulleyJoint_GetRatio(m2JointId jointId);
+    float m2PulleyJoint_GetLengthA(m2JointId jointId);
+    float m2PulleyJoint_GetLengthB(m2JointId jointId);
+    m2Pos2 m2PulleyJoint_GetGroundAnchorA(m2JointId jointId);
+    m2Pos2 m2PulleyJoint_GetGroundAnchorB(m2JointId jointId);
     void m2MouseJoint_SetTarget(m2JointId jointId, m2Pos2 target);
     m2Pos2 m2MouseJoint_GetTarget(m2JointId jointId);
     float m2MouseJoint_GetMaxForce(m2JointId jointId);

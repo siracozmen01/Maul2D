@@ -1263,6 +1263,35 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             float k = ratio * ratio * iA + iB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
         }
+        else if (c->type == 9)
+        {
+            // Pulley (b2 v2.4 reconciliation): equality constraint
+            // C = total - lengthA - ratio * lengthB with unit rope
+            // directions frozen at prepare. uA rides the axis slot,
+            // uB the perp slot, ratio the motorSpeed slot. A side
+            // shorter than 10 slop goes limp (zero direction), the
+            // reference's slack guard.
+            float ratio = world->jointLength[j];
+            m2Vec2 armA = Rotate(qA, world->jointLocalAnchorA[j]);
+            m2Vec2 armB = Rotate(qB, world->jointLocalAnchorB[j]);
+            m2Vec2 uA = {(float)(world->transforms[bodyA].p.x - world->jointTargets[j].x) + armA.x,
+                         (float)(world->transforms[bodyA].p.y - world->jointTargets[j].y) + armA.y};
+            m2Vec2 uB = {(float)(world->transforms[bodyB].p.x - world->jointTargetsB[j].x) + armB.x,
+                         (float)(world->transforms[bodyB].p.y - world->jointTargetsB[j].y) +
+                             armB.y};
+            float lengthA = sqrtf(uA.x * uA.x + uA.y * uA.y);
+            float lengthB = sqrtf(uB.x * uB.x + uB.y * uB.y);
+            c->axis =
+                lengthA > 0.05f ? (m2Vec2){uA.x / lengthA, uA.y / lengthA} : (m2Vec2){0.0f, 0.0f};
+            c->perp =
+                lengthB > 0.05f ? (m2Vec2){uB.x / lengthB, uB.y / lengthB} : (m2Vec2){0.0f, 0.0f};
+            c->baseC = world->jointRefAngle[j] - lengthA - ratio * lengthB;
+            c->motorSpeed = ratio; // carried into the solve
+            float ruA = Cross(c->rA, c->axis);
+            float ruB = Cross(c->rB, c->perp);
+            float k = mA + iA * ruA * ruA + ratio * ratio * (mB + iB * ruB * ruB);
+            c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
+        }
         else if (c->type == 7)
         {
             // Mouse: only body B has rows. Grab arm rB comes from the
@@ -1383,6 +1412,23 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
             float L = c->impulse.x;
             world->angularVelocities[c->bodyA] += world->invInertia[c->bodyA] * (c->motorSpeed * L);
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * L;
+        }
+        else if (c->type == 9)
+        {
+            // Pulley: PA = -L*uA on A, PB = -ratio*L*uB on B.
+            float L = c->impulse.x;
+            m2Vec2 PA = {-L * c->axis.x, -L * c->axis.y};
+            m2Vec2 PB = {-c->motorSpeed * L * c->perp.x, -c->motorSpeed * L * c->perp.y};
+            float mA = world->invMass[c->bodyA];
+            float iA = world->invInertia[c->bodyA];
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            world->linearVelocities[c->bodyA].x += mA * PA.x;
+            world->linearVelocities[c->bodyA].y += mA * PA.y;
+            world->angularVelocities[c->bodyA] += iA * Cross(c->rA, PA);
+            world->linearVelocities[c->bodyB].x += mB * PB.x;
+            world->linearVelocities[c->bodyB].y += mB * PB.y;
+            world->angularVelocities[c->bodyB] += iB * Cross(c->rB, PB);
         }
         else if (c->type == 7)
         {
@@ -1747,6 +1793,46 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             world->angularVelocities[c->bodyA] = wA + iA * (ratio * impulse);
             world->angularVelocities[c->bodyB] = wB + iB * impulse;
         }
+        else if (c->type == 9)
+        {
+            // Pulley: Cdot = -dot(uA, vpA) - ratio * dot(uB, vpB),
+            // stiff-biased with C tracked through per-body position
+            // deltas against the frozen rope directions.
+            float ratio = c->motorSpeed;
+            float mA = world->invMass[c->bodyA];
+            float iA = world->invInertia[c->bodyA];
+            float mB = world->invMass[c->bodyB];
+            float iB = world->invInertia[c->bodyB];
+            float bias = 0.0f;
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (useBias)
+            {
+                m2Vec2 dsA = {world->deltaPositions[c->bodyA].x + (drA.x - c->rA.x),
+                              world->deltaPositions[c->bodyA].y + (drA.y - c->rA.y)};
+                m2Vec2 dsB = {world->deltaPositions[c->bodyB].x + (drB.x - c->rB.x),
+                              world->deltaPositions[c->bodyB].y + (drB.y - c->rB.y)};
+                float C = c->baseC - (dsA.x * c->axis.x + dsA.y * c->axis.y) -
+                          ratio * (dsB.x * c->perp.x + dsB.y * c->perp.y);
+                bias = c->softness.massScale * c->softness.biasRate * C;
+                massScale = c->softness.massScale;
+                impulseScale = c->softness.impulseScale;
+            }
+            m2Vec2 vpA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
+            m2Vec2 vpB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
+            float cdot = -(vpA.x * c->axis.x + vpA.y * c->axis.y) -
+                         ratio * (vpB.x * c->perp.x + vpB.y * c->perp.y);
+            float impulse = -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
+            c->impulse.x += impulse;
+            m2Vec2 PA = {-impulse * c->axis.x, -impulse * c->axis.y};
+            m2Vec2 PB = {-ratio * impulse * c->perp.x, -ratio * impulse * c->perp.y};
+            world->linearVelocities[c->bodyA].x = vA.x + mA * PA.x;
+            world->linearVelocities[c->bodyA].y = vA.y + mA * PA.y;
+            world->angularVelocities[c->bodyA] = wA + iA * Cross(c->rA, PA);
+            world->linearVelocities[c->bodyB].x = vB.x + mB * PB.x;
+            world->linearVelocities[c->bodyB].y = vB.y + mB * PB.y;
+            world->angularVelocities[c->bodyB] = wB + iB * Cross(c->rB, PB);
+        }
         else if (c->type == 7)
         {
             // Mouse joint (reference solve, always biased): a soft spin
@@ -2094,6 +2180,9 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
         break;
     case 8: // gear: pure torque coupling
         *torque = m2AbsF(impulse.x) * invH;
+        break;
+    case 9: // pulley: A-side rope tension (B side feels ratio times this)
+        *force = m2AbsF(impulse.x) * invH;
         break;
     default: // wheel: (perp, spring) linear, motor as torque
     {

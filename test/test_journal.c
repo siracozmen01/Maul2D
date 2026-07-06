@@ -228,6 +228,13 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     cogDef.ratio = 2.0f;
     m2JointId cog = m2CreateGearJoint(world, &cogDef); // op 51
     m2GearJoint_SetRatio(cog, 1.5f);                   // param 15
+    m2PulleyJointDef hoistDef = m2DefaultPulleyJointDef();
+    hoistDef.bodyIdA = cylinder;
+    hoistDef.bodyIdB = sidecar;
+    hoistDef.groundAnchorA = (m2Pos2){-1.0, 9.0};
+    hoistDef.groundAnchorB = (m2Pos2){3.0, 9.0};
+    m2JointId hoist = m2CreatePulleyJoint(world, &hoistDef); // op 52
+    m2PulleyJoint_SetRatio(hoist, 2.0f);                     // param 16
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

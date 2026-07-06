@@ -150,6 +150,14 @@ meshed cogs, negative for belts) with an accumulated phase that
 stays exact across any number of full turns; pin the bodies with
 their own joints, the gear only owns rotation.
 
+The pulley joint runs a rope over two fixed world points: lengthA
+plus ratio times lengthB stays at the total measured when you create
+it, so there is no length knob to mis-set. The B side feels ratio
+times the A-side tension (a ratio-2 hoist balances double the mass);
+retuning the ratio recaptures the total from the current geometry so
+the machine re-decides instead of snapping, and a side that fully
+unspools goes limp near its ground anchor rather than pushing.
+
 
 The motor joint drives one body's transform toward offsets from
 another with force and torque budgets: moving platforms retarget

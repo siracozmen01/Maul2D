@@ -209,7 +209,25 @@ static void DoRandomOp(m2WorldId world)
         m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
         bool collide = Pick(4) == 0;
-        uint32_t type = Pick(9);
+        uint32_t type = Pick(10);
+        if (type == 9)
+        {
+            m2PulleyJointDef jd = m2DefaultPulleyJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.collideConnected = collide;
+            m2Pos2 pa = m2Body_GetPosition(a);
+            m2Pos2 pb = m2Body_GetPosition(b);
+            float sideA = (float)Pick(5) - 2.0f;
+            float riseA = 2.0f + (float)Pick(4);
+            float sideB = (float)Pick(5) - 2.0f;
+            float riseB = 2.0f + (float)Pick(4);
+            jd.groundAnchorA = (m2Pos2){pa.x + (double)sideA, pa.y + (double)riseA};
+            jd.groundAnchorB = (m2Pos2){pb.x + (double)sideB, pb.y + (double)riseB};
+            jd.ratio = 0.5f + (float)Pick(4) * 0.5f;
+            m2CreatePulleyJoint(world, &jd);
+            return;
+        }
         if (type == 8)
         {
             m2GearJointDef jd = m2DefaultGearJointDef();

@@ -30,8 +30,9 @@
 #define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
 #define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
 #define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
+#define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 25u
+#define M2_SNAPSHOT_VERSION 26u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -127,6 +128,7 @@ static int32_t ShapeTreeIndex(const m2World* world, int32_t shapeIndex)
 static float RelativeJointAngle(m2Rot qA, m2Rot qB);
 static int32_t JointSlotChecked(const m2World* world, m2JointId jointId);
 static int32_t TypedJointSlot(m2World* world, m2JointId jointId, uint8_t type);
+static float PulleyLiveLength(m2World* world, int32_t index, int32_t side);
 
 static void PushMoved(m2World* world, int32_t shapeIndex)
 {
@@ -1013,6 +1015,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointBreakForce, jointCap, float);
     M2_ALLOC(jointCollide, jointCap, uint8_t);
     M2_ALLOC(jointTargets, jointCap, m2Pos2);
+    M2_ALLOC(jointTargetsB, jointCap, m2Pos2);
     M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
@@ -1187,6 +1190,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointBreakForce);
     m2Free(world->jointCollide);
     m2Free(world->jointTargets);
+    m2Free(world->jointTargetsB);
     m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
@@ -1561,6 +1565,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointCollide, (size_t)world->jointCapacity * sizeof(uint8_t));
     M2_BLOCK(world->jointTargets, (size_t)world->jointCapacity * sizeof(m2Pos2));
+    M2_BLOCK(world->jointTargetsB, (size_t)world->jointCapacity * sizeof(m2Pos2));
     M2_BLOCK(world->jointUserData, (size_t)world->jointCapacity * sizeof(uint64_t));
     M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
@@ -4165,6 +4170,7 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointBreakTorque[index] = 0.0f;
     world->jointCollide[index] = 1;
     world->jointTargets[index] = (m2Pos2){0.0, 0.0};
+    world->jointTargetsB[index] = (m2Pos2){0.0, 0.0};
     world->jointUserData[index] = 0;
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
@@ -4579,6 +4585,14 @@ void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, f
         break;
     case m2_jointParamGearRatio:
         world->jointLength[index] = value; // phase carries over on purpose
+        break;
+    case m2_jointParamPulleyRatio:
+        // Recapture the rope total from current geometry so the
+        // machine does not snap; drop memory like a distance retarget.
+        world->jointRefAngle[index] =
+            PulleyLiveLength(world, index, 0) + value * PulleyLiveLength(world, index, 1);
+        world->jointLength[index] = value;
+        world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
         break;
     default:
         world->jointUpper[index] = value;
@@ -5177,6 +5191,133 @@ float m2GearJoint_GetRatio(m2JointId jointId)
     m2World* world = WorldFromIndex(jointId.world0);
     int32_t index = world != NULL ? TypedJointSlot(world, jointId, 8) : -1;
     return index >= 0 ? world->jointLength[index] : 0.0f;
+}
+
+m2PulleyJointDef m2DefaultPulleyJointDef(void)
+{
+    m2PulleyJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.ratio = 1.0f;
+    def.internalValue = M2_PLJOINT_COOKIE;
+    return def;
+}
+
+// Live rope length for one pulley side: attach point (f64 body origin
+// plus rotated local anchor) against the f64 ground anchor, a single
+// f64 crossing like every other narrowphase entry.
+static float PulleyLiveLength(m2World* world, int32_t index, int32_t side)
+{
+    int32_t body = side == 0 ? world->jointBodyA[index] : world->jointBodyB[index];
+    m2Vec2 la = side == 0 ? world->jointLocalAnchorA[index] : world->jointLocalAnchorB[index];
+    m2Pos2 g = side == 0 ? world->jointTargets[index] : world->jointTargetsB[index];
+    m2Rot q = world->transforms[body].q;
+    m2Vec2 arm = {q.c * la.x - q.s * la.y, q.s * la.x + q.c * la.y};
+    float dx = (float)(world->transforms[body].p.x - g.x) + arm.x;
+    float dy = (float)(world->transforms[body].p.y - g.y) + arm.y;
+    return sqrtf(dx * dx + dy * dy);
+}
+
+// Pulley registry mapping: ratio rides jointLength, the rope total
+// (constant) rides jointRefAngle, ground anchors ride jointTargets
+// (A side, shared with mouse) and jointTargetsB. The total is
+// CAPTURED from spawn geometry, the reference-angle convention: defs
+// carry no length knobs. All snapshot state.
+m2JointId m2CreatePulleyJoint(m2WorldId worldId, const m2PulleyJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_PLJOINT_COOKIE ||
+        !(def->ratio > 0.0f))
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2JointId jointId = FinishJoint(world, worldId, index, 9, bodyA, bodyB, def->localAnchorA,
+                                    def->localAnchorB, def->ratio, 0.0f, 0.0f);
+    world->jointTargets[index] = def->groundAnchorA;
+    world->jointTargetsB[index] = def->groundAnchorB;
+    float lengthA = PulleyLiveLength(world, index, 0);
+    float lengthB = PulleyLiveLength(world, index, 1);
+    world->jointRefAngle[index] = lengthA + def->ratio * lengthB;
+    world->jointUserData[index] = def->userData;
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2PulleyJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreatePulleyJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+void m2PulleyJoint_SetRatio(m2JointId jointId, float ratio)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    if (index < 0 || !(ratio > 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamPulleyRatio, ratio);
+}
+
+float m2PulleyJoint_GetRatio(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    return index >= 0 ? world->jointLength[index] : 0.0f;
+}
+
+float m2PulleyJoint_GetLengthA(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    return index >= 0 ? PulleyLiveLength(world, index, 0) : 0.0f;
+}
+
+float m2PulleyJoint_GetLengthB(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    return index >= 0 ? PulleyLiveLength(world, index, 1) : 0.0f;
+}
+
+m2Pos2 m2PulleyJoint_GetGroundAnchorA(m2JointId jointId)
+{
+    m2Pos2 zero = {0.0, 0.0};
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    return index >= 0 ? world->jointTargets[index] : zero;
+}
+
+m2Pos2 m2PulleyJoint_GetGroundAnchorB(m2JointId jointId)
+{
+    m2Pos2 zero = {0.0, 0.0};
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 9) : -1;
+    return index >= 0 ? world->jointTargetsB[index] : zero;
 }
 
 m2MotorJointDef m2DefaultMotorJointDef(void)
