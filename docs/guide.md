@@ -199,6 +199,18 @@ totals; touching within the engine's slop skin counts. Chain
 segments stay one-sided for both: approach from the ghost side and
 you pass through, exactly like rays and contacts.
 
+## What Maul leaves out, on purpose
+
+Some rival features are absent by decision, not omission. Pre-solve
+callbacks run user code mid-step, which is a replay hazard by
+construction; chains, filters, sensors and the filter joint cover
+the standard cases deterministically. World tuning toggles (contact
+hertz, speculative distance, warm starting) stay pinned because the
+physics itself is part of the determinism contract. Body names are
+what userData is for. Per-shape event enable flags guard costs Maul
+does not have. One rival idea is parked for later rather than
+rejected: conveyor-style surface speed on shapes.
+
 ## Rollback netcode in one paragraph
 
 Snapshot every confirmed frame. When a late input arrives, restore,
