@@ -9,6 +9,7 @@
 #include "maul2d/events.h"
 #include "maul2d/joint.h"
 #include "maul2d/math.h"
+#include "maul2d/particle.h"
 #include "maul2d/shape.h"
 #include "maul2d/world.h"
 

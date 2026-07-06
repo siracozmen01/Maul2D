@@ -65,8 +65,9 @@ jobs:
           "$BIN/test_queries$SUFFIX" | tee -a out.txt
           "$BIN/test_redteam$SUFFIX" | tee -a out.txt
           "$BIN/test_fuzz$SUFFIX" | tee -a out.txt
+          "$BIN/test_fluid$SUFFIX" | tee -a out.txt
           "$BIN/test_threads$SUFFIX" | tee -a out.txt
-          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,13 +87,13 @@ jobs:
       - name: Compare
         shell: bash
         run: |
-          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ)_HASH=' hashes/*.txt | tee all-hashes.txt
+          grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' hashes/*.txt | tee all-hashes.txt
           CELLS=9
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
           DISTINCT=$(sort -u all-hashes.txt | wc -l)
-          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "15" ]; then
+          if [ "$BAD" != "0" ] || [ "$DISTINCT" != "16" ]; then
             echo "DETERMINISM FAILURE: $DISTINCT distinct lines, $BAD with wrong cell count"
             exit 1
           fi
@@ -126,8 +127,9 @@ jobs:
           ./build/test_queries | tee -a out.txt
           ./build/test_redteam | tee -a out.txt
           ./build/test_fuzz | tee -a out.txt
+          ./build/test_fluid | tee -a out.txt
           ./build/test_threads | tee -a out.txt
-          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ)_HASH=' out.txt | tr -d '\r' > hash-sanitize-scalar.txt
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > hash-sanitize-scalar.txt
       - uses: actions/upload-artifact@v4
         with:
           name: hash-sanitize-scalar

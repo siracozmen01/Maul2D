@@ -31,6 +31,17 @@ extern "C"
         int32_t bodyCapacity; // fixed capacities for now (no growth yet)
         int32_t shapeCapacity;
         int32_t jointCapacity;
+        /// Fluids: particleCapacity > 0 builds the particle system
+        /// into the world for its whole lifetime (constant snapshot
+        /// shape keeps rollback safe across every point in history).
+        /// Parameters are pinned here like every other physics knob.
+        int32_t particleCapacity; // 0 = no fluids
+        float particleRadius;     // meters, floor 4x linear slop
+        float particleDensity;    // mass per area
+        float particleGravityScale;
+        float particlePressureStrength; // reference water default 0.05
+        float particleDampingStrength;  // reference default 1.0
+        float particleViscousStrength;  // reference default 0.25
         /// Solver worker threads including the caller (clamped to 8).
         /// NON-SEMANTIC by law: any worker count produces identical
         /// bits; it only changes how the same arithmetic is scheduled.

@@ -11,6 +11,7 @@
 #include "maul2d/body.h"
 #include "maul2d/events.h"
 #include "maul2d/joint.h"
+#include "maul2d/particle.h"
 #include "maul2d/world.h"
 #include "platform_thread.h"
 #include "shape_internal.h"
@@ -123,6 +124,25 @@ typedef struct m2World
     uint64_t* jointUserData;   // opaque (snapshot state)
     float* jointBreakTorque;
     uint16_t* jointGenerations;
+    // Fluids: slot-stable SoA, FIFO recycling, never compacted (the
+    // LiquidFun recipe is adopted later; its reordering storage is
+    // not). All snapshot state, walked only when capacity > 0.
+    m2Pos2* particlePositions;
+    m2Vec2* particleVelocities;
+    uint8_t* particleAlive;
+    uint16_t* particleGenerations;
+    int32_t* particleFreeQueue;
+    int32_t particleCapacity;
+    int32_t particleFreeHead;
+    int32_t particleFreeCount;
+    int32_t particleCount;
+    int32_t maxParticleIndex;
+    float particleRadius;
+    float particleDensity;
+    float particleGravityScale;
+    float particlePressureStrength;
+    float particleDampingStrength;
+    float particleViscousStrength;
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;
@@ -280,6 +300,9 @@ enum
     m2_opSetDominance = 50,
     m2_opCreateGearJoint = 51,
     m2_opCreatePulleyJoint = 52,
+    m2_opEmitParticle = 53,
+    m2_opDestroyParticle = 54,
+    m2_opSetParticleVelocity = 55,
 };
 
 // Journaled joint parameter channel (op 16).

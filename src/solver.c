@@ -2321,6 +2321,26 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             world->transforms[i].p.y += (double)(rlcOld.y - rlcNew.y);
         }
 
+        // Fluids storage slice: particles free-fall under scaled
+        // gravity in fixed index order, every substep, so the later
+        // pair solver and rigid coupling land at the same cadence.
+        if (world->particleCount > 0)
+        {
+            float pgx = h * world->particleGravityScale * world->gravity.x;
+            float pgy = h * world->particleGravityScale * world->gravity.y;
+            for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+            {
+                if (world->particleAlive[i] == 0)
+                {
+                    continue;
+                }
+                world->particleVelocities[i].x += pgx;
+                world->particleVelocities[i].y += pgy;
+                world->particlePositions[i].x += (double)(world->particleVelocities[i].x * h);
+                world->particlePositions[i].y += (double)(world->particleVelocities[i].y * h);
+            }
+        }
+
         m2SolveContinuous(world); // the last transform-mutating pass (M13)
         SolveJoints(world, joints, jointCount, false, invH);
         RunContactStageWide(world, constraints, colorStart, blockStart, m2_stageSolve, invH,

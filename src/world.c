@@ -32,7 +32,7 @@
 #define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 27u
+#define M2_SNAPSHOT_VERSION 28u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -903,6 +903,13 @@ m2WorldDef m2DefaultWorldDef(void)
     def.bodyCapacity = 1024;
     def.shapeCapacity = 2048;
     def.jointCapacity = 256;
+    def.particleCapacity = 0; // fluids are opt-in
+    def.particleRadius = 0.05f;
+    def.particleDensity = 1.0f;
+    def.particleGravityScale = 1.0f;
+    def.particlePressureStrength = 0.05f;
+    def.particleDampingStrength = 1.0f;
+    def.particleViscousStrength = 0.25f;
     def.internalValue = M2_WORLD_COOKIE;
     return def;
 }
@@ -912,6 +919,18 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     if (def == NULL || def->internalValue != M2_WORLD_COOKIE || def->bodyCapacity < 1 ||
         def->shapeCapacity < 1 || def->jointCapacity < 1)
     {
+        M2_ASSERT(false);
+        return m2_nullWorldId;
+    }
+    if (def->particleCapacity < 0 ||
+        (def->particleCapacity > 0 &&
+         (!(def->particleRadius >= 0.02f) || !(def->particleDensity > 0.0f) ||
+          !(def->particleGravityScale == def->particleGravityScale) ||
+          !(def->particlePressureStrength >= 0.0f) || !(def->particleDampingStrength >= 0.0f) ||
+          !(def->particleViscousStrength >= 0.0f))))
+    {
+        // Fluids config is validated loudly: the radius floor is 4x
+        // linear slop so the skin laws keep meaning.
         M2_ASSERT(false);
         return m2_nullWorldId;
     }
@@ -945,6 +964,13 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->jointCapacity = jointCap;
     world->treeNodeCapacity = 2 * shapeCap;
     world->pairCapacity = 8 * shapeCap;
+    world->particleCapacity = def->particleCapacity;
+    world->particleRadius = def->particleRadius;
+    world->particleDensity = def->particleDensity;
+    world->particleGravityScale = def->particleGravityScale;
+    world->particlePressureStrength = def->particlePressureStrength;
+    world->particleDampingStrength = def->particleDampingStrength;
+    world->particleViscousStrength = def->particleViscousStrength;
 
     bool ok = true;
 #define M2_ALLOC(field, count, type)                                                               \
@@ -1017,6 +1043,15 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointCollide, jointCap, uint8_t);
     M2_ALLOC(jointTargets, jointCap, m2Pos2);
     M2_ALLOC(jointTargetsB, jointCap, m2Pos2);
+    if (def->particleCapacity > 0)
+    {
+        int32_t particleCap = def->particleCapacity;
+        M2_ALLOC(particlePositions, particleCap, m2Pos2);
+        M2_ALLOC(particleVelocities, particleCap, m2Vec2);
+        M2_ALLOC(particleAlive, particleCap, uint8_t);
+        M2_ALLOC(particleGenerations, particleCap, uint16_t);
+        M2_ALLOC(particleFreeQueue, particleCap, int32_t);
+    }
     M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
@@ -1100,6 +1135,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         world->jointFreeQueue[i] = i;
     }
     world->jointFreeCount = jointCap;
+    for (int32_t i = 0; i < world->particleCapacity; ++i)
+    {
+        world->particleFreeQueue[i] = i;
+    }
+    world->particleFreeCount = world->particleCapacity;
     world->freeHead = 0;
     world->freeTail = 0;
     world->freeCount = cap;
@@ -1193,6 +1233,11 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointCollide);
     m2Free(world->jointTargets);
     m2Free(world->jointTargetsB);
+    m2Free(world->particlePositions);
+    m2Free(world->particleVelocities);
+    m2Free(world->particleAlive);
+    m2Free(world->particleGenerations);
+    m2Free(world->particleFreeQueue);
     m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
@@ -1294,7 +1339,7 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     // rebuild to the same roots, the solver has no constraints). Skip
     // it wholesale - bit-identical by construction, and a sleeping
     // city costs what a sleeping city should.
-    if (world->movedCount == 0)
+    if (world->movedCount == 0 && world->particleCount == 0)
     {
         bool anyoneStirring = false;
         for (int32_t i = 0; i < world->maxBodyIndex && !anyoneStirring; ++i)
@@ -1601,6 +1646,19 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->pairKeys, (size_t)world->pairCapacity * sizeof(uint64_t));
     M2_BLOCK(world->pairTouching, (size_t)world->pairCapacity * sizeof(uint8_t));
     M2_BLOCK(world->manifolds, (size_t)world->pairCapacity * sizeof(m2Manifold));
+    if (world->particleCapacity > 0)
+    {
+        size_t particleCap = (size_t)world->particleCapacity;
+        M2_BLOCK(world->particlePositions, particleCap * sizeof(m2Pos2));
+        M2_BLOCK(world->particleVelocities, particleCap * sizeof(m2Vec2));
+        M2_BLOCK(world->particleAlive, particleCap * sizeof(uint8_t));
+        M2_BLOCK(world->particleGenerations, particleCap * sizeof(uint16_t));
+        M2_BLOCK(world->particleFreeQueue, particleCap * sizeof(int32_t));
+        M2_BLOCK(&world->particleFreeHead, sizeof(int32_t));
+        M2_BLOCK(&world->particleFreeCount, sizeof(int32_t));
+        M2_BLOCK(&world->particleCount, sizeof(int32_t));
+        M2_BLOCK(&world->maxParticleIndex, sizeof(int32_t));
+    }
 #undef M2_BLOCK
     return cursor;
 }
@@ -1737,6 +1795,20 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->jointLowerImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointUpperImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointSpringImpulse[i], (int32_t)sizeof(float));
+    }
+    if (world->particleCapacity > 0)
+    {
+        h = m2Hash64(h, &world->particleCount, (int32_t)sizeof(int32_t));
+        for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+        {
+            h = m2Hash64(h, &world->particleAlive[i], 1);
+            if (world->particleAlive[i] == 0)
+            {
+                continue;
+            }
+            h = m2Hash64(h, &world->particlePositions[i], (int32_t)sizeof(m2Pos2));
+            h = m2Hash64(h, &world->particleVelocities[i], (int32_t)sizeof(m2Vec2));
+        }
     }
     return h;
 }
@@ -6106,6 +6178,170 @@ int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity)
         if (ids != NULL && total < capacity)
         {
             ids[total] = MakeShapeId(world, i);
+        }
+        total += 1;
+    }
+    return total;
+}
+
+// --- Fluids: storage surface (the solver arrives in later slices) ------------------
+
+static int32_t ParticleSlot(const m2World* world, m2ParticleId id)
+{
+    int32_t index = id.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->particleCapacity ||
+        world->particleAlive[index] == 0 || world->particleGenerations[index] != id.generation)
+    {
+        return -1;
+    }
+    return index;
+}
+
+m2ParticleId m2World_EmitParticle(m2WorldId worldId, m2Pos2 position, m2Vec2 velocity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || world->particleCapacity == 0)
+    {
+        M2_ASSERT(false); // no particle system in this world: misuse
+        return m2_nullParticleId;
+    }
+    if (!(position.x == position.x && position.y == position.y && velocity.x == velocity.x &&
+          velocity.y == velocity.y))
+    {
+        M2_ASSERT(false); // NaN screen, the def-validation law
+        return m2_nullParticleId;
+    }
+    if (world->particleFreeCount == 0)
+    {
+        // A full pool is a runtime fact, not misuse: pace emitters
+        // off m2World_GetParticleCount.
+        return m2_nullParticleId;
+    }
+    int32_t index = world->particleFreeQueue[world->particleFreeHead];
+    world->particleFreeHead = (world->particleFreeHead + 1) % world->particleCapacity;
+    world->particleFreeCount -= 1;
+    if (index + 1 > world->maxParticleIndex)
+    {
+        world->maxParticleIndex = index + 1;
+    }
+    world->particlePositions[index] = position;
+    world->particleVelocities[index] = velocity;
+    world->particleAlive[index] = 1;
+    world->particleCount += 1;
+    m2ParticleId id = {index + 1, worldId.index1, world->particleGenerations[index]};
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2Pos2 position;
+            m2Vec2 velocity;
+            m2ParticleId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.position = position;
+        record.velocity = velocity;
+        record.expected = id;
+        m2JournalRecord(world, m2_opEmitParticle, &record, (int32_t)sizeof(record));
+    }
+    return id;
+}
+
+void m2World_DestroyParticle(m2ParticleId particleId)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ParticleId id;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.id = particleId;
+        m2JournalRecord(world, m2_opDestroyParticle, &record, (int32_t)sizeof(record));
+    }
+    world->particleAlive[index] = 0;
+    world->particleGenerations[index] += 1; // retire under a fresh generation
+    world->particleFreeQueue[(world->particleFreeHead + world->particleFreeCount) %
+                             world->particleCapacity] = index;
+    world->particleFreeCount += 1;
+    world->particleCount -= 1;
+}
+
+bool m2Particle_IsValid(m2ParticleId particleId)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    return ParticleSlot(world, particleId) >= 0;
+}
+
+m2Pos2 m2Particle_GetPosition(m2ParticleId particleId)
+{
+    m2Pos2 zero = {0.0, 0.0};
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    return index >= 0 ? world->particlePositions[index] : zero;
+}
+
+m2Vec2 m2Particle_GetVelocity(m2ParticleId particleId)
+{
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    return index >= 0 ? world->particleVelocities[index] : zero;
+}
+
+void m2Particle_SetVelocity(m2ParticleId particleId, m2Vec2 velocity)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    if (index < 0 || !(velocity.x == velocity.x && velocity.y == velocity.y))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ParticleId id;
+            m2Vec2 velocity;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.id = particleId;
+        record.velocity = velocity;
+        m2JournalRecord(world, m2_opSetParticleVelocity, &record, (int32_t)sizeof(record));
+    }
+    world->particleVelocities[index] = velocity;
+}
+
+int32_t m2World_GetParticleCount(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    return world != NULL ? world->particleCount : 0;
+}
+
+int32_t m2World_GetParticles(m2WorldId worldId, m2ParticleId* ids, int32_t capacity)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            ids[total] = (m2ParticleId){i + 1, worldId.index1, world->particleGenerations[i]};
         }
         total += 1;
     }

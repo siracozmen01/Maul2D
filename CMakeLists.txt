@@ -112,6 +112,12 @@ target_link_libraries(test_fuzz PRIVATE maul2d)
 maul2d_apply_flags(test_fuzz)
 add_test(NAME fuzz COMMAND test_fuzz)
 
+add_executable(test_fluid test/test_fluid.c)
+target_include_directories(test_fluid PRIVATE src)
+target_link_libraries(test_fluid PRIVATE maul2d)
+maul2d_apply_flags(test_fluid)
+add_test(NAME fluid COMMAND test_fluid)
+
 add_executable(test_threads test/test_threads.c)
 target_link_libraries(test_threads PRIVATE maul2d)
 target_include_directories(test_threads PRIVATE src)

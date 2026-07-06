@@ -33,6 +33,7 @@ static m2WorldDef TestDef(void)
     def.bodyCapacity = 64;
     def.shapeCapacity = 64;
     def.jointCapacity = 32;
+    def.particleCapacity = 64; // the parade drives the particle ops too
     return def;
 }
 
@@ -243,6 +244,12 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2JointId swing = m2CreateRevoluteJoint(world, &swingDef);
     m2Joint_SetAngularSpringHertz(swing, 1.5f);         // param 10 on a revolute
     m2Joint_SetAngularSpringDampingRatio(swing, 0.25f); // param 11 on a revolute
+    m2ParticleId drop =
+        m2World_EmitParticle(world, (m2Pos2){0.5, 6.0}, (m2Vec2){0.0f, 0.0f}); // op 53
+    m2Particle_SetVelocity(drop, (m2Vec2){0.2f, 0.0f});                        // op 55
+    m2ParticleId drop2 = m2World_EmitParticle(world, (m2Pos2){0.7, 6.0}, (m2Vec2){0.0f, 0.0f});
+    m2World_DestroyParticle(drop); // op 54
+    (void)drop2;
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

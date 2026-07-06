@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 24u
+#define M2_JOURNAL_VERSION 25u
 
 typedef struct m2JournalHeader
 {
@@ -769,6 +769,43 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             m2JointId made = m2CreatePulleyJoint(worldId, &pj.def);
             M2_ASSERT(made.index1 == pj.expected.index1);
             (void)made;
+            break;
+        }
+        case m2_opEmitParticle:
+        {
+            struct m2OpEmit
+            {
+                m2Pos2 position;
+                m2Vec2 velocity;
+                m2ParticleId expected;
+            };
+            M2_READ_OP(struct m2OpEmit, em);
+            m2ParticleId made = m2World_EmitParticle(worldId, em.position, em.velocity);
+            M2_ASSERT(made.index1 == em.expected.index1);
+            (void)made;
+            break;
+        }
+        case m2_opDestroyParticle:
+        {
+            struct m2OpKillParticle
+            {
+                m2ParticleId id;
+            };
+            M2_READ_OP(struct m2OpKillParticle, kp);
+            kp.id.world0 = here;
+            m2World_DestroyParticle(kp.id);
+            break;
+        }
+        case m2_opSetParticleVelocity:
+        {
+            struct m2OpParticleVel
+            {
+                m2ParticleId id;
+                m2Vec2 velocity;
+            };
+            M2_READ_OP(struct m2OpParticleVel, pv);
+            pv.id.world0 = here;
+            m2Particle_SetVelocity(pv.id, pv.velocity);
             break;
         }
         case m2_opApplyTorque:
