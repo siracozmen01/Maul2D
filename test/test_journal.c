@@ -158,6 +158,7 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2ChainId chainId = m2CreateChain(cylinder, &chain); // op 20
     m2World_SetGravity(world, (m2Vec2){0.3f, -9.5f});    // op 21
     m2Shape_SetFriction(sacrificial, 0.9f);              // op 22 (before it dies)
+    m2Shape_SetTangentSpeed(sacrificial, 1.25f);         // op 22 param 2
     m2Shape_SetFilter(sacrificial, 0x2, 0xFFFFFFFFu, 0); // op 23
     m2DestroyShape(sacrificial);
     for (int32_t i = 0; i < 15; ++i)

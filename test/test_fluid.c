@@ -608,6 +608,42 @@ static void TestSurfaceTension(void)
     m2DestroyWorld(world);
 }
 
+// The fill helper: one call, one pool, deterministic layout.
+static void TestParticleFill(void)
+{
+    m2WorldDef def = FluidWorldDef(128);
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2Polygon tub = m2MakeBox(0.5f, 0.25f);
+    int32_t made =
+        m2World_FillPolygonWithParticles(world, &tub, (m2Pos2){5.0, 5.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    CHECK(made > 70 && made < 110, "the fill lands near area over stride squared");
+    CHECK(made == m2World_GetParticleCount(world), "every fill emit is a live particle");
+    m2ParticleId ids[128];
+    int32_t total = m2World_GetParticles(world, ids, 128);
+    for (int32_t i = 0; i < total; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(ids[i]);
+        CHECK(p.x > 4.49 && p.x < 5.51 && p.y > 4.74 && p.y < 5.26,
+              "every drop lands inside the polygon bounds");
+    }
+    m2WorldId twin = m2CreateWorld(&def);
+    int32_t madeTwin =
+        m2World_FillPolygonWithParticles(twin, &tub, (m2Pos2){5.0, 5.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    CHECK(madeTwin == made, "twin fills agree exactly");
+    CHECK(m2World_Hash(twin) == m2World_Hash(world), "twin fills agree to the bit");
+    m2DestroyWorld(twin);
+    m2DestroyWorld(world);
+
+    // A small pool fills to capacity and stops quietly.
+    m2WorldDef tiny = FluidWorldDef(16);
+    m2WorldId small = m2CreateWorld(&tiny);
+    int32_t granted =
+        m2World_FillPolygonWithParticles(small, &tub, (m2Pos2){0.0, 0.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    CHECK(granted == 16, "a full pool grants exactly its capacity");
+    m2DestroyWorld(small);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -666,6 +702,7 @@ int main(void)
     TestWaterChainAndSensor();
     TestBuoyancy();
     TestSurfaceTension();
+    TestParticleFill();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

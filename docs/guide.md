@@ -163,7 +163,9 @@ journal and hash the world produces. Emit with a position and
 velocity, destroy by id, read positions and velocities back, and
 enumerate with truthful totals; a full pool quietly returns the null
 id, so pace emitters off the count. Zero viscous strength is plain
-water; raise it for syrup. Emit takes behavior flags: tensile
+water; raise it for syrup. m2World_FillPolygonWithParticles pours
+a whole pool in one call (row-major on the reference stride,
+deterministic layout). Emit takes behavior flags: tensile
 particles attract their tensile neighbors (surface tension), so
 sparse spray beads up and clings instead of drifting apart; the def
 carries the two reference strengths if you want to retune the
@@ -228,6 +230,15 @@ joint def to restore contact. The filter joint is that switch with
 nothing else attached: `m2CreateFilterJoint` turns collision off
 between two bodies for the joint's lifetime, and destroying it turns
 collision back on, with end and begin events flowing as usual.
+
+## Conveyors
+
+Give a shape a tangentSpeed and its surface slides along the
+contact tangent: friction drags whatever rests on it toward belt
+speed. Positive speed drives riders toward +x on an upward-facing
+floor; a pair sums both shapes' speeds, the reference convention.
+Retuning is journaled and wakes the riders, so a stopped belt lets
+its cargo sleep and a restarted one picks it back up.
 
 ## Body dynamics
 

@@ -32,7 +32,7 @@
 #define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 29u
+#define M2_SNAPSHOT_VERSION 30u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1009,6 +1009,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(shapeDensity, shapeCap, float);
     M2_ALLOC(shapeFriction, shapeCap, float);
     M2_ALLOC(shapeRestitution, shapeCap, float);
+    M2_ALLOC(shapeTangentSpeed, shapeCap, float);
     M2_ALLOC(shapeUserData, shapeCap, uint64_t);
     M2_ALLOC(shapeBody, shapeCap, int32_t);
     M2_ALLOC(shapeNext, shapeCap, int32_t);
@@ -1217,6 +1218,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->shapeDensity);
     m2Free(world->shapeFriction);
     m2Free(world->shapeRestitution);
+    m2Free(world->shapeTangentSpeed);
     m2Free(world->shapeUserData);
     m2Free(world->shapeBody);
     m2Free(world->shapeNext);
@@ -1616,6 +1618,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->shapeDensity, shapeCap * sizeof(float));
     M2_BLOCK(world->shapeFriction, shapeCap * sizeof(float));
     M2_BLOCK(world->shapeRestitution, shapeCap * sizeof(float));
+    M2_BLOCK(world->shapeTangentSpeed, shapeCap * sizeof(float));
     M2_BLOCK(world->shapeUserData, shapeCap * sizeof(uint64_t));
     M2_BLOCK(world->shapeBody, shapeCap * sizeof(int32_t));
     M2_BLOCK(world->shapeNext, shapeCap * sizeof(int32_t));
@@ -2761,6 +2764,7 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
     world->shapeDensity[index] = def->density;
     world->shapeFriction[index] = def->friction;
     world->shapeRestitution[index] = def->restitution;
+    world->shapeTangentSpeed[index] = def->tangentSpeed;
     world->shapeUserData[index] = def->userData;
     world->shapeCategory[index] = def->categoryBits;
     world->shapeMask[index] = def->maskBits;
@@ -3305,10 +3309,61 @@ void m2SetShapeParamInternal(m2World* world, m2ShapeId shapeId, uint8_t param, f
     {
         world->shapeFriction[index] = value;
     }
+    else if (param == 2)
+    {
+        world->shapeTangentSpeed[index] = value;
+    }
     else
     {
         world->shapeRestitution[index] = value;
     }
+}
+
+void m2Shape_SetTangentSpeed(m2ShapeId shapeId, float speed)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    if (world != NULL && speed == speed)
+    {
+        m2SetShapeParamInternal(world, shapeId, 2, speed);
+        // A belt that changes speed must wake its riders.
+        int32_t index = shapeId.index1 - 1;
+        if (index >= 0 && index < world->shapeCapacity && world->shapeAlive[index] != 0)
+        {
+            int32_t body = world->shapeBody[index];
+            for (int32_t i = 0; i < world->pairCount; ++i)
+            {
+                int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+                int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+                if (a != index && b != index)
+                {
+                    continue;
+                }
+                int32_t otherBody = world->shapeBody[a == index ? b : a];
+                if (world->types[otherBody] == (uint8_t)m2_dynamicBody)
+                {
+                    world->asleep[otherBody] = 0;
+                    world->sleepTimes[otherBody] = 0.0f;
+                }
+            }
+            if (world->types[body] == (uint8_t)m2_dynamicBody)
+            {
+                world->asleep[body] = 0;
+                world->sleepTimes[body] = 0.0f;
+            }
+        }
+    }
+}
+
+float m2Shape_GetTangentSpeed(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = shapeId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->shapeCapacity ||
+        world->shapeAlive[index] == 0 || world->shapeGenerations[index] != shapeId.generation)
+    {
+        return 0.0f;
+    }
+    return world->shapeTangentSpeed[index];
 }
 
 void m2Shape_SetFriction(m2ShapeId shapeId, float friction)

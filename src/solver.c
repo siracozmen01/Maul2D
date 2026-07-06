@@ -120,6 +120,7 @@ typedef struct m2ContactConstraint
     m2Vec2 normal; // world frame
     float friction;
     float restitution;
+    float tangentSpeed; // conveyor: sum of both shapes (reference mixing)
     m2Softness softness;
     int32_t pointCount;
     m2ConstraintPoint points[2];
@@ -200,6 +201,7 @@ static int32_t PrepareContacts(m2World* world, m2ContactConstraint* constraints,
         c->invIB = iB;
         // Geometric-mean friction, max restitution (reference mixing).
         c->friction = sqrtf(world->shapeFriction[shapeA] * world->shapeFriction[shapeB]);
+        c->tangentSpeed = world->shapeTangentSpeed[shapeA] + world->shapeTangentSpeed[shapeB];
         float restA = world->shapeRestitution[shapeA];
         float restB = world->shapeRestitution[shapeB];
         c->restitution = m2MaxF(restA, restB);
@@ -378,7 +380,13 @@ static void SolveContactOne(m2World* world, m2ContactConstraint* c, float invH, 
                 m2ConstraintPoint* cp = &c->points[k];
                 m2Vec2 vrA = {vA.x - wA * cp->rA.y, vA.y + wA * cp->rA.x};
                 m2Vec2 vrB = {vB.x - wB * cp->rB.y, vB.y + wB * cp->rB.x};
-                float vt = (vrB.x - vrA.x) * tangent.x + (vrB.y - vrA.y) * tangent.y;
+                // Our tangent is the LEFT perp of the normal (the
+                // reference uses the right perp), so the belt term
+                // ADDS: positive tangentSpeed drives riders toward
+                // +x on an upward-facing floor, the reference's
+                // observable convention.
+                float vt =
+                    (vrB.x - vrA.x) * tangent.x + (vrB.y - vrA.y) * tangent.y + c->tangentSpeed;
                 float impulse = -cp->tangentMass * vt;
                 float maxFriction = c->friction * cp->normalImpulse;
                 float newImpulse =
@@ -600,6 +608,7 @@ typedef struct m2ContactBlock
     float relVel[2][M2_LANES];
     float normalMass[2][M2_LANES];
     float tangentMass[2][M2_LANES];
+    float tangentSpeed[M2_LANES];
     float normalImp[2][M2_LANES];
     float tangentImp[2][M2_LANES];
 } m2ContactBlock;
@@ -640,6 +649,7 @@ static int32_t PackRun(m2World* world, m2ContactConstraint* constraints, const i
                 block->normalX[lane] = 0.0f;
                 block->normalY[lane] = 1.0f;
                 block->friction[lane] = 0.0f;
+                block->tangentSpeed[lane] = 0.0f;
                 block->restitution[lane] = 0.0f;
                 block->biasRate[lane] = 0.0f;
                 block->massScale[lane] = 1.0f;
@@ -670,6 +680,7 @@ static int32_t PackRun(m2World* world, m2ContactConstraint* constraints, const i
             block->normalX[lane] = c->normal.x;
             block->normalY[lane] = c->normal.y;
             block->friction[lane] = c->friction;
+            block->tangentSpeed[lane] = c->tangentSpeed;
             block->restitution[lane] = c->restitution;
             block->biasRate[lane] = c->softness.biasRate;
             block->massScale[lane] = c->softness.massScale;
@@ -943,6 +954,7 @@ static void SolveBlock(m2World* world, m2ContactBlock* b, float invH, float minB
         m2f8 vrBx = m2F8NegMulAdd(awB, rBYk, avBx);
         m2f8 vrBy = m2F8MulAdd(awB, rBXk, avBy);
         m2f8 vt = m2F8MulAdd(m2F8Sub(vrBy, vrAy), nX, m2F8Mul(m2F8Sub(vrBx, vrAx), m2F8Neg(nY)));
+        vt = m2F8Add(vt, m2F8Load(b->tangentSpeed)); // left-perp tangent: belt term adds
         m2f8 tImp = m2F8Load(b->tangentImp[k]);
         m2f8 impulse = m2F8Neg(m2F8Mul(m2F8Load(b->tangentMass[k]), vt));
         m2f8 maxFriction = m2F8Mul(m2F8Load(b->friction), m2F8Load(b->normalImp[k]));

@@ -593,6 +593,8 @@ static void DoRandomOp(m2WorldId world)
         if (which == 0)
         {
             m2Shape_SetFriction(shape, PickUnit() * 0.9f);
+            float belt = (float)((int32_t)Pick(5) - 2) * 0.5f;
+            m2Shape_SetTangentSpeed(shape, belt);
         }
         else if (which == 1)
         {

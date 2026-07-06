@@ -68,6 +68,14 @@ extern "C"
     /// Live particle count. Thread class: reader.
     int32_t m2World_GetParticleCount(m2WorldId worldId);
 
+    /// Fill a convex polygon (given in world space at position) with
+    /// particles on the reference stride (0.75 diameters), row-major
+    /// bottom-up, left to right: deterministic by construction. Stops
+    /// quietly when the pool fills; returns the number emitted.
+    /// Thread class: writer (a composition of journaled emits).
+    int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* polygon,
+                                             m2Pos2 position, m2Vec2 velocity, uint32_t flags);
+
     /// Fill ids with live particles in ascending slot order; returns
     /// the truthful total even beyond capacity (the enumeration
     /// contract). NULL ids with zero capacity is a count query.

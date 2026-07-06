@@ -81,8 +81,9 @@ typedef struct m2World
     uint32_t* shapeCategory; // collision filter (snapshot state)
     uint32_t* shapeMask;
     int32_t* shapeGroup;
-    uint8_t* shapeSensor; // overlap-only shapes (snapshot state)
-    int32_t* shapeChain;  // owning chain slot, -1 = free-standing (snapshot state)
+    uint8_t* shapeSensor;     // overlap-only shapes (snapshot state)
+    float* shapeTangentSpeed; // conveyor surface speed (snapshot state)
+    int32_t* shapeChain;      // owning chain slot, -1 = free-standing (snapshot state)
     uint16_t* shapeGenerations;
     int32_t* shapeFreeQueue;
     int32_t shapeFreeHead;

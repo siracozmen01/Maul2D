@@ -793,6 +793,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             sd.density = m2Shape_GetDensity(shapes[s]);
             sd.friction = m2Shape_GetFriction(shapes[s]);
             sd.restitution = m2Shape_GetRestitution(shapes[s]);
+            sd.tangentSpeed = m2Shape_GetTangentSpeed(shapes[s]);
             sd.isSensor = m2Shape_IsSensor(shapes[s]);
             m2Shape_GetFilter(shapes[s], &sd.categoryBits, &sd.maskBits, &sd.groupIndex);
             sd.userData = m2Shape_GetUserData(shapes[s]);

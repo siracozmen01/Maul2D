@@ -29,6 +29,8 @@
 
 #include "world_internal.h"
 
+#include "maul2d/base.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -660,4 +662,55 @@ void m2SolveParticles(m2World* world, float dt)
         world->particlePositions[i].x += (double)(world->particleVelocities[i].x * dt);
         world->particlePositions[i].y += (double)(world->particleVelocities[i].y * dt);
     }
+}
+
+// Fill a convex polygon with particles at the reference stride,
+// row-major from the bottom-left of its bounds: a pool in one call.
+int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* polygon,
+                                         m2Pos2 position, m2Vec2 velocity, uint32_t flags)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL || polygon == NULL || polygon->count < 3 || world->particleCapacity == 0)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    float stride = 0.75f * 2.0f * world->particleRadius;
+    float minX = polygon->vertices[0].x;
+    float minY = polygon->vertices[0].y;
+    float maxX = minX;
+    float maxY = minY;
+    for (int32_t i = 1; i < polygon->count; ++i)
+    {
+        minX = m2MinF(minX, polygon->vertices[i].x);
+        minY = m2MinF(minY, polygon->vertices[i].y);
+        maxX = m2MaxF(maxX, polygon->vertices[i].x);
+        maxY = m2MaxF(maxY, polygon->vertices[i].y);
+    }
+    int32_t emitted = 0;
+    for (float y = minY + 0.5f * stride; y < maxY; y += stride)
+    {
+        for (float x = minX + 0.5f * stride; x < maxX; x += stride)
+        {
+            bool inside = true;
+            for (int32_t i = 0; i < polygon->count && inside; ++i)
+            {
+                m2Vec2 v = polygon->vertices[i];
+                m2Vec2 n = polygon->normals[i];
+                inside = n.x * (x - v.x) + n.y * (y - v.y) <= 0.0f;
+            }
+            if (!inside)
+            {
+                continue;
+            }
+            m2ParticleId id = m2World_EmitParticle(
+                worldId, (m2Pos2){position.x + (double)x, position.y + (double)y}, velocity, flags);
+            if (id.index1 == 0)
+            {
+                return emitted; // pool full: a quiet runtime fact
+            }
+            emitted += 1;
+        }
+    }
+    return emitted;
 }

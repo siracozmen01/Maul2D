@@ -377,6 +377,64 @@ static void TestOffCenterRollback(void)
     m2DestroyWorld(world);
 }
 
+// The conveyor: a stopped box on a moving belt reaches belt speed
+// through friction alone, follows a live reversal, and goes to
+// sleep when the belt stops; restarting the belt wakes it.
+static void TestConveyor(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef beltBody = m2DefaultBodyDef();
+    beltBody.position = (m2Pos2){0.0, -0.2};
+    m2ShapeDef beltShape = m2DefaultShapeDef();
+    beltShape.tangentSpeed = 2.0f;
+    m2Polygon beltBox = m2MakeBox(10.0f, 0.2f);
+    m2ShapeId belt = m2CreatePolygonShape(m2CreateBody(world, &beltBody), &beltShape, &beltBox);
+    m2BodyDef crateBody = m2DefaultBodyDef();
+    crateBody.type = m2_dynamicBody;
+    crateBody.position = (m2Pos2){0.0, 0.31};
+    m2BodyId crate = m2CreateBody(world, &crateBody);
+    m2ShapeDef crateShape = m2DefaultShapeDef();
+    m2Polygon crateBox = m2MakeBox(0.3f, 0.3f);
+    m2CreatePolygonShape(crate, &crateShape, &crateBox);
+
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float vx = m2Body_GetLinearVelocity(crate).x;
+    CHECK(vx > 1.9f && vx < 2.1f, "the belt carries the crate to belt speed");
+    CHECK(m2Shape_GetTangentSpeed(belt) == 2.0f, "the belt speed reads back");
+
+    m2Shape_SetTangentSpeed(belt, -2.0f);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    vx = m2Body_GetLinearVelocity(crate).x;
+    CHECK(vx < -1.9f && vx > -2.1f, "a live reversal turns the crate around");
+
+    m2Shape_SetTangentSpeed(belt, 0.0f);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    vx = m2Body_GetLinearVelocity(crate).x;
+    CHECK(vx > -0.05f && vx < 0.05f, "a stopped belt stops its rider");
+    CHECK(!m2Body_IsAwake(crate), "the rider sleeps on the stopped belt");
+
+    m2Shape_SetTangentSpeed(belt, 1.5f);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetLinearVelocity(crate).x > 1.0f, "restarting the belt wakes the sleeper");
+    m2DestroyWorld(world);
+}
+
 static void TestImpulses(void)
 {
     // Analytic: J at the COM moves without spin; J at an offset arm
@@ -417,6 +475,7 @@ static void TestImpulses(void)
 int main(void)
 {
     TestImpulses();
+    TestConveyor();
     TestSpinsAboutCenterOfMass();
     TestOffCenterRollback();
     TestRestitution();

@@ -73,9 +73,10 @@ extern "C"
 
     typedef struct m2ShapeDef
     {
-        float density;     // kg/m^2; dynamic bodies get a minimum-mass floor
-        float friction;    // Coulomb; pairs mix by geometric mean
-        float restitution; // bounce in [0,1]; pairs mix by maximum
+        float density;      // kg/m^2; dynamic bodies get a minimum-mass floor
+        float friction;     // Coulomb; pairs mix by geometric mean
+        float tangentSpeed; // conveyor: surface slides along the contact tangent, m/s
+        float restitution;  // bounce in [0,1]; pairs mix by maximum
         /// Collision filtering: shapes collide when each one's category
         /// intersects the other's mask. Defaults: category 1, mask all.
         /// Queries ignore filters for now (a query filter parameter is
@@ -185,6 +186,10 @@ extern "C"
     /// wake whoever was touching it. Thread class: writer / reader.
     void m2Shape_SetFriction(m2ShapeId shapeId, float friction);
     void m2Shape_SetRestitution(m2ShapeId shapeId, float restitution);
+    /// Conveyor surface speed along the contact tangent; the pair
+    /// value is the SUM of both shapes (reference mixing). Journaled.
+    void m2Shape_SetTangentSpeed(m2ShapeId shapeId, float speed);
+    float m2Shape_GetTangentSpeed(m2ShapeId shapeId);
     void m2Shape_SetFilter(m2ShapeId shapeId, uint32_t categoryBits, uint32_t maskBits,
                            int32_t groupIndex);
     float m2Shape_GetFriction(m2ShapeId shapeId);
