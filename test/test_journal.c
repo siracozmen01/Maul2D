@@ -197,6 +197,30 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     boom.radius = 2.0f;
     boom.impulse = 1.5f;
     m2World_Explode(world, &boom); // op 39
+    m2BodyDef rsd = m2DefaultBodyDef();
+    rsd.type = m2_dynamicBody;
+    rsd.position = (m2Pos2){5.0, 3.0};
+    m2BodyId reshapeBody = m2CreateBody(world, &rsd);
+    m2ShapeDef rss = m2DefaultShapeDef();
+    m2Polygon rsp = m2MakeBox(0.3f, 0.3f);
+    m2ShapeId reshapeShape = m2CreatePolygonShape(reshapeBody, &rss, &rsp);
+    m2Circle reshaped = {{0.0f, 0.0f}, 0.3f};
+    m2Shape_SetCircle(reshapeShape, &reshaped); // op 40
+    m2Vec2 matPts[5] = {{9.0f, 2.0f}, {8.0f, 2.0f}, {7.0f, 2.0f}, {6.0f, 2.0f}, {5.0f, 2.0f}};
+    m2ChainDef matChain = m2DefaultChainDef();
+    matChain.points = matPts;
+    matChain.count = 5;
+    m2ChainId matLedge = m2CreateChain(cylinder, &matChain);
+    m2Chain_SetFriction(matLedge, 0.75f);                         // op 41
+    m2Chain_SetRestitution(matLedge, 0.15f);                      // op 42
+    m2Body_ApplyLinearImpulseToCenter(bob, (m2Vec2){0.5f, 0.2f}); // op 43
+    m2Body_SetAwake(bob, false);                                  // op 44
+    m2Body_SetAwake(bob, true);
+    m2Body_SetBullet(bob, true);            // op 45
+    m2Shape_SetDensity(reshapeShape, 1.5f); // op 46
+    m2Body_SetUserData(bob, 999);           // op 47
+    m2Shape_SetUserData(reshapeShape, 111); // op 48
+    m2Joint_SetUserData(gripper, 222);      // op 49
     for (int32_t i = 0; i < 30; ++i)
     {
         m2World_Step(world, 1.0f / 120.0f, 2); // second dt flavor

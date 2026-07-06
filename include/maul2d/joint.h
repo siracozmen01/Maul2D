@@ -41,6 +41,7 @@ extern "C"
         float length; // meters; <= 0 derives from spawn poses
         float hertz;  // 0 = stiff default
         float dampingRatio;
+        uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2DistanceJointDef;
@@ -62,6 +63,7 @@ extern "C"
         bool enableLimit;
         float lowerAngle; // radians relative to the creation angle
         float upperAngle;
+        uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2RevoluteJointDef;
@@ -85,6 +87,7 @@ extern "C"
         bool enableLimit;
         float lowerTranslation; // meters from the creation separation
         float upperTranslation;
+        uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2PrismaticJointDef;
@@ -104,6 +107,7 @@ extern "C"
         float linearDampingRatio;
         float angularHertz; // 0 = rigid
         float angularDampingRatio;
+        uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2WeldJointDef;
@@ -127,6 +131,7 @@ extern "C"
         bool enableLimit;
         float lowerTranslation; // meters from the creation separation
         float upperTranslation;
+        uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;
     } m2WheelJointDef;
@@ -144,6 +149,7 @@ extern "C"
         float maxForce;         // newtons
         float maxTorque;        // newton meters
         float correctionFactor; // [0,1] position correction per step
+        uint64_t userData;
         bool collideConnected;
         int32_t internalValue;
     } m2MotorJointDef;
@@ -159,6 +165,7 @@ extern "C"
         float hertz;
         float dampingRatio;
         float maxForce;
+        uint64_t userData;
         bool collideConnected;
         int32_t internalValue;
     } m2MouseJointDef;
@@ -169,6 +176,7 @@ extern "C"
     {
         m2BodyId bodyIdA;
         m2BodyId bodyIdB;
+        uint64_t userData;
         int32_t internalValue;
     } m2FilterJointDef;
 
@@ -243,6 +251,17 @@ extern "C"
     m2BodyId m2Joint_GetBodyA(m2JointId jointId);
     m2BodyId m2Joint_GetBodyB(m2JointId jointId);
     bool m2Joint_GetCollideConnected(m2JointId jointId);
+    uint64_t m2Joint_GetUserData(m2JointId jointId);
+    void m2Joint_SetUserData(m2JointId jointId, uint64_t userData); // journaled
+    m2WorldId m2Joint_GetWorld(m2JointId jointId);
+
+    /// Constraint drift right now: how far the joint currently is
+    /// from what it pins. Point constraints report the anchor gap,
+    /// the distance joint its length error, sliders their off-axis
+    /// gap; angular drift is the unwound angle error where an angle
+    /// is pinned and zero elsewhere. Thread class: reader.
+    float m2Joint_GetLinearSeparation(m2JointId jointId);
+    float m2Joint_GetAngularSeparation(m2JointId jointId);
 
     /// Motor joint runtime control (platforms retarget every frame)
     /// and readback; max torque rides m2Joint_SetMaxMotor/GetMaxMotor.

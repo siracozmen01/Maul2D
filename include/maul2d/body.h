@@ -11,6 +11,13 @@ extern "C"
 {
 #endif
 
+    /// A world-space box in f64, for editor and camera math.
+    typedef struct m2AABBResult
+    {
+        m2Pos2 lowerBound;
+        m2Pos2 upperBound;
+    } m2AABBResult;
+
     typedef enum m2BodyType
     {
         m2_staticBody = 0,
@@ -69,6 +76,18 @@ extern "C"
     /// Sleep state (topic-06). Setters and new contacts wake bodies;
     /// waking is island-transitive at the next step.
     bool m2Body_IsAwake(m2BodyId bodyId);
+
+    /// Manual sleep control: false forces the body to sleep NOW
+    /// (velocities zero, like the reference), true wakes it.
+    /// Journaled. Thread class: writer.
+    void m2Body_SetAwake(m2BodyId bodyId, bool awake);
+    void m2Body_SetBullet(m2BodyId bodyId, bool flag);
+    void m2Body_SetUserData(m2BodyId bodyId, uint64_t userData);
+
+    /// Kinematic follow: sets the velocities that carry the body to
+    /// the target pose over one step of the given dt. Applies via
+    /// the journaled velocity setters, so replays are free.
+    void m2Body_SetTargetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation, float dt);
     m2BodyType m2Body_GetType(m2BodyId bodyId);
 
     /// Mass properties: mass in kg, body-local centroid, rotational
@@ -110,6 +129,15 @@ extern "C"
     m2Vec2 m2Body_GetWorldVector(m2BodyId bodyId, m2Vec2 localVector);
     m2Vec2 m2Body_GetLocalVector(m2BodyId bodyId, m2Vec2 worldVector);
     m2Vec2 m2Body_GetWorldPointVelocity(m2BodyId bodyId, m2Pos2 worldPoint);
+    m2Vec2 m2Body_GetLocalPointVelocity(m2BodyId bodyId, m2Vec2 localPoint);
+    m2Pos2 m2Body_GetWorldCenterOfMass(m2BodyId bodyId);
+    float m2Body_GetRotationalInertia(m2BodyId bodyId); // about the center of mass
+    m2WorldId m2Body_GetWorld(m2BodyId bodyId);
+
+    /// The tight AABB enclosing every shape on the body (fat tree
+    /// margins excluded); a shapeless body returns a point at its
+    /// origin. Thread class: reader.
+    m2AABBResult m2Body_ComputeAABB(m2BodyId bodyId);
 
     /// Setters wake nothing yet (no sleep system in this slice) but are
     /// already journal-shaped: every mutation is a discrete command.
@@ -135,6 +163,7 @@ extern "C"
     void m2Body_SetType(m2BodyId bodyId, m2BodyType type);
 
     void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint);
+    void m2Body_ApplyLinearImpulseToCenter(m2BodyId bodyId, m2Vec2 impulse);
 
     /// Continuous forces: accumulated across calls, applied during the
     /// step, cleared when it ends. Waking is implied. Journaled.

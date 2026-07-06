@@ -30,7 +30,7 @@
 #define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
 #define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 23u
+#define M2_SNAPSHOT_VERSION 24u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -123,6 +123,8 @@ static int32_t ShapeTreeIndex(const m2World* world, int32_t shapeIndex)
 
 // ALL moved proxies enter the moved set - shapes of dynamic, kinematic,
 // and static bodies alike (topic-02 §4.2).
+static float RelativeJointAngle(m2Rot qA, m2Rot qB);
+
 static void PushMoved(m2World* world, int32_t shapeIndex)
 {
     if (world->inMoved[shapeIndex] != 0)
@@ -1008,6 +1010,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointBreakForce, jointCap, float);
     M2_ALLOC(jointCollide, jointCap, uint8_t);
     M2_ALLOC(jointTargets, jointCap, m2Pos2);
+    M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
     M2_ALLOC(jointGenerations, jointCap, uint16_t);
     M2_ALLOC(jointFreeQueue, jointCap, int32_t);
@@ -1180,6 +1183,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointBreakForce);
     m2Free(world->jointCollide);
     m2Free(world->jointTargets);
+    m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
     m2Free(world->jointFreeQueue);
@@ -1552,6 +1556,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointCollide, (size_t)world->jointCapacity * sizeof(uint8_t));
     M2_BLOCK(world->jointTargets, (size_t)world->jointCapacity * sizeof(m2Pos2));
+    M2_BLOCK(world->jointUserData, (size_t)world->jointCapacity * sizeof(uint64_t));
     M2_BLOCK(world->jointBreakTorque, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointGenerations, (size_t)world->jointCapacity * sizeof(uint16_t));
     M2_BLOCK(world->jointFreeQueue, (size_t)world->jointCapacity * sizeof(int32_t));
@@ -3541,6 +3546,527 @@ int32_t m2Body_GetJoints(m2BodyId bodyId, m2JointId* ids, int32_t capacity)
     return total;
 }
 
+void m2Body_ApplyLinearImpulseToCenter(m2BodyId bodyId, m2Vec2 impulse)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->types[index] != (uint8_t)m2_dynamicBody)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            m2Vec2 impulse;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.impulse = impulse;
+        m2JournalRecord(world, m2_opImpulseCenter, &record, (int32_t)sizeof(record));
+    }
+    world->linearVelocities[index].x += world->invMass[index] * impulse.x;
+    world->linearVelocities[index].y += world->invMass[index] * impulse.y;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+void m2Body_SetAwake(m2BodyId bodyId, bool awake)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->types[index] != (uint8_t)m2_dynamicBody || world->disabled[index] != 0)
+    {
+        return;
+    }
+    uint8_t sleeping = awake ? 0 : 1;
+    if (world->asleep[index] == sleeping)
+    {
+        return; // no-op stays unjournaled
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            uint8_t awake;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.awake = awake ? 1 : 0;
+        m2JournalRecord(world, m2_opSetAwake, &record, (int32_t)sizeof(record));
+    }
+    world->asleep[index] = sleeping;
+    world->sleepTimes[index] = 0.0f;
+    if (!awake)
+    {
+        // Forced sleep stills the body, reference-style.
+        world->linearVelocities[index] = (m2Vec2){0.0f, 0.0f};
+        world->angularVelocities[index] = 0.0f;
+        world->forces[index] = (m2Vec2){0.0f, 0.0f};
+        world->torques[index] = 0.0f;
+    }
+}
+
+void m2Body_SetBullet(m2BodyId bodyId, bool flag)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    uint8_t next = flag ? 1 : 0;
+    if (world->bullets[index] == next)
+    {
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            uint8_t flag;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.flag = next;
+        m2JournalRecord(world, m2_opSetBullet, &record, (int32_t)sizeof(record));
+    }
+    world->bullets[index] = next;
+}
+
+void m2Body_SetUserData(m2BodyId bodyId, uint64_t userData)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            uint64_t userData;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.userData = userData;
+        m2JournalRecord(world, m2_opBodyUserData, &record, (int32_t)sizeof(record));
+    }
+    world->userData[index] = userData;
+}
+
+void m2Body_SetTargetTransform(m2BodyId bodyId, m2Pos2 position, m2Rot rotation, float dt)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || !(dt > 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    // Velocities that land the pose in one step; applied through the
+    // journaled setters, so replays get this for free.
+    float invDt = 1.0f / dt;
+    m2Transform xf = world->transforms[index];
+    m2Vec2 v = {(float)(position.x - xf.p.x) * invDt, (float)(position.y - xf.p.y) * invDt};
+    float w = m2UnwindAngle(RelativeJointAngle(xf.q, rotation)) * invDt;
+    m2Body_SetLinearVelocity(bodyId, v);
+    m2Body_SetAngularVelocity(bodyId, w);
+}
+
+m2Vec2 m2Body_GetLocalPointVelocity(m2BodyId bodyId, m2Vec2 localPoint)
+{
+    return m2Body_GetWorldPointVelocity(bodyId, m2Body_GetWorldPoint(bodyId, localPoint));
+}
+
+m2Pos2 m2Body_GetWorldCenterOfMass(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Pos2){0.0, 0.0};
+    }
+    return m2Body_GetWorldPoint(bodyId, world->localCenters[index]);
+}
+
+float m2Body_GetRotationalInertia(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return 0.0f;
+    }
+    float invI = world->invInertia[index];
+    return invI > 0.0f ? 1.0f / invI : 0.0f;
+}
+
+m2World* m2WorldFromIndex0(uint16_t index0)
+{
+    return WorldFromIndex(index0);
+}
+
+m2WorldId m2Body_GetWorld(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    m2WorldId id = {0, 0};
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return id;
+    }
+    id.index1 = world->worldIndex0;
+    id.generation = world->worldGeneration;
+    return id;
+}
+
+m2AABBResult m2Body_ComputeAABB(m2BodyId bodyId)
+{
+    m2AABBResult result = {{0.0, 0.0}, {0.0, 0.0}};
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+    result.lowerBound = world->transforms[index].p;
+    result.upperBound = world->transforms[index].p;
+    bool first = true;
+    for (int32_t s = world->bodyShapeHead[index]; s != -1; s = world->shapeNext[s])
+    {
+        m2AABB tight = m2ComputeShapeAABB(&world->shapeGeometry[s], world->transforms[index]);
+        if (first)
+        {
+            result.lowerBound = tight.lowerBound;
+            result.upperBound = tight.upperBound;
+            first = false;
+            continue;
+        }
+        result.lowerBound.x =
+            tight.lowerBound.x < result.lowerBound.x ? tight.lowerBound.x : result.lowerBound.x;
+        result.lowerBound.y =
+            tight.lowerBound.y < result.lowerBound.y ? tight.lowerBound.y : result.lowerBound.y;
+        result.upperBound.x =
+            tight.upperBound.x > result.upperBound.x ? tight.upperBound.x : result.upperBound.x;
+        result.upperBound.y =
+            tight.upperBound.y > result.upperBound.y ? tight.upperBound.y : result.upperBound.y;
+    }
+    return result;
+}
+
+bool m2Shape_TestPoint(m2ShapeId shapeId, m2Pos2 point)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return false;
+    }
+    int32_t body = world->shapeBody[index];
+    m2Transform xf = world->transforms[body];
+    m2Vec2 rel = {(float)(point.x - xf.p.x), (float)(point.y - xf.p.y)};
+    m2Vec2 local = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+    m2DistanceProxy target = m2GeometryProxy(&world->shapeGeometry[index]);
+    m2DistanceProxy probe;
+    probe.points[0] = local;
+    probe.count = 1;
+    probe.radius = 0.0f;
+    m2DistanceResult d = m2ShapeDistance(&target, &probe);
+    // Touching within the slop skin counts (the overlap law).
+    return d.distance - target.radius <= 0.005f;
+}
+
+m2Pos2 m2Shape_GetClosestPoint(m2ShapeId shapeId, m2Pos2 point)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Pos2){0.0, 0.0};
+    }
+    int32_t body = world->shapeBody[index];
+    m2Transform xf = world->transforms[body];
+    m2Vec2 rel = {(float)(point.x - xf.p.x), (float)(point.y - xf.p.y)};
+    m2Vec2 local = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+    m2DistanceProxy target = m2GeometryProxy(&world->shapeGeometry[index]);
+    m2DistanceProxy probe;
+    probe.points[0] = local;
+    probe.count = 1;
+    probe.radius = 0.0f;
+    m2DistanceResult d = m2ShapeDistance(&target, &probe);
+    if (d.distance - target.radius <= 0.0f)
+    {
+        return point; // inside: the query point is its own closest
+    }
+    m2Vec2 surf = {d.pointA.x + target.radius * d.normal.x,
+                   d.pointA.y + target.radius * d.normal.y};
+    m2Vec2 out = {xf.q.c * surf.x - xf.q.s * surf.y, xf.q.s * surf.x + xf.q.c * surf.y};
+    return (m2Pos2){xf.p.x + (double)out.x, xf.p.y + (double)out.y};
+}
+
+m2WorldId m2Shape_GetWorld(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    m2WorldId id = {0, 0};
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return id;
+    }
+    id.index1 = world->worldIndex0;
+    id.generation = world->worldGeneration;
+    return id;
+}
+
+m2ChainId m2Shape_GetParentChain(m2ShapeId shapeId)
+{
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    m2ChainId id = {0, 0, 0};
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return id;
+    }
+    int32_t chain = world->shapeChain[index];
+    if (chain < 0)
+    {
+        return id;
+    }
+    id.index1 = chain + 1;
+    id.world0 = world->worldIndex0;
+    id.generation = world->chainGenerations[chain];
+    return id;
+}
+
+m2AABBResult m2Shape_GetAABB(m2ShapeId shapeId)
+{
+    m2AABBResult result = {{0.0, 0.0}, {0.0, 0.0}};
+    m2World* world = WorldFromIndex(shapeId.world0);
+    int32_t index = world != NULL ? ShapeSlot(world, shapeId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+    m2AABB tight = m2ComputeShapeAABB(&world->shapeGeometry[index],
+                                      world->transforms[world->shapeBody[index]]);
+    result.lowerBound = tight.lowerBound;
+    result.upperBound = tight.upperBound;
+    return result;
+}
+
+void m2Shape_SetDensity(m2ShapeId shapeId, float density)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0 || !(density >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ShapeId shape;
+            float density;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.shape = shapeId;
+        record.density = density;
+        m2JournalRecord(world, m2_opSetDensity, &record, (int32_t)sizeof(record));
+    }
+    world->shapeDensity[index] = density;
+    int32_t body = world->shapeBody[index];
+    RecomputeMass(world, body);
+    if (world->types[body] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[body] = 0;
+        world->sleepTimes[body] = 0.0f;
+    }
+}
+
+void m2Shape_SetUserData(m2ShapeId shapeId, uint64_t userData)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ShapeId shape;
+            uint64_t userData;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.shape = shapeId;
+        record.userData = userData;
+        m2JournalRecord(world, m2_opShapeUserData, &record, (int32_t)sizeof(record));
+    }
+    world->shapeUserData[index] = userData;
+}
+
+m2WorldId m2Chain_GetWorld(m2ChainId chainId)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    m2WorldId id = {0, 0};
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return id;
+    }
+    id.index1 = world->worldIndex0;
+    id.generation = world->worldGeneration;
+    return id;
+}
+
+uint64_t m2Joint_GetUserData(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = jointId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->jointCapacity ||
+        world->jointAlive[index] == 0 || world->jointGenerations[index] != jointId.generation)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    return world->jointUserData[index];
+}
+
+void m2Joint_SetUserData(m2JointId jointId, uint64_t userData)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = jointId.index1 - 1;
+    if (world == NULL || index < 0 || index >= world->jointCapacity ||
+        world->jointAlive[index] == 0 || world->jointGenerations[index] != jointId.generation)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2JointId joint;
+            uint64_t userData;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.joint = jointId;
+        record.userData = userData;
+        m2JournalRecord(world, m2_opJointUserData, &record, (int32_t)sizeof(record));
+    }
+    world->jointUserData[index] = userData;
+}
+
+m2WorldId m2Joint_GetWorld(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    m2WorldId id = {0, 0};
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return id;
+    }
+    id.index1 = world->worldIndex0;
+    id.generation = world->worldGeneration;
+    return id;
+}
+
+float m2Joint_GetLinearSeparation(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t j = jointId.index1 - 1;
+    if (world == NULL || j < 0 || j >= world->jointCapacity || world->jointAlive[j] == 0 ||
+        world->jointGenerations[j] != jointId.generation)
+    {
+        M2_ASSERT(false);
+        return 0.0f;
+    }
+    int32_t bodyA = world->jointBodyA[j];
+    int32_t bodyB = world->jointBodyB[j];
+    m2Transform xfA = world->transforms[bodyA];
+    m2Transform xfB = world->transforms[bodyB];
+    m2Vec2 aA = world->jointLocalAnchorA[j];
+    m2Vec2 aB = world->jointLocalAnchorB[j];
+    m2Vec2 wA = {xfA.q.c * aA.x - xfA.q.s * aA.y, xfA.q.s * aA.x + xfA.q.c * aA.y};
+    m2Vec2 wB = {xfB.q.c * aB.x - xfB.q.s * aB.y, xfB.q.s * aB.x + xfB.q.c * aB.y};
+    float dx = (float)(xfB.p.x - xfA.p.x) + wB.x - wA.x;
+    float dy = (float)(xfB.p.y - xfA.p.y) + wB.y - wA.y;
+    switch (world->jointType[j])
+    {
+    case 0: // distance: length error along the rod
+        return m2AbsF(sqrtf(dx * dx + dy * dy) - world->jointLength[j]);
+    case 2: // prismatic: the off-axis gap
+    case 4: // wheel: same slider geometry
+    {
+        m2Vec2 axis = world->jointLocalAxisA[j];
+        m2Vec2 worldAxis = {xfA.q.c * axis.x - xfA.q.s * axis.y,
+                            xfA.q.s * axis.x + xfA.q.c * axis.y};
+        float perp = dx * -worldAxis.y + dy * worldAxis.x;
+        return m2AbsF(perp);
+    }
+    case 5: // filter: pins nothing
+        return 0.0f;
+    case 6: // motor: distance from the commanded offset
+    {
+        m2Vec2 off = world->jointLocalAxisA[j];
+        m2Vec2 worldOff = {xfA.q.c * off.x - xfA.q.s * off.y, xfA.q.s * off.x + xfA.q.c * off.y};
+        float ex = dx - worldOff.x;
+        float ey = dy - worldOff.y;
+        return sqrtf(ex * ex + ey * ey);
+    }
+    case 7: // mouse: gap between grab point and target
+    {
+        m2Pos2 grab = m2Body_GetWorldPoint(
+            (m2BodyId){bodyB + 1, jointId.world0, world->generations[bodyB]}, aB);
+        float gx = (float)(grab.x - world->jointTargets[j].x);
+        float gy = (float)(grab.y - world->jointTargets[j].y);
+        return sqrtf(gx * gx + gy * gy);
+    }
+    default: // revolute, weld: the pinned point's gap
+        return sqrtf(dx * dx + dy * dy);
+    }
+}
+
+float m2Joint_GetAngularSeparation(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t j = jointId.index1 - 1;
+    if (world == NULL || j < 0 || j >= world->jointCapacity || world->jointAlive[j] == 0 ||
+        world->jointGenerations[j] != jointId.generation)
+    {
+        M2_ASSERT(false);
+        return 0.0f;
+    }
+    uint8_t type = world->jointType[j];
+    if (type != 3 && type != 6 && type != 2)
+    {
+        return 0.0f; // no angle is pinned
+    }
+    m2Rot qA = world->transforms[world->jointBodyA[j]].q;
+    m2Rot qB = world->transforms[world->jointBodyB[j]].q;
+    return m2AbsF(m2UnwindAngle(RelativeJointAngle(qA, qB) - world->jointRefAngle[j]));
+}
+
 m2Counters m2World_GetCounters(m2WorldId worldId)
 {
     m2Counters counters;
@@ -3632,6 +4158,7 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointBreakTorque[index] = 0.0f;
     world->jointCollide[index] = 1;
     world->jointTargets[index] = (m2Pos2){0.0, 0.0};
+    world->jointUserData[index] = 0;
     world->jointAlive[index] = 1;
     // A new constraint wakes both ends.
     world->asleep[bodyA] = 0;
@@ -3694,6 +4221,7 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 0, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, length, def->hertz, def->dampingRatio);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -3736,6 +4264,7 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 1, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -3801,6 +4330,7 @@ m2JointId m2CreatePrismaticJoint(m2WorldId worldId, const m2PrismaticJointDef* d
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 2, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -3861,6 +4391,7 @@ m2JointId m2CreateWeldJoint(m2WorldId worldId, const m2WeldJointDef* def)
     m2JointId jointId =
         FinishJoint(world, worldId, index, 3, bodyA, bodyB, def->localAnchorA, def->localAnchorB,
                     0.0f, def->linearHertz, def->linearDampingRatio);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -3926,6 +4457,7 @@ m2JointId m2CreateWheelJoint(m2WorldId worldId, const m2WheelJointDef* def)
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 4, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, 0.0f, def->hertz, def->dampingRatio);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -4372,6 +4904,7 @@ m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def)
     m2Vec2 zero = {0.0f, 0.0f};
     m2JointId jointId =
         FinishJoint(world, worldId, index, 5, bodyA, bodyB, zero, zero, 0.0f, 0.0f, 0.0f);
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = 0; // its entire purpose
     RefilterJointedBodies(world, bodyA, bodyB);
     if (world->journalActive != 0)
@@ -4444,6 +4977,7 @@ m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def)
     world->jointMaxMotor[index] = def->maxTorque;
     world->jointLength[index] = def->maxForce;
     world->jointDamping[index] = def->correctionFactor;
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {
@@ -4494,6 +5028,7 @@ m2JointId m2CreateMouseJoint(m2WorldId worldId, const m2MouseJointDef* def)
                                     def->hertz, def->dampingRatio);
     world->jointLength[index] = def->maxForce;
     world->jointTargets[index] = def->target;
+    world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
     {

@@ -1480,9 +1480,126 @@ static void TestSmallBasket(void)
     m2DestroyWorld(world);
 }
 
+// The leftover basket (audit appendix bucket 1): every small reader
+// and setter that finishes reference parity, exercised end to end.
+static void TestLeftoverBasket(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, 0.0f});
+
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 5.0};
+    m2BodyId box = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2ShapeId boxShape = m2CreatePolygonShape(box, &sd, &unit);
+
+    // Impulse to center: speed without spin.
+    m2Body_ApplyLinearImpulseToCenter(box, (m2Vec2){0.64f, 0.0f});
+    CHECK(m2Body_GetLinearVelocity(box).x > 0.9f && m2Body_GetAngularVelocity(box) == 0.0f,
+          "center impulse moves without spin");
+
+    // Manual sleep: stilled instantly, then woken on demand.
+    m2Body_SetAwake(box, false);
+    CHECK(!m2Body_IsAwake(box) && m2Body_GetLinearVelocity(box).x == 0.0f,
+          "forced sleep stills the body");
+    m2Body_SetAwake(box, true);
+    CHECK(m2Body_IsAwake(box), "and it wakes on demand");
+
+    // Runtime flags and data.
+    m2Body_SetBullet(box, true);
+    CHECK(m2Body_IsBullet(box), "bullet flag flips at runtime");
+    m2Body_SetUserData(box, 777);
+    m2Shape_SetUserData(boxShape, 888);
+    CHECK(m2Body_GetUserData(box) == 777 && m2Shape_GetUserData(boxShape) == 888,
+          "user data round-trips at runtime");
+    float massBefore = m2Body_GetMass(box);
+    m2Shape_SetDensity(boxShape, 2.0f);
+    CHECK(m2Body_GetMass(box) > massBefore * 1.9f, "density doubles the mass");
+
+    // Mass and frame readers.
+    m2Pos2 com = m2Body_GetWorldCenterOfMass(box);
+    CHECK(com.x > -0.01 && com.x < 0.01 && com.y > 4.99 && com.y < 5.01,
+          "world center of mass sits on the centered box");
+    CHECK(m2Body_GetRotationalInertia(box) > 0.0f, "inertia reads positive");
+    m2AABBResult ab = m2Body_ComputeAABB(box);
+    CHECK(ab.lowerBound.x < -0.39 && ab.upperBound.x > 0.39 && ab.upperBound.y > 5.39,
+          "the body AABB hugs the shape");
+    m2AABBResult sab = m2Shape_GetAABB(boxShape);
+    CHECK(sab.lowerBound.y < 4.61 && sab.upperBound.y > 5.39, "the shape AABB agrees");
+    m2WorldId back = m2Body_GetWorld(box);
+    CHECK(back.index1 == world.index1 && back.generation == world.generation,
+          "GetWorld round-trips");
+
+    // One-shape queries.
+    CHECK(m2Shape_TestPoint(boxShape, (m2Pos2){0.0, 5.0}), "the center is inside");
+    CHECK(!m2Shape_TestPoint(boxShape, (m2Pos2){2.0, 5.0}), "two meters out is not");
+    m2Pos2 closest = m2Shape_GetClosestPoint(boxShape, (m2Pos2){3.0, 5.0});
+    CHECK(closest.x > 0.35 && closest.x < 0.45, "closest point sits on the face");
+    m2RayCastResult ray = m2Shape_RayCast(boxShape, (m2Pos2){3.0, 5.0}, (m2Vec2){-5.0f, 0.0f});
+    CHECK(ray.hit && ray.normal.x > 0.99f, "the one-shape ray hits the right face");
+
+    // Chain parentage.
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){10.0, 0.0};
+    m2BodyId ground = m2CreateBody(world, &gd);
+    m2Vec2 pts[5] = {{4.0f, 0.0f}, {2.0f, 0.0f}, {0.0f, 0.0f}, {-2.0f, 0.0f}, {-4.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5;
+    m2ChainId ledge = m2CreateChain(ground, &chain);
+    m2ShapeId links[4];
+    m2Chain_GetShapes(ledge, links, 4);
+    m2ChainId parent = m2Shape_GetParentChain(links[0]);
+    CHECK(parent.index1 == ledge.index1 && parent.generation == ledge.generation,
+          "links name their chain");
+    CHECK(m2Shape_GetParentChain(boxShape).index1 == 0, "plain shapes name none");
+    m2WorldId cw = m2Chain_GetWorld(ledge);
+    CHECK(cw.index1 == world.index1, "chains know their world too");
+
+    // Joint extras: user data, drift readers, world.
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.position = (m2Pos2){0.0, 8.0};
+    m2BodyId hook = m2CreateBody(world, &hd);
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hook;
+    dj.bodyIdB = box;
+    dj.userData = 4242;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    CHECK(m2Joint_GetUserData(rope) == 4242, "joint user data arrives from the def");
+    m2Joint_SetUserData(rope, 5151);
+    CHECK(m2Joint_GetUserData(rope) == 5151, "and flips at runtime");
+    CHECK(m2Joint_GetWorld(rope).index1 == world.index1, "joints know their world");
+    // Teleport the box a meter outward: the rope reads that meter.
+    m2Body_SetTransform(box, (m2Pos2){0.0, 1.0}, (m2Rot){1.0f, 0.0f});
+    float stretch = m2Joint_GetLinearSeparation(rope);
+    CHECK(stretch > 3.9f && stretch < 4.1f, "linear separation reads the stretch");
+    CHECK(m2Joint_GetAngularSeparation(rope) == 0.0f, "a rope pins no angle");
+
+    // Kinematic follow: one step to the target pose.
+    m2BodyDef kd = m2DefaultBodyDef();
+    kd.type = m2_kinematicBody;
+    kd.position = (m2Pos2){20.0, 0.0};
+    m2BodyId mover = m2CreateBody(world, &kd);
+    m2CreatePolygonShape(mover, &sd, &unit);
+    m2Body_SetTargetTransform(mover, (m2Pos2){21.0, 0.5}, (m2Rot){1.0f, 0.0f}, 1.0f / 60.0f);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2Pos2 landed = m2Body_GetPosition(mover);
+    CHECK(landed.x > 20.9 && landed.x < 21.1 && landed.y > 0.4 && landed.y < 0.6,
+          "target transform lands in one step");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestLeftoverBasket();
     TestSmallBasket();
     TestDormancyMassAndExplosions();
     TestBodyDynamicsPack();

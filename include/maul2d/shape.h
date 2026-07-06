@@ -205,9 +205,23 @@ extern "C"
     /// Runtime chain materials: applied to every link at once, one
     /// journal op each; takes effect at the next contact prepare,
     /// like the per-shape material setters. Thread class: writer.
+    m2WorldId m2Chain_GetWorld(m2ChainId chainId);
     void m2Chain_SetFriction(m2ChainId chainId, float friction);
     void m2Chain_SetRestitution(m2ChainId chainId, float restitution);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
+    m2WorldId m2Shape_GetWorld(m2ShapeId shapeId);
+    m2ChainId m2Shape_GetParentChain(m2ShapeId shapeId); // null if free-standing
+    m2AABBResult m2Shape_GetAABB(m2ShapeId shapeId);     // tight, world space
+
+    /// Point and ray queries against ONE shape. TestPoint counts
+    /// touching within the engine's slop skin (the overlap law);
+    /// GetClosestPoint returns the surface point nearest to the
+    /// query, radius included; RayCast follows the world ray
+    /// conventions including the one-sided chain law.
+    bool m2Shape_TestPoint(m2ShapeId shapeId, m2Pos2 point);
+    m2Pos2 m2Shape_GetClosestPoint(m2ShapeId shapeId, m2Pos2 point);
+    void m2Shape_SetDensity(m2ShapeId shapeId, float density);      // journaled, mass recomputes
+    void m2Shape_SetUserData(m2ShapeId shapeId, uint64_t userData); // journaled
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 
     /// Body mass derived from attached shape densities (0 for non-dynamic).
@@ -243,6 +257,7 @@ extern "C"
     /// Thread class: reader.
     m2RayCastResult m2World_CastRayClosest(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation,
                                            m2QueryFilter filter);
+    m2RayCastResult m2Shape_RayCast(m2ShapeId shapeId, m2Pos2 origin, m2Vec2 translation);
 
     /// Convex sweeps: the given shape (in its own local frame, posed
     /// by origin) slides along translation; the closest hit wins and

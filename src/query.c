@@ -933,3 +933,42 @@ int32_t m2World_OverlapPolygon(m2WorldId worldId, const m2Polygon* polygon, m2Tr
     p.radius = polygon->radius;
     return OverlapProxy(worldId, &p, origin, ids, capacity, filter);
 }
+
+// One shape, the world ray conventions, the one-sided chain law: the
+// same RayCastShape the world walk uses, minus the walk.
+m2RayCastResult m2Shape_RayCast(m2ShapeId shapeId, m2Pos2 origin, m2Vec2 translation)
+{
+    m2RayCastResult result;
+    result.shapeId = m2_nullShapeId;
+    result.point = origin;
+    result.normal = (m2Vec2){0.0f, 0.0f};
+    result.fraction = 0.0f;
+    result.hit = false;
+
+    m2World* world = m2WorldFromIndex0(shapeId.world0);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+    int32_t index = shapeId.index1 - 1;
+    if (index < 0 || index >= world->shapeCapacity || world->shapeAlive[index] == 0 ||
+        world->shapeGenerations[index] != shapeId.generation)
+    {
+        M2_ASSERT(false);
+        return result;
+    }
+    m2CastHit hit = RayCastShape(world, index, origin, translation, 1.0f);
+    if (!hit.hit)
+    {
+        return result;
+    }
+    result.shapeId = shapeId;
+    result.hit = true;
+    bool initialOverlap = hit.normal.x == 0.0f && hit.normal.y == 0.0f;
+    result.fraction = initialOverlap ? 0.0f : hit.fraction;
+    result.normal = hit.normal;
+    result.point = (m2Pos2){origin.x + (double)result.fraction * (double)translation.x,
+                            origin.y + (double)result.fraction * (double)translation.y};
+    return result;
+}

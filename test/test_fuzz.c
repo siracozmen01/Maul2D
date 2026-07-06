@@ -404,7 +404,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(10);
+        uint32_t which = Pick(12);
         if (which == 0)
         {
             float vx = (float)((int32_t)Pick(9) - 4);
@@ -462,9 +462,18 @@ static void DoRandomOp(m2WorldId world)
             float damping = (float)Pick(6) * 0.1f;
             m2Body_SetLinearDamping(body, damping);
         }
-        else
+        else if (which == 9)
         {
             m2Body_EnableSleep(body, Pick(4) != 0);
+        }
+        else if (which == 10)
+        {
+            m2Body_SetAwake(body, Pick(3) != 0);
+        }
+        else
+        {
+            uint64_t data = (uint64_t)Pick(1000);
+            m2Body_SetUserData(body, data);
         }
         return;
     }
@@ -510,7 +519,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(3);
+        uint32_t which = Pick(4);
         if (which == 0)
         {
             m2Shape_SetFriction(shape, PickUnit() * 0.9f);
@@ -518,6 +527,11 @@ static void DoRandomOp(m2WorldId world)
         else if (which == 1)
         {
             m2Shape_SetRestitution(shape, PickUnit() * 0.8f);
+        }
+        else if (which == 3)
+        {
+            float density = 0.5f + (float)Pick(4) * 0.5f;
+            m2Shape_SetDensity(shape, density);
         }
         else
         {
@@ -555,7 +569,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(6);
+        uint32_t which = Pick(7);
         if (which == 0)
         {
             m2Joint_SetMotorSpeed(joint, (float)((int32_t)Pick(9) - 4));
@@ -585,7 +599,7 @@ static void DoRandomOp(m2WorldId world)
                 m2MotorJoint_SetOffsets(joint, (m2Vec2){ox, oy}, oa);
             }
         }
-        else
+        else if (which == 5)
         {
             double tx = (double)((int32_t)Pick(9) - 4) * 0.5;
             double ty = (double)((int32_t)Pick(9) - 4) * 0.5;
@@ -594,6 +608,11 @@ static void DoRandomOp(m2WorldId world)
                 m2Pos2 base = m2Body_GetPosition(m2Joint_GetBodyB(joint));
                 m2MouseJoint_SetTarget(joint, (m2Pos2){base.x + tx, base.y + ty});
             }
+        }
+        else
+        {
+            uint64_t data = (uint64_t)Pick(1000);
+            m2Joint_SetUserData(joint, data);
         }
     }
 }

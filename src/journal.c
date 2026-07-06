@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 18u
+#define M2_JOURNAL_VERSION 19u
 
 typedef struct m2JournalHeader
 {
@@ -643,6 +643,90 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             {
                 m2Chain_SetRestitution(cm.chain, cm.value);
             }
+            break;
+        }
+        case m2_opImpulseCenter:
+        {
+            struct m2OpImpulseCenter
+            {
+                m2BodyId body;
+                m2Vec2 impulse;
+            };
+            M2_READ_OP(struct m2OpImpulseCenter, ic);
+            ic.body.world0 = here;
+            m2Body_ApplyLinearImpulseToCenter(ic.body, ic.impulse);
+            break;
+        }
+        case m2_opSetAwake:
+        {
+            struct m2OpSetAwake
+            {
+                m2BodyId body;
+                uint8_t awake;
+            };
+            M2_READ_OP(struct m2OpSetAwake, sa);
+            sa.body.world0 = here;
+            m2Body_SetAwake(sa.body, sa.awake != 0);
+            break;
+        }
+        case m2_opSetBullet:
+        {
+            struct m2OpSetBullet
+            {
+                m2BodyId body;
+                uint8_t flag;
+            };
+            M2_READ_OP(struct m2OpSetBullet, sb);
+            sb.body.world0 = here;
+            m2Body_SetBullet(sb.body, sb.flag != 0);
+            break;
+        }
+        case m2_opSetDensity:
+        {
+            struct m2OpSetDensity
+            {
+                m2ShapeId shape;
+                float density;
+            };
+            M2_READ_OP(struct m2OpSetDensity, sd);
+            sd.shape.world0 = here;
+            m2Shape_SetDensity(sd.shape, sd.density);
+            break;
+        }
+        case m2_opBodyUserData:
+        {
+            struct m2OpBodyUserData
+            {
+                m2BodyId body;
+                uint64_t userData;
+            };
+            M2_READ_OP(struct m2OpBodyUserData, bu);
+            bu.body.world0 = here;
+            m2Body_SetUserData(bu.body, bu.userData);
+            break;
+        }
+        case m2_opShapeUserData:
+        {
+            struct m2OpShapeUserData
+            {
+                m2ShapeId shape;
+                uint64_t userData;
+            };
+            M2_READ_OP(struct m2OpShapeUserData, su);
+            su.shape.world0 = here;
+            m2Shape_SetUserData(su.shape, su.userData);
+            break;
+        }
+        case m2_opJointUserData:
+        {
+            struct m2OpJointUserData
+            {
+                m2JointId joint;
+                uint64_t userData;
+            };
+            M2_READ_OP(struct m2OpJointUserData, ju);
+            ju.joint.world0 = here;
+            m2Joint_SetUserData(ju.joint, ju.userData);
             break;
         }
         case m2_opApplyTorque:

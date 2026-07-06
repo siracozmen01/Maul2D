@@ -114,9 +114,10 @@ typedef struct m2World
     float* jointMotorImpulse;
     float* jointLowerImpulse;
     float* jointUpperImpulse;
-    float* jointBreakForce; // 0 = unbreakable (snapshot state)
-    uint8_t* jointCollide;  // 0 = connected bodies never pair (snapshot state)
-    m2Pos2* jointTargets;   // mouse joints: world target (snapshot state)
+    float* jointBreakForce;  // 0 = unbreakable (snapshot state)
+    uint8_t* jointCollide;   // 0 = connected bodies never pair (snapshot state)
+    m2Pos2* jointTargets;    // mouse joints: world target (snapshot state)
+    uint64_t* jointUserData; // opaque (snapshot state)
     float* jointBreakTorque;
     uint16_t* jointGenerations;
     int32_t* jointFreeQueue;
@@ -266,6 +267,13 @@ enum
     m2_opSetGeometry = 40, // shapeId + full geometry union
     m2_opChainFriction = 41,
     m2_opChainRestitution = 42,
+    m2_opImpulseCenter = 43,
+    m2_opSetAwake = 44,
+    m2_opSetBullet = 45,
+    m2_opSetDensity = 46,
+    m2_opBodyUserData = 47,
+    m2_opShapeUserData = 48,
+    m2_opJointUserData = 49,
 };
 
 // Journaled joint parameter channel (op 16).
@@ -307,6 +315,7 @@ typedef struct m2CastResult
     bool hit;
 } m2CastResult;
 
+m2World* m2WorldFromIndex0(uint16_t index0);
 m2DistanceProxy m2GeometryProxy(const struct m2ShapeGeometry* g);
 m2DistanceResult m2ShapeDistance(const m2DistanceProxy* proxyA, const m2DistanceProxy* proxyB);
 m2CastResult m2ShapeCastProxy(const m2DistanceProxy* proxyA, const m2DistanceProxy* proxyB,
