@@ -32,7 +32,7 @@
 #define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 26u
+#define M2_SNAPSHOT_VERSION 27u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1012,6 +1012,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(jointMotorImpulse, jointCap, float);
     M2_ALLOC(jointLowerImpulse, jointCap, float);
     M2_ALLOC(jointUpperImpulse, jointCap, float);
+    M2_ALLOC(jointSpringImpulse, jointCap, float);
     M2_ALLOC(jointBreakForce, jointCap, float);
     M2_ALLOC(jointCollide, jointCap, uint8_t);
     M2_ALLOC(jointTargets, jointCap, m2Pos2);
@@ -1187,6 +1188,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->jointMotorImpulse);
     m2Free(world->jointLowerImpulse);
     m2Free(world->jointUpperImpulse);
+    m2Free(world->jointSpringImpulse);
     m2Free(world->jointBreakForce);
     m2Free(world->jointCollide);
     m2Free(world->jointTargets);
@@ -1562,6 +1564,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->jointMotorImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointLowerImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointUpperImpulse, (size_t)world->jointCapacity * sizeof(float));
+    M2_BLOCK(world->jointSpringImpulse, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointBreakForce, (size_t)world->jointCapacity * sizeof(float));
     M2_BLOCK(world->jointCollide, (size_t)world->jointCapacity * sizeof(uint8_t));
     M2_BLOCK(world->jointTargets, (size_t)world->jointCapacity * sizeof(m2Pos2));
@@ -1733,6 +1736,7 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->jointMotorImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointLowerImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointUpperImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointSpringImpulse[i], (int32_t)sizeof(float));
     }
     return h;
 }
@@ -4166,6 +4170,7 @@ static m2JointId FinishJoint(m2World* world, m2WorldId worldId, int32_t index, u
     world->jointMotorImpulse[index] = 0.0f;
     world->jointLowerImpulse[index] = 0.0f;
     world->jointUpperImpulse[index] = 0.0f;
+    world->jointSpringImpulse[index] = 0.0f;
     world->jointBreakForce[index] = 0.0f;
     world->jointBreakTorque[index] = 0.0f;
     world->jointCollide[index] = 1;
@@ -4294,6 +4299,8 @@ m2JointId m2CreateRevoluteJoint(m2WorldId worldId, const m2RevoluteJointDef* def
     world->jointUpper[index] = def->upperAngle;
     world->jointRefAngle[index] =
         RelativeJointAngle(world->transforms[bodyA].q, world->transforms[bodyB].q);
+    world->jointHertz2[index] = def->springHertz;
+    world->jointDamping2[index] = def->springDampingRatio;
     if (world->journalActive != 0)
     {
         struct
@@ -4560,6 +4567,10 @@ void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, f
         break;
     case m2_jointParamAngularHertz:
         world->jointHertz2[index] = value;
+        if (value == 0.0f)
+        {
+            world->jointSpringImpulse[index] = 0.0f; // disable drops memory
+        }
         break;
     case m2_jointParamAngularDamping:
         world->jointDamping2[index] = value;
@@ -4693,7 +4704,8 @@ void m2Joint_SetAngularSpringHertz(m2JointId jointId, float hertz)
 {
     m2World* world = WorldFromIndex(jointId.world0);
     int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
-    if (index < 0 || world->jointType[index] != 3 || !(hertz >= 0.0f))
+    if (index < 0 || (world->jointType[index] != 3 && world->jointType[index] != 1) ||
+        !(hertz >= 0.0f))
     {
         M2_ASSERT(false);
         return;
@@ -4705,7 +4717,8 @@ void m2Joint_SetAngularSpringDampingRatio(m2JointId jointId, float dampingRatio)
 {
     m2World* world = WorldFromIndex(jointId.world0);
     int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
-    if (index < 0 || world->jointType[index] != 3 || !(dampingRatio >= 0.0f))
+    if (index < 0 || (world->jointType[index] != 3 && world->jointType[index] != 1) ||
+        !(dampingRatio >= 0.0f))
     {
         M2_ASSERT(false);
         return;
@@ -5756,7 +5769,7 @@ float m2Joint_GetAngularHertz(m2JointId jointId)
 {
     m2World* world = NULL;
     int32_t index = JointSlotLoud(jointId, &world);
-    if (index < 0 || world->jointType[index] != 3)
+    if (index < 0 || (world->jointType[index] != 3 && world->jointType[index] != 1))
     {
         M2_ASSERT(false);
         return 0.0f;
@@ -5768,7 +5781,7 @@ float m2Joint_GetAngularDampingRatio(m2JointId jointId)
 {
     m2World* world = NULL;
     int32_t index = JointSlotLoud(jointId, &world);
-    if (index < 0 || world->jointType[index] != 3)
+    if (index < 0 || (world->jointType[index] != 3 && world->jointType[index] != 1))
     {
         M2_ASSERT(false);
         return 0.0f;

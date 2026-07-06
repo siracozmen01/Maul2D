@@ -940,6 +940,8 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
             jd.hertz = m2Joint_GetHertz(id);
             jd.dampingRatio = m2Joint_GetDampingRatio(id);
+            jd.springHertz = m2Joint_GetAngularHertz(id);
+            jd.springDampingRatio = m2Joint_GetAngularDampingRatio(id);
             jd.enableMotor = m2Joint_IsMotorEnabled(id);
             jd.motorSpeed = m2Joint_GetMotorSpeed(id);
             jd.maxMotorTorque = m2Joint_GetMaxMotor(id);

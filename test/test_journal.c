@@ -235,6 +235,14 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     hoistDef.groundAnchorB = (m2Pos2){3.0, 9.0};
     m2JointId hoist = m2CreatePulleyJoint(world, &hoistDef); // op 52
     m2PulleyJoint_SetRatio(hoist, 2.0f);                     // param 16
+    m2RevoluteJointDef swingDef = m2DefaultRevoluteJointDef();
+    swingDef.bodyIdA = anchor;
+    swingDef.bodyIdB = cylinder;
+    swingDef.springHertz = 3.0f; // def echo carries the spring pair (wire v24)
+    swingDef.springDampingRatio = 0.5f;
+    m2JointId swing = m2CreateRevoluteJoint(world, &swingDef);
+    m2Joint_SetAngularSpringHertz(swing, 1.5f);         // param 10 on a revolute
+    m2Joint_SetAngularSpringDampingRatio(swing, 0.25f); // param 11 on a revolute
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

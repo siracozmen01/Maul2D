@@ -1131,6 +1131,70 @@ static void TestDistanceRange(void)
     m2DestroyWorld(world);
 }
 
+// The revolute angular spring: a horizontal bar on a pin either
+// droops to hanging (no spring) or holds near its spawn angle
+// (strong spring); killing the spring at runtime lets it fall.
+static void TestRevoluteSpring(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, -10.0f});
+
+    m2Circle bobDisc = {{0.0f, 0.0f}, 0.2f};
+    m2BodyId bobs[2];
+    m2JointId pins[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 4.0;
+        m2BodyDef postDef = m2DefaultBodyDef();
+        postDef.position = (m2Pos2){x, 5.0};
+        m2BodyId post = m2CreateBody(world, &postDef);
+        m2BodyDef bobDef = m2DefaultBodyDef();
+        bobDef.type = m2_dynamicBody;
+        bobDef.position = (m2Pos2){x + 1.0, 5.0};
+        bobDef.linearDamping = 1.0f;
+        bobs[i] = m2CreateBody(world, &bobDef);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2CreateCircleShape(bobs[i], &sd, &bobDisc);
+        m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+        rj.bodyIdA = post;
+        rj.bodyIdB = bobs[i];
+        rj.localAnchorB = (m2Vec2){-1.0f, 0.0f};
+        if (i == 1)
+        {
+            rj.springHertz = 12.0f;
+            rj.springDampingRatio = 1.0f;
+        }
+        pins[i] = m2CreateRevoluteJoint(world, &rj);
+    }
+    CHECK(m2Joint_GetAngularHertz(pins[1]) == 12.0f, "the spring hertz reads back");
+
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 limp = m2Body_GetPosition(bobs[0]);
+    m2Pos2 held = m2Body_GetPosition(bobs[1]);
+    CHECK(limp.x < 0.4 && limp.y < 4.4, "the springless bar droops to hanging");
+    CHECK(held.x > 4.7 && held.y > 4.7, "the sprung bar holds near its spawn angle");
+    CHECK(m2Joint_GetReactionTorque(pins[1]) > 0.0f, "the spring carries the bar's weight");
+
+    // Kill the spring at runtime: the held bar falls like its twin.
+    m2Joint_SetAngularSpringHertz(pins[1], 0.0f);
+    CHECK(m2Joint_GetAngularHertz(pins[1]) == 0.0f, "the disabled spring reads back");
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    held = m2Body_GetPosition(bobs[1]);
+    CHECK(held.x < 4.4 && held.y < 4.4, "the bar droops once the spring is gone");
+
+    m2DestroyWorld(world);
+}
+
 // The pulley: a rope over two fixed world points. Heavy side sinks,
 // light side rises, the rope total is conserved; a ratio-2 machine
 // balances double the mass; a live retune recaptures the total and
@@ -1646,6 +1710,7 @@ int main(void)
     TestDistanceRange();
     TestGearJoint();
     TestPulleyJoint();
+    TestRevoluteSpring();
     TestJointBreaking();
     TestBreakRollback();
 

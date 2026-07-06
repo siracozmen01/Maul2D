@@ -63,6 +63,8 @@ extern "C"
         m2Vec2 localAnchorB;
         float hertz; // 0 = stiff default
         float dampingRatio;
+        float springHertz; // angular spring toward the creation angle, 0 = off
+        float springDampingRatio;
         bool enableMotor;
         float motorSpeed;     // rad/s, positive = counter-clockwise B vs A
         float maxMotorTorque; // N*m budget per step
@@ -298,7 +300,7 @@ extern "C"
     float m2Joint_GetLength(m2JointId jointId);      // distance
     float m2Joint_GetHertz(m2JointId jointId);       // weld: linear row
     float m2Joint_GetDampingRatio(m2JointId jointId);
-    float m2Joint_GetAngularHertz(m2JointId jointId); // weld
+    float m2Joint_GetAngularHertz(m2JointId jointId); // weld, revolute spring
     float m2Joint_GetAngularDampingRatio(m2JointId jointId);
     float m2Joint_GetMotorSpeed(m2JointId jointId);
     float m2Joint_GetMaxMotor(m2JointId jointId);

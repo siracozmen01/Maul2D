@@ -296,6 +296,9 @@ static void DoRandomOp(m2WorldId world)
             jd.bodyIdB = b;
             jd.localAnchorA = anchorA;
             jd.localAnchorB = anchorB;
+            uint32_t springOn = Pick(2);
+            jd.springHertz = springOn == 1 ? 2.0f : 0.0f;
+            jd.springDampingRatio = 0.5f;
             jd.enableMotor = Pick(2) == 0;
             jd.motorSpeed = (float)((int32_t)Pick(7) - 3);
             jd.maxMotorTorque = 5.0f + (float)Pick(20);

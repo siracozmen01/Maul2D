@@ -158,6 +158,12 @@ retuning the ratio recaptures the total from the current geometry so
 the machine re-decides instead of snapping, and a side that fully
 unspools goes limp near its ground anchor rather than pushing.
 
+The revolute joint can carry an angular spring (springHertz and
+springDampingRatio on the def, zero hertz means off) pulling toward
+the creation angle; it runs alongside the motor and limits, retunes
+through the angular spring setters like the weld's pair, and setting
+the hertz to zero drops the spring and its stored impulse.
+
 
 The motor joint drives one body's transform toward offsets from
 another with force and torque budgets: moving platforms retarget

@@ -103,6 +103,7 @@ typedef struct m2JointConstraint
     float motorImpulse; // motor accumulator; weld reuses it for the angle lock
     float lowerImpulse;
     float upperImpulse;
+    float springImpulse; // revolute angular spring
 } m2JointConstraint;
 
 typedef struct m2ContactConstraint
@@ -1171,6 +1172,7 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
         c->motorImpulse = world->jointMotorImpulse[j];
         c->lowerImpulse = world->jointLowerImpulse[j];
         c->upperImpulse = world->jointUpperImpulse[j];
+        c->springImpulse = world->jointSpringImpulse[j];
 
         m2Rot qA = world->transforms[bodyA].q;
         m2Rot qB = world->transforms[bodyB].q;
@@ -1239,7 +1241,7 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
             c->baseAngle = m2UnwindAngle(RelativeRotAngle(qA, qB) - world->jointRefAngle[j]);
             c->linearSpring = c->type == 3 && world->jointHertz[j] > 0.0f;
-            c->angularSpring = c->type == 3 && world->jointHertz2[j] > 0.0f;
+            c->angularSpring = (c->type == 1 || c->type == 3) && world->jointHertz2[j] > 0.0f;
             c->softness2 = c->angularSpring
                                ? MakeSoft(world->jointHertz2[j], world->jointDamping2[j], h)
                                : MakeSoft(60.0f, 2.0f, h);
@@ -1400,9 +1402,10 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
         else if (c->type == 1 || c->type == 3 || c->type == 6)
         {
             // Weld's angle-lock and the motor joint's torque both ride
-            // the motor slot; limits are zero where unused.
+            // the motor slot; limits are zero where unused. The
+            // revolute angular spring joins the axial sum.
             ApplyJointImpulse(world, c, c->impulse);
-            float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
+            float axial = c->springImpulse + c->motorImpulse + c->lowerImpulse - c->upperImpulse;
             world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * axial;
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * axial;
         }
@@ -1611,6 +1614,24 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                 float impulse =
                     -massScale * c->axialMass * (cdot + bias) - impulseScale * c->motorImpulse;
                 c->motorImpulse += impulse;
+                wA -= world->invInertia[c->bodyA] * impulse;
+                wB += world->invInertia[c->bodyB] * impulse;
+            }
+            if (c->type == 1 && c->angularSpring && c->axialMass > 0.0f)
+            {
+                // Revolute angular spring (reference revolute_joint.c):
+                // a real spring toward the creation angle, biased in
+                // every pass by definition.
+                float C =
+                    m2UnwindAngle(c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
+                                                                  world->deltaRotations[c->bodyB]));
+                float bias = c->softness2.biasRate * C;
+                float massScale = c->softness2.massScale;
+                float impulseScale = c->softness2.impulseScale;
+                float cdot = wB - wA;
+                float impulse =
+                    -massScale * c->axialMass * (cdot + bias) - impulseScale * c->springImpulse;
+                c->springImpulse += impulse;
                 wA -= world->invInertia[c->bodyA] * impulse;
                 wB += world->invInertia[c->bodyB] * impulse;
             }
@@ -2133,6 +2154,7 @@ static void StoreJointImpulses(m2World* world, m2JointConstraint* joints, int32_
         world->jointMotorImpulse[j] = joints[i].motorImpulse;
         world->jointLowerImpulse[j] = joints[i].lowerImpulse;
         world->jointUpperImpulse[j] = joints[i].upperImpulse;
+        world->jointSpringImpulse[j] = joints[i].springImpulse;
     }
 }
 
@@ -2140,8 +2162,8 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
                                float* torque)
 {
     m2Vec2 impulse = world->jointImpulse[j];
-    float axialTrio =
-        world->jointMotorImpulse[j] + world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+    float axialTrio = world->jointSpringImpulse[j] + world->jointMotorImpulse[j] +
+                      world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
     *force = 0.0f;
     *torque = 0.0f;
     switch (world->jointType[j])

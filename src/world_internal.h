@@ -115,11 +115,12 @@ typedef struct m2World
     float* jointMotorImpulse;
     float* jointLowerImpulse;
     float* jointUpperImpulse;
-    float* jointBreakForce;  // 0 = unbreakable (snapshot state)
-    uint8_t* jointCollide;   // 0 = connected bodies never pair (snapshot state)
-    m2Pos2* jointTargets;    // mouse joints: world target (snapshot state)
-    m2Pos2* jointTargetsB;   // pulley: second ground anchor (snapshot state)
-    uint64_t* jointUserData; // opaque (snapshot state)
+    float* jointSpringImpulse; // revolute angular spring accumulator
+    float* jointBreakForce;    // 0 = unbreakable (snapshot state)
+    uint8_t* jointCollide;     // 0 = connected bodies never pair (snapshot state)
+    m2Pos2* jointTargets;      // mouse joints: world target (snapshot state)
+    m2Pos2* jointTargetsB;     // pulley: second ground anchor (snapshot state)
+    uint64_t* jointUserData;   // opaque (snapshot state)
     float* jointBreakTorque;
     uint16_t* jointGenerations;
     int32_t* jointFreeQueue;
