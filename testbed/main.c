@@ -885,6 +885,36 @@ static void SceneWaterTick(m2WorldId world, double simTime)
     s_faucetTicks += 1;
 }
 
+// A rewind can resurrect a mouse grip that lived inside an old
+// snapshot while the hand that held it is long gone. The engine is
+// right to bring it back (restores are bit-exact by contract); the
+// viewer owns its props, so when a rewind ends it sweeps any mouse
+// joint it does not hold, along with the throwaway static anchor
+// that grips hang from.
+static void tbDropGhostGrips(m2WorldId world, m2JointId held)
+{
+    m2JointId joints[64];
+    int32_t total = m2World_GetJoints(world, joints, 64);
+    total = total <= 64 ? total : 64;
+    for (int32_t i = 0; i < total; ++i)
+    {
+        if (m2Joint_GetType(joints[i]) != m2_mouseJoint)
+        {
+            continue;
+        }
+        if (held.index1 == joints[i].index1 && held.generation == joints[i].generation)
+        {
+            continue;
+        }
+        m2BodyId anchor = m2Joint_GetBodyA(joints[i]);
+        m2DestroyJoint(joints[i]);
+        if (m2Body_GetType(anchor) == m2_staticBody && m2Body_GetShapes(anchor, NULL, 0) == 0)
+        {
+            m2DestroyBody(anchor); // the grip's shapeless anchor post
+        }
+    }
+}
+
 static void SceneMachinery(m2WorldId world)
 {
     tbAddFloor(world, 0.0, -0.5, 30.0);
@@ -1064,8 +1094,9 @@ int main(void)
     uint8_t* ring = NULL;
     int32_t ringEntry = 0; // bytes per snapshot
     int32_t ringCapacity = 0;
-    int32_t ringCount = 0;  // valid entries behind the present
-    int32_t ringStart = 0;  // oldest entry (true circular ring, no sliding)
+    int32_t ringCount = 0; // valid entries behind the present
+    int32_t ringStart = 0; // oldest entry (true circular ring, no sliding)
+    bool wasRewinding = false;
     int32_t ringStride = 2; // capture every Nth step
     int32_t stepParity = 0;
 
@@ -1289,6 +1320,12 @@ int main(void)
                 ringCount += 1;
             }
         }
+
+        if (wasRewinding && !rewinding && world.index1 != 0)
+        {
+            tbDropGhostGrips(world, grip);
+        }
+        wasRewinding = rewinding;
 
         // ---- render ----
         BeginDrawing();
