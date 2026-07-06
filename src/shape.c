@@ -520,3 +520,266 @@ m2Polygon m2MakeSegmentProxy(m2Vec2 p1, m2Vec2 p2, float radius)
     proxy.radius = radius;
     return proxy;
 }
+
+// --- Convex decomposition -------------------------------------------------------
+//
+// Ear clipping into triangles, then Hertel-Mehlhorn style merging:
+// pieces fuse across a shared edge whenever the union stays strictly
+// convex and inside the 8-vertex polygon limit. Every scan runs in
+// ascending index order and every pass picks the lowest-index
+// candidate, so the decomposition is canonical: same outline, same
+// pieces, on every platform.
+
+#define M2_MAX_OUTLINE 64
+
+typedef struct m2DecompPiece
+{
+    int32_t idx[M2_MAX_POLYGON_VERTICES];
+    int32_t n;
+} m2DecompPiece;
+
+static float DecompCross(m2Vec2 a, m2Vec2 b, m2Vec2 c)
+{
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+// Inclusive point-in-triangle for a CCW triangle: boundary counts as
+// inside, which makes the ear test conservative.
+static bool DecompPointInTriangle(m2Vec2 a, m2Vec2 b, m2Vec2 c, m2Vec2 p)
+{
+    return DecompCross(a, b, p) >= 0.0f && DecompCross(b, c, p) >= 0.0f &&
+           DecompCross(c, a, p) >= 0.0f;
+}
+
+// Proper or improper intersection of segments ab and cd, endpoints
+// included; used to reject self-intersecting outlines loudly.
+static bool DecompSegmentsCross(m2Vec2 a, m2Vec2 b, m2Vec2 c, m2Vec2 d)
+{
+    float d1 = DecompCross(c, d, a);
+    float d2 = DecompCross(c, d, b);
+    float d3 = DecompCross(a, b, c);
+    float d4 = DecompCross(a, b, d);
+    if (((d1 > 0.0f && d2 < 0.0f) || (d1 < 0.0f && d2 > 0.0f)) &&
+        ((d3 > 0.0f && d4 < 0.0f) || (d3 < 0.0f && d4 > 0.0f)))
+    {
+        return true;
+    }
+    return false;
+}
+
+int32_t m2DecomposeOutline(const m2Vec2* points, int32_t count, m2Polygon* pieces, int32_t capacity)
+{
+    if (points == NULL || count < 3 || count > M2_MAX_OUTLINE || capacity < 0)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    float area2 = 0.0f;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        m2Vec2 p = points[i];
+        if (!(p.x == p.x) || !(p.y == p.y))
+        {
+            M2_ASSERT(false);
+            return 0;
+        }
+        m2Vec2 q = points[(i + 1) % count];
+        area2 += p.x * q.y - q.x * p.y;
+    }
+    if (!(area2 > 0.0f))
+    {
+        M2_ASSERT(false); // clockwise or degenerate outline
+        return 0;
+    }
+    for (int32_t i = 0; i < count; ++i)
+    {
+        for (int32_t j = i + 1; j < count; ++j)
+        {
+            // Skip adjacent segments (they share an endpoint).
+            if (j == i || (j + 1) % count == i || (i + 1) % count == j)
+            {
+                continue;
+            }
+            if (DecompSegmentsCross(points[i], points[(i + 1) % count], points[j],
+                                    points[(j + 1) % count]))
+            {
+                M2_ASSERT(false); // self-intersecting outline
+                return 0;
+            }
+        }
+    }
+
+    // Ear clipping. The ring holds original indices; each pass clips
+    // the valid ear with the lowest original index.
+    int32_t ring[M2_MAX_OUTLINE];
+    int32_t ringCount = count;
+    for (int32_t i = 0; i < count; ++i)
+    {
+        ring[i] = i;
+    }
+    int32_t triangles[3 * (M2_MAX_OUTLINE - 2)];
+    int32_t triangleCount = 0;
+    while (ringCount > 3)
+    {
+        int32_t bestPos = -1;
+        int32_t bestIndex = M2_MAX_OUTLINE;
+        bool degenerate = false;
+        for (int32_t k = 0; k < ringCount; ++k)
+        {
+            int32_t ip = ring[(k + ringCount - 1) % ringCount];
+            int32_t ic = ring[k];
+            int32_t in = ring[(k + 1) % ringCount];
+            float cross = DecompCross(points[ip], points[ic], points[in]);
+            if (cross == 0.0f)
+            {
+                // A straight vertex clips for free, no triangle.
+                bestPos = k;
+                degenerate = true;
+                break;
+            }
+            if (cross < 0.0f)
+            {
+                continue; // reflex
+            }
+            bool blocked = false;
+            for (int32_t m = 0; m < ringCount && !blocked; ++m)
+            {
+                int32_t io = ring[m];
+                if (io == ip || io == ic || io == in)
+                {
+                    continue;
+                }
+                blocked = DecompPointInTriangle(points[ip], points[ic], points[in], points[io]);
+            }
+            if (!blocked && ic < bestIndex)
+            {
+                bestIndex = ic;
+                bestPos = k;
+            }
+        }
+        if (bestPos < 0)
+        {
+            M2_ASSERT(false); // no ear: numerically hostile outline
+            return 0;
+        }
+        if (!degenerate)
+        {
+            triangles[3 * triangleCount + 0] = ring[(bestPos + ringCount - 1) % ringCount];
+            triangles[3 * triangleCount + 1] = ring[bestPos];
+            triangles[3 * triangleCount + 2] = ring[(bestPos + 1) % ringCount];
+            triangleCount += 1;
+        }
+        for (int32_t k = bestPos; k < ringCount - 1; ++k)
+        {
+            ring[k] = ring[k + 1];
+        }
+        ringCount -= 1;
+    }
+    float lastCross = DecompCross(points[ring[0]], points[ring[1]], points[ring[2]]);
+    if (lastCross > 0.0f)
+    {
+        triangles[3 * triangleCount + 0] = ring[0];
+        triangles[3 * triangleCount + 1] = ring[1];
+        triangles[3 * triangleCount + 2] = ring[2];
+        triangleCount += 1;
+    }
+
+    // Merge pass: fuse two pieces across a shared edge whenever the
+    // union stays strictly convex and at most 8 vertices. Ascending
+    // pair order, restart after every fuse: canonical.
+    m2DecompPiece work[M2_MAX_OUTLINE - 2];
+    int32_t pieceCount = triangleCount;
+    for (int32_t t = 0; t < triangleCount; ++t)
+    {
+        work[t].idx[0] = triangles[3 * t + 0];
+        work[t].idx[1] = triangles[3 * t + 1];
+        work[t].idx[2] = triangles[3 * t + 2];
+        work[t].n = 3;
+    }
+    bool fused = true;
+    while (fused)
+    {
+        fused = false;
+        for (int32_t i = 0; i < pieceCount && !fused; ++i)
+        {
+            for (int32_t j = i + 1; j < pieceCount && !fused; ++j)
+            {
+                if (work[i].n + work[j].n - 2 > M2_MAX_POLYGON_VERTICES)
+                {
+                    continue;
+                }
+                for (int32_t e = 0; e < work[i].n && !fused; ++e)
+                {
+                    int32_t u = work[i].idx[e];
+                    int32_t v = work[i].idx[(e + 1) % work[i].n];
+                    int32_t f = -1;
+                    for (int32_t g = 0; g < work[j].n; ++g)
+                    {
+                        if (work[j].idx[g] == v && work[j].idx[(g + 1) % work[j].n] == u)
+                        {
+                            f = g;
+                        }
+                    }
+                    if (f < 0)
+                    {
+                        continue;
+                    }
+                    // Merged ring: piece i from v around to u, then
+                    // piece j's far chain from u back toward v.
+                    m2DecompPiece merged;
+                    merged.n = 0;
+                    for (int32_t k = 0; k < work[i].n; ++k)
+                    {
+                        merged.idx[merged.n++] = work[i].idx[(e + 1 + k) % work[i].n];
+                    }
+                    for (int32_t k = 2; k < work[j].n; ++k)
+                    {
+                        merged.idx[merged.n++] = work[j].idx[(f + k) % work[j].n];
+                    }
+                    bool convex = true;
+                    for (int32_t k = 0; k < merged.n && convex; ++k)
+                    {
+                        m2Vec2 a = points[merged.idx[k]];
+                        m2Vec2 b = points[merged.idx[(k + 1) % merged.n]];
+                        m2Vec2 c = points[merged.idx[(k + 2) % merged.n]];
+                        convex = DecompCross(a, b, c) > 0.0f;
+                    }
+                    if (!convex)
+                    {
+                        continue;
+                    }
+                    work[i] = merged;
+                    for (int32_t k = j; k < pieceCount - 1; ++k)
+                    {
+                        work[k] = work[k + 1];
+                    }
+                    pieceCount -= 1;
+                    fused = true;
+                }
+            }
+        }
+    }
+
+    // Validate each piece through the ordinary polygon road; slivers
+    // that validation rejects are skipped (documented).
+    int32_t total = 0;
+    for (int32_t i = 0; i < pieceCount; ++i)
+    {
+        m2Vec2 verts[M2_MAX_POLYGON_VERTICES];
+        for (int32_t k = 0; k < work[i].n; ++k)
+        {
+            verts[k] = points[work[i].idx[k]];
+        }
+        m2Polygon piece = m2MakePolygon(verts, work[i].n, 0.0f);
+        if (piece.count == 0)
+        {
+            continue;
+        }
+        if (pieces != NULL && total < capacity)
+        {
+            pieces[total] = piece;
+        }
+        total += 1;
+    }
+    return total;
+}

@@ -328,6 +328,80 @@ static void TestGeometryReadback(void)
 
 // m2ComputeHull: welding, collinear rejection, and a noisy cloud
 // collapsing to the square it always was.
+static float PieceArea(const m2Polygon* p)
+{
+    float area2 = 0.0f;
+    for (int32_t i = 0; i < p->count; ++i)
+    {
+        m2Vec2 a = p->vertices[i];
+        m2Vec2 b = p->vertices[(i + 1) % p->count];
+        area2 += a.x * b.y - b.x * a.y;
+    }
+    return 0.5f * area2;
+}
+
+// The sprite-outline road: concave outlines split into convex pieces
+// that keep the area, stay inside the 8-vertex law, and validate
+// through the ordinary polygon road. Bad outlines bounce loudly.
+static void TestDecomposeOutline(void)
+{
+    // An L: one reflex corner, two pieces, area 4.
+    m2Vec2 ell[6] = {{0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 1.0f},
+                     {1.0f, 1.0f}, {1.0f, 3.0f}, {0.0f, 3.0f}};
+    m2Polygon pieces[16];
+    int32_t n = m2DecomposeOutline(ell, 6, pieces, 16);
+    CHECK(n == 2, "an L splits into two convex pieces");
+    float area = 0.0f;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        CHECK(pieces[i].count >= 3 && pieces[i].count <= 8, "pieces obey the vertex law");
+        area += PieceArea(&pieces[i]);
+    }
+    CHECK(area > 3.999f && area < 4.001f, "the L keeps its area");
+
+    // A plus: four reflex corners, area 20, a handful of pieces.
+    m2Vec2 plus[12] = {{3.0f, -1.0f},  {3.0f, 1.0f},   {1.0f, 1.0f},  {1.0f, 3.0f},
+                       {-1.0f, 3.0f},  {-1.0f, 1.0f},  {-3.0f, 1.0f}, {-3.0f, -1.0f},
+                       {-1.0f, -1.0f}, {-1.0f, -3.0f}, {1.0f, -3.0f}, {1.0f, -1.0f}};
+    n = m2DecomposeOutline(plus, 12, pieces, 16);
+    CHECK(n >= 3 && n <= 5, "a plus needs a handful of pieces");
+    area = 0.0f;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        area += PieceArea(&pieces[i]);
+    }
+    CHECK(area > 19.99f && area < 20.01f, "the plus keeps its area");
+
+    // Truthful totals beyond capacity, the enumeration contract.
+    m2Polygon one[1];
+    int32_t total = m2DecomposeOutline(plus, 12, one, 1);
+    CHECK(total == n, "capacity pressure never lies about the total");
+
+    // A convex outline is returned whole.
+    m2Vec2 box[4] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+    n = m2DecomposeOutline(box, 4, pieces, 16);
+    CHECK(n == 1 && pieces[0].count == 4, "a convex outline stays one piece");
+
+    // The pieces build real bodies end to end.
+    m2WorldDef wd = m2DefaultWorldDef();
+    wd.bodyCapacity = 8;
+    wd.shapeCapacity = 16;
+    wd.jointCapacity = 4;
+    m2WorldId world = m2CreateWorld(&wd);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 5.0};
+    m2BodyId body = m2CreateBody(world, &bd);
+    int32_t made = m2DecomposeOutline(ell, 6, pieces, 16);
+    for (int32_t i = 0; i < made; ++i)
+    {
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2ShapeId sid = m2CreatePolygonShape(body, &sd, &pieces[i]);
+        CHECK(m2Shape_IsValid(sid), "every piece becomes a live shape");
+    }
+    m2DestroyWorld(world);
+}
+
 static void TestComputeHull(void)
 {
     // A square with duplicates, an interior point, and jitter on one
@@ -370,6 +444,7 @@ int main(void)
 {
     TestValidation();
     TestComputeHull();
+    TestDecomposeOutline();
     TestGeometryReadback();
     TestAabbAndMass();
     TestCompoundAndRollback();

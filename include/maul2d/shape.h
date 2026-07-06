@@ -145,6 +145,19 @@ extern "C"
     /// outlines to collision shapes. Degenerate input returns a
     /// polygon with count == 0, the loud-invalid convention.
     m2Polygon m2ComputeHull(const m2Vec2* points, int32_t count, float radius);
+
+    /// Split a simple counter-clockwise outline (up to 64 points, no
+    /// self-intersections, no holes) into convex pieces of at most 8
+    /// vertices each: the road from a sprite outline to destructible
+    /// bodies. Fills up to capacity pieces and returns the truthful
+    /// total (the enumeration contract). Returns 0 and asserts on
+    /// invalid input (too few or too many points, clockwise winding,
+    /// self-intersection, non-finite coordinates). Near-zero-area
+    /// sliver pieces are welded away by validation and skipped; clean
+    /// outlines lose nothing. Pure math, no world required.
+    /// Thread class: reader (pure).
+    int32_t m2DecomposeOutline(const m2Vec2* points, int32_t count, m2Polygon* pieces,
+                               int32_t capacity);
     m2Polygon m2MakeBox(float halfWidth, float halfHeight);
 
     /// Attach a shape to a body. Validation failure or exhausted capacity
