@@ -143,6 +143,16 @@ for that recompute by name. `m2World_Explode` is one deterministic
 blast: full impulse inside the radius, linear falloff to zero across
 the band, filtered by category, replayed by one journal op.
 
+## Building geometry from points
+
+m2ComputeHull turns a loose point cloud into a valid convex polygon
+(welding near-duplicates, dropping degenerates loudly), and
+m2DecomposeOutline goes further: hand it a simple counter-clockwise
+outline of up to 64 points (a sprite silhouette) and it returns
+convex pieces of at most 8 vertices that keep the area, ready to
+become the shapes of a destructible body. Bad outlines (clockwise,
+self-intersecting) bounce loudly instead of producing garbage.
+
 ## Water
 
 Fluids are opt-in at world creation: set particleCapacity on the
