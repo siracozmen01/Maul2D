@@ -125,10 +125,46 @@ void m2World_Draw(m2WorldId worldId, const m2DebugDraw* draw)
             {
                 continue;
             }
+            uint8_t type = world->jointType[j];
+            if (type == 5)
+            {
+                continue; // a filter joint is the absence of contact: nothing to draw
+            }
+            if (type == 8)
+            {
+                // Gear: the anchor slots carry phase-tracking rotation
+                // state, not anchors; draw the coupling hub to hub.
+                m2Pos2 ca = world->transforms[world->jointBodyA[j]].p;
+                m2Pos2 cb = world->transforms[world->jointBodyB[j]].p;
+                draw->drawSegment(ca, cb, m2_colorJoint, draw->context);
+                continue;
+            }
             m2Pos2 a =
                 LocalToWorld(world->transforms[world->jointBodyA[j]], world->jointLocalAnchorA[j]);
             m2Pos2 b =
                 LocalToWorld(world->transforms[world->jointBodyB[j]], world->jointLocalAnchorB[j]);
+            if (type == 9)
+            {
+                // Pulley: two ropes up to the ground anchors and the
+                // crossbar between them, the machine as you drew it.
+                m2Pos2 ga = world->jointTargets[j];
+                m2Pos2 gb = world->jointTargetsB[j];
+                draw->drawSegment(a, ga, m2_colorJoint, draw->context);
+                draw->drawSegment(b, gb, m2_colorJoint, draw->context);
+                draw->drawSegment(ga, gb, m2_colorJoint, draw->context);
+                if (draw->drawPoint != NULL)
+                {
+                    draw->drawPoint(ga, 4.0f, m2_colorJoint, draw->context);
+                    draw->drawPoint(gb, 4.0f, m2_colorJoint, draw->context);
+                }
+                continue;
+            }
+            if (type == 7)
+            {
+                // Mouse: the spring runs from the world target to the
+                // grab point on B.
+                a = world->jointTargets[j];
+            }
             draw->drawSegment(a, b, m2_colorJoint, draw->context);
             if (draw->drawPoint != NULL)
             {
