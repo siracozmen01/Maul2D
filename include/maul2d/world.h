@@ -42,6 +42,8 @@ extern "C"
         float particlePressureStrength; // reference water default 0.05
         float particleDampingStrength;  // reference default 1.0
         float particleViscousStrength; // 0 = plain water (reference uses 0.25 on flagged particles)
+        float particleTensilePressureStrength; // surface tension, reference 0.2
+        float particleTensileNormalStrength;   // reference 0.2
         /// Solver worker threads including the caller (clamped to 8).
         /// NON-SEMANTIC by law: any worker count produces identical
         /// bits; it only changes how the same arithmetic is scheduled.

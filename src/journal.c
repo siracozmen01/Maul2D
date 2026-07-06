@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 25u
+#define M2_JOURNAL_VERSION 26u
 
 typedef struct m2JournalHeader
 {
@@ -777,10 +777,11 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             {
                 m2Pos2 position;
                 m2Vec2 velocity;
+                uint32_t flags;
                 m2ParticleId expected;
             };
             M2_READ_OP(struct m2OpEmit, em);
-            m2ParticleId made = m2World_EmitParticle(worldId, em.position, em.velocity);
+            m2ParticleId made = m2World_EmitParticle(worldId, em.position, em.velocity, em.flags);
             M2_ASSERT(made.index1 == em.expected.index1);
             (void)made;
             break;

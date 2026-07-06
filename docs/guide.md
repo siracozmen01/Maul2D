@@ -153,7 +153,11 @@ journal and hash the world produces. Emit with a position and
 velocity, destroy by id, read positions and velocities back, and
 enumerate with truthful totals; a full pool quietly returns the null
 id, so pace emitters off the count. Zero viscous strength is plain
-water; raise it for syrup.
+water; raise it for syrup. Emit takes behavior flags: tensile
+particles attract their tensile neighbors (surface tension), so
+sparse spray beads up and clings instead of drifting apart; the def
+carries the two reference strengths if you want to retune the
+effect at world creation.
 
 Water obeys the house laws: sensors are invisible to it, one-way
 chain platforms hold it only on their solid side, bodies push it and

@@ -106,6 +106,8 @@ static void TryPair(m2World* world, int32_t a, int32_t b, float diameter)
     int32_t n = world->particlePairCount;
     world->particlePairA[n] = a;
     world->particlePairB[n] = b;
+    world->particlePairFlags[n] = world->particleFlags[a] | world->particleFlags[b];
+    world->particleFlagsUnion |= world->particlePairFlags[n];
     if (distSq > 1.0e-12f)
     {
         float dist = sqrtf(distSq);
@@ -126,6 +128,7 @@ void m2UpdateParticlePairs(m2World* world)
 {
     world->particlePairCount = 0;
     world->particlePairOverflow = 0;
+    world->particleFlagsUnion = 0;
     if (world->particleCount == 0)
     {
         return;
@@ -391,6 +394,58 @@ void m2SolveParticles(m2World* world, float dt)
             world->particleVelocities[a].y += fy;
             world->particleVelocities[b].x -= fx;
             world->particleVelocities[b].y -= fy;
+        }
+    }
+
+    // Surface tension (reference SolveTensile): each tensile pair
+    // first votes a weighted surface normal, then pairs attract by
+    // local density above 2 plus the normal disagreement, capped at
+    // half the critical velocity. Droplets bead up and cling.
+    if ((world->particleFlagsUnion & m2_tensileParticle) != 0)
+    {
+        for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+        {
+            world->particleAccumulation2[i] = (m2Vec2){0.0f, 0.0f};
+        }
+        for (int32_t k = 0; k < pairCount; ++k)
+        {
+            if ((world->particlePairFlags[k] & m2_tensileParticle) == 0)
+            {
+                continue;
+            }
+            int32_t a = world->particlePairA[k];
+            int32_t b = world->particlePairB[k];
+            float w = world->particlePairWeight[k];
+            m2Vec2 n = world->particlePairNormal[k];
+            float wn = (1.0f - w) * w;
+            world->particleAccumulation2[a].x -= wn * n.x;
+            world->particleAccumulation2[a].y -= wn * n.y;
+            world->particleAccumulation2[b].x += wn * n.x;
+            world->particleAccumulation2[b].y += wn * n.y;
+        }
+        float tensilePressure = world->particleTensilePressure * (diameter * invDt);
+        float tensileNormal = world->particleTensileNormal * (diameter * invDt);
+        float maxVariation = 0.5f * (diameter * invDt);
+        for (int32_t k = 0; k < pairCount; ++k)
+        {
+            if ((world->particlePairFlags[k] & m2_tensileParticle) == 0)
+            {
+                continue;
+            }
+            int32_t a = world->particlePairA[k];
+            int32_t b = world->particlePairB[k];
+            float w = world->particlePairWeight[k];
+            m2Vec2 n = world->particlePairNormal[k];
+            float h = world->particleWeights[a] + world->particleWeights[b];
+            float sx = world->particleAccumulation2[b].x - world->particleAccumulation2[a].x;
+            float sy = world->particleAccumulation2[b].y - world->particleAccumulation2[a].y;
+            float fn = m2MinF(tensilePressure * (h - 2.0f) + tensileNormal * (sx * n.x + sy * n.y),
+                              maxVariation) *
+                       w;
+            world->particleVelocities[a].x -= fn * n.x;
+            world->particleVelocities[a].y -= fn * n.y;
+            world->particleVelocities[b].x += fn * n.x;
+            world->particleVelocities[b].y += fn * n.y;
         }
     }
 

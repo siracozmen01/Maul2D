@@ -877,7 +877,7 @@ static void SceneWaterTick(m2WorldId world, double simTime)
         {
             int32_t lane = (s_faucetTicks + j * 5) % 7;
             double x = -0.27 + (double)lane * 0.09;
-            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f});
+            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f}, 0);
         }
     }
     s_faucetTicks += 1;

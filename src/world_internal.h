@@ -131,6 +131,7 @@ typedef struct m2World
     m2Vec2* particleVelocities;
     uint8_t* particleAlive;
     uint16_t* particleGenerations;
+    uint32_t* particleFlags; // behavior bits (snapshot state)
     int32_t* particleFreeQueue;
     int32_t particleCapacity;
     int32_t particleFreeHead;
@@ -143,18 +144,23 @@ typedef struct m2World
     float particlePressureStrength;
     float particleDampingStrength;
     float particleViscousStrength;
+    float particleTensilePressure;
+    float particleTensileNormal;
     // Step-transient fluid scratch: rebuilt from positions every
     // step, never walked, never hashed (the island precedent).
     void* particleProxies; // capacity * 16 bytes (key, index, pad)
     int32_t* particlePairA;
     int32_t* particlePairB;
     float* particlePairWeight;
+    uint32_t* particlePairFlags; // OR of both ends (transient)
     m2Vec2* particlePairNormal;
     int32_t particlePairCapacity; // 12 per particle of capacity
     int32_t particlePairCount;
-    int32_t particlePairOverflow; // deterministic truncation counter
-    float* particleWeights;       // step-transient dimensionless density
-    float* particleAccumulation;  // step-transient pressure accumulator
+    int32_t particlePairOverflow;  // deterministic truncation counter
+    float* particleWeights;        // step-transient dimensionless density
+    float* particleAccumulation;   // step-transient pressure accumulator
+    m2Vec2* particleAccumulation2; // step-transient tensile normals
+    uint32_t particleFlagsUnion;   // OR over live pairs (transient)
     // Step-transient particle-vs-body contacts (one per particle and
     // touched shape, canonical particle-then-shape order).
     int32_t* particleBodyParticle;

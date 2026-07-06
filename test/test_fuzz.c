@@ -131,7 +131,9 @@ static void DoRandomOp(m2WorldId world)
             double py = (double)Pick(60) * 0.1;
             float vx = (float)((int32_t)Pick(7) - 3);
             float vy = (float)((int32_t)Pick(7) - 3);
-            m2World_EmitParticle(world, (m2Pos2){px, py}, (m2Vec2){vx, vy});
+            uint32_t sticky = Pick(3);
+            uint32_t flags = sticky == 0 ? m2_tensileParticle : 0;
+            m2World_EmitParticle(world, (m2Pos2){px, py}, (m2Vec2){vx, vy}, flags);
             return;
         }
         m2ParticleId targets[128];

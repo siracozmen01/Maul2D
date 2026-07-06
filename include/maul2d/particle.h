@@ -34,12 +34,22 @@ extern "C"
 
     static const m2ParticleId m2_nullParticleId = {0, 0, 0};
 
+    /// Per-particle behavior flags, set at emit. Plain water is 0.
+    /// Tensile particles attract their tensile neighbors (surface
+    /// tension): droplets bead up and cling instead of dispersing.
+    typedef enum m2ParticleFlags
+    {
+        m2_waterParticle = 0,
+        m2_tensileParticle = 1u << 0,
+    } m2ParticleFlags;
+
     /// Emit one particle at a world position. Returns the null id
     /// when the world has no particle system (asserts in Debug: that
     /// is misuse) or when the system is full (silent: a full pool is
     /// a runtime fact, pace emitters off GetParticleCount). Journaled.
     /// Thread class: writer.
-    m2ParticleId m2World_EmitParticle(m2WorldId worldId, m2Pos2 position, m2Vec2 velocity);
+    m2ParticleId m2World_EmitParticle(m2WorldId worldId, m2Pos2 position, m2Vec2 velocity,
+                                      uint32_t flags);
 
     /// Destroy one particle; its slot recycles FIFO under a fresh
     /// generation. Journaled. Thread class: writer.
@@ -49,6 +59,7 @@ extern "C"
     bool m2Particle_IsValid(m2ParticleId particleId);
 
     m2Pos2 m2Particle_GetPosition(m2ParticleId particleId);
+    uint32_t m2Particle_GetFlags(m2ParticleId particleId);
     m2Vec2 m2Particle_GetVelocity(m2ParticleId particleId);
 
     /// Journaled. Thread class: writer.
