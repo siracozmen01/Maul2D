@@ -1467,13 +1467,15 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         }
     }
 
-    m2UpdateIslandsAndWake(world);
     if (world->particleCount > 0)
     {
         // The whole fluid pass runs once per step before the rigid
         // solve, the reference schedule; pairs freeze at step start.
+        // It runs BEFORE the island update so a body the water wakes
+        // pulls its whole island awake, the island-coupled sleep law.
         m2SolveParticles(world, dt);
     }
+    m2UpdateIslandsAndWake(world);
     uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);
     uint64_t tSolve = m2TimeNowNs();

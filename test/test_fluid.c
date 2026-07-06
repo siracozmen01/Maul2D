@@ -470,6 +470,89 @@ static void TestWaterChainAndSensor(void)
     m2DestroyWorld(world);
 }
 
+// Two-way coupling: what floats, floats; what sinks, sinks; and
+// water landing on a sleeper wakes it through the island law.
+static void TestBuoyancy(void)
+{
+    m2WorldDef def = FluidWorldDef(128);
+    m2WorldId world = m2CreateWorld(&def);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    floorDef.position = (m2Pos2){100.0, 49.9};
+    m2Polygon floorBox = m2MakeBox(0.7f, 0.1f);
+    m2CreatePolygonShape(m2CreateBody(world, &floorDef), &sd, &floorBox);
+    m2Polygon wallBox = m2MakeBox(0.1f, 0.8f);
+    m2BodyDef leftDef = m2DefaultBodyDef();
+    leftDef.position = (m2Pos2){99.3, 50.7};
+    m2CreatePolygonShape(m2CreateBody(world, &leftDef), &sd, &wallBox);
+    m2BodyDef rightDef = m2DefaultBodyDef();
+    rightDef.position = (m2Pos2){100.7, 50.7};
+    m2CreatePolygonShape(m2CreateBody(world, &rightDef), &sd, &wallBox);
+    for (int32_t i = 0; i < 100; ++i)
+    {
+        double x = 100.0 - 0.44 + (double)(i % 10) * 0.09;
+        double y = 50.25 + (double)(i / 10) * 0.09;
+        m2World_EmitParticle(world, (m2Pos2){x, y}, (m2Vec2){0.0f, 0.0f});
+    }
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    m2Polygon crate = m2MakeBox(0.1f, 0.1f);
+    m2BodyDef lightDef = m2DefaultBodyDef();
+    lightDef.type = m2_dynamicBody;
+    lightDef.position = (m2Pos2){99.7, 50.9};
+    m2BodyId light = m2CreateBody(world, &lightDef);
+    m2ShapeDef lightShape = m2DefaultShapeDef();
+    lightShape.density = 0.05f;
+    m2CreatePolygonShape(light, &lightShape, &crate);
+    m2BodyDef heavyDef = m2DefaultBodyDef();
+    heavyDef.type = m2_dynamicBody;
+    heavyDef.position = (m2Pos2){100.3, 50.9};
+    m2BodyId heavy = m2CreateBody(world, &heavyDef);
+    m2ShapeDef heavyShape = m2DefaultShapeDef();
+    heavyShape.density = 3.0f;
+    m2CreatePolygonShape(heavy, &heavyShape, &crate);
+    for (int32_t i = 0; i < 500; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 lp = m2Body_GetPosition(light);
+    m2Pos2 hp = m2Body_GetPosition(heavy);
+    CHECK(lp.y > 50.3, "the light crate floats on the water body");
+    CHECK(hp.y < 50.15, "the heavy crate sinks to the floor");
+    CHECK(lp.y > hp.y + 0.2, "density decides who floats");
+    m2DestroyWorld(world);
+
+    // Wake: a crate asleep in a dry basin, then rain.
+    m2WorldId dry = m2CreateWorld(&def);
+    m2BodyDef groundDef = m2DefaultBodyDef();
+    m2Polygon slab = m2MakeBox(1.0f, 0.1f);
+    m2CreatePolygonShape(m2CreateBody(dry, &groundDef), &sd, &slab);
+    m2BodyDef boxDef = m2DefaultBodyDef();
+    boxDef.type = m2_dynamicBody;
+    boxDef.position = (m2Pos2){0.0, 0.35};
+    m2BodyId box = m2CreateBody(dry, &boxDef);
+    m2ShapeDef boxShape = m2DefaultShapeDef();
+    m2CreatePolygonShape(box, &boxShape, &crate);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(dry, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(box), "the crate sleeps in the dry basin");
+    for (int32_t i = 0; i < 5; ++i)
+    {
+        m2World_EmitParticle(dry, (m2Pos2){-0.1 + (double)i * 0.05, 0.55}, (m2Vec2){0.0f, -1.0f});
+    }
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(dry, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_IsAwake(box), "rain wakes the sleeper");
+    m2DestroyWorld(dry);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -526,6 +609,7 @@ int main(void)
     TestRelaxation();
     TestBasin();
     TestWaterChainAndSensor();
+    TestBuoyancy();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

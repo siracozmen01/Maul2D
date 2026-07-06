@@ -292,6 +292,14 @@ static void UpdateParticleBodyContacts(m2World* world)
             float rpy = dy - comArm.y;
             float rpn = rpx * n.y - rpy * n.x;
             float invM = invAm + world->invMass[body] + world->invInertia[body] * rpn * rpn;
+            if (world->types[body] == (uint8_t)m2_dynamicBody)
+            {
+                // Water touching a body wakes it (reference semantics:
+                // every body impulse wakes); the pass runs before the
+                // island update so the wake spreads island-wide.
+                world->asleep[body] = 0;
+                world->sleepTimes[body] = 0.0f;
+            }
             int32_t k = world->particleBodyCount;
             world->particleBodyParticle[k] = i;
             world->particleBodyBody[k] = body;
@@ -366,7 +374,9 @@ void m2SolveParticles(m2World* world, float dt)
             float fy = viscous * m * w * (bvy - world->particleVelocities[a].y);
             world->particleVelocities[a].x += particleInvMass * fx;
             world->particleVelocities[a].y += particleInvMass * fy;
-            // One-way for now: the body's reaction lands next slice.
+            world->linearVelocities[body].x -= world->invMass[body] * fx;
+            world->linearVelocities[body].y -= world->invMass[body] * fy;
+            world->angularVelocities[body] -= world->invInertia[body] * (rx * fy - ry * fx);
         }
         for (int32_t k = 0; k < pairCount; ++k)
         {
@@ -414,14 +424,24 @@ void m2SolveParticles(m2World* world, float dt)
     for (int32_t k = 0; k < bodyContactCount; ++k)
     {
         int32_t a = world->particleBodyParticle[k];
+        int32_t body = world->particleBodyBody[k];
         float w = world->particleBodyWeight[k];
         float m = world->particleBodyMass[k];
         m2Vec2 n = world->particleBodyNormal[k];
         float h = world->particleAccumulation[a] + pressurePerWeight * w;
         float f = velocityPerPressure * w * m * h;
-        // n points from the shape toward the particle: push out.
+        // n points from the shape toward the particle: push out, and
+        // push the body the other way (buoyancy is exactly this).
         world->particleVelocities[a].x += particleInvMass * f * n.x;
         world->particleVelocities[a].y += particleInvMass * f * n.y;
+        m2Pos2 pp = world->particlePositions[a];
+        m2Vec2 lc = world->localCenters[body];
+        m2Vec2 comArm = Rotate(world->transforms[body].q, lc);
+        float rx = (float)(pp.x - world->transforms[body].p.x) - comArm.x;
+        float ry = (float)(pp.y - world->transforms[body].p.y) - comArm.y;
+        world->linearVelocities[body].x -= world->invMass[body] * f * n.x;
+        world->linearVelocities[body].y -= world->invMass[body] * f * n.y;
+        world->angularVelocities[body] -= world->invInertia[body] * (rx * f * n.y - ry * f * n.x);
     }
     for (int32_t k = 0; k < pairCount; ++k)
     {
@@ -462,11 +482,15 @@ void m2SolveParticles(m2World* world, float dt)
         if (vn > 0.0f)
         {
             // Approaching along the outward normal from the particle's
-            // side; eat it like the pair pass does.
+            // side; eat it on both ends like the pair pass does.
             float damping = m2MaxF(linearDamping * w, m2MinF(quadraticDamping * vn, 0.5f));
             float f = damping * m * vn;
             world->particleVelocities[a].x += particleInvMass * f * n.x;
             world->particleVelocities[a].y += particleInvMass * f * n.y;
+            world->linearVelocities[body].x -= world->invMass[body] * f * n.x;
+            world->linearVelocities[body].y -= world->invMass[body] * f * n.y;
+            world->angularVelocities[body] -=
+                world->invInertia[body] * (rx * f * n.y - ry * f * n.x);
         }
     }
     for (int32_t k = 0; k < pairCount; ++k)
@@ -564,7 +588,10 @@ void m2SolveParticles(m2World* world, float dt)
             double ty = p1.y + (double)(bestFraction * move.y) + (double)(0.005f * bestNormal.y);
             world->particleVelocities[i].x = (float)(tx - p1.x) * invDt;
             world->particleVelocities[i].y = (float)(ty - p1.y) * invDt;
-            // One-way: the body feels nothing until the next slice.
+            // The projection stays a pure clamp on the particle, like
+            // the reference's SolveCollision (its body push arrives
+            // through the contact loops above); the reference's
+            // lost-momentum re-add force is deliberately omitted.
         }
     }
 
