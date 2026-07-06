@@ -6,7 +6,7 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status: 1.6
+## Status: 1.7
 
 Water is in: an opt-in deterministic particle fluid (LiquidFun
 lineage) living inside the same snapshot, journal and hash contract
