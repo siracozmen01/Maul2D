@@ -88,10 +88,13 @@ static void TestLifecycle(void)
           "the first freed slot returns last, under a fresh generation");
     CHECK(!m2Particle_IsValid(ids[0]), "the old id stays stale after rebirth");
 
-    // Retargeting velocity is immediate.
-    m2Particle_SetVelocity(reborn, (m2Vec2){3.0f, 0.0f});
+    // Retargeting velocity is immediate (an isolated particle: the
+    // coincident tower above is exactly where the velocity-limit law
+    // dominates, by design).
+    m2ParticleId lone = m2World_EmitParticle(world, (m2Pos2){20.0, 9.0}, (m2Vec2){0.0f, 0.0f});
+    m2Particle_SetVelocity(lone, (m2Vec2){3.0f, 0.0f});
     m2World_Step(world, 1.0f / 60.0f, 4);
-    CHECK(m2Particle_GetPosition(reborn).x > 0.04, "a set velocity moves the particle");
+    CHECK(m2Particle_GetPosition(lone).x > 20.04, "a set velocity moves the particle");
 
     m2DestroyWorld(world);
 }
@@ -181,6 +184,94 @@ static void TestJournalReplay(void)
     m2DestroyWorld(fresh);
     m2DestroyWorld(world);
     free(tape);
+}
+
+// The relaxation acceptance: a dense blob spreads toward rest
+// spacing without exploding, the velocity limit holds, and the
+// system calms down; viscosity kills tangential shear that plain
+// water keeps.
+static void TestRelaxation(void)
+{
+    m2WorldDef def = FluidWorldDef(64);
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2ParticleId blob[25];
+    for (int32_t i = 0; i < 25; ++i)
+    {
+        double x = (double)(i % 5) * 0.04;
+        double y = (double)(i / 5) * 0.04;
+        blob[i] = m2World_EmitParticle(world, (m2Pos2){x, y}, (m2Vec2){0.0f, 0.0f});
+    }
+    float peakSpeed = 0.0f;
+    for (int32_t step = 0; step < 120; ++step)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        if (step == 4)
+        {
+            for (int32_t i = 0; i < 25; ++i)
+            {
+                m2Vec2 v = m2Particle_GetVelocity(blob[i]);
+                float speed = sqrtf(v.x * v.x + v.y * v.y);
+                peakSpeed = peakSpeed > speed ? peakSpeed : speed;
+            }
+        }
+    }
+    double spreadSq = 0.0;
+    float lateSpeed = 0.0f;
+    for (int32_t i = 0; i < 25; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(blob[i]);
+        CHECK(p.x == p.x && p.y == p.y, "positions stay finite");
+        double dx = p.x - 0.08;
+        double dy = p.y - 0.08;
+        double d2 = dx * dx + dy * dy;
+        spreadSq = d2 > spreadSq ? d2 : spreadSq;
+        m2Vec2 v = m2Particle_GetVelocity(blob[i]);
+        float speed = sqrtf(v.x * v.x + v.y * v.y);
+        lateSpeed = lateSpeed > speed ? lateSpeed : speed;
+    }
+    CHECK(spreadSq > 0.013, "pressure spreads the blob past its packed extent");
+    CHECK(peakSpeed > 0.0f, "the packed blob actually moves");
+    // Free particles in zero gravity coast (walls arrive with the
+    // rigid coupling slice); the promise here is the speed law.
+    CHECK(peakSpeed <= 6.001f && lateSpeed <= 6.001f, "no speed ever beats one diameter per step");
+
+    // Approach damping: two particles closing at 2 m/s inside one
+    // diameter lose closing speed in a single step but do not stick.
+    m2ParticleId left = m2World_EmitParticle(world, (m2Pos2){5.0, 5.0}, (m2Vec2){1.0f, 0.0f});
+    m2ParticleId right = m2World_EmitParticle(world, (m2Pos2){5.08, 5.0}, (m2Vec2){-1.0f, 0.0f});
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    float closing = m2Particle_GetVelocity(left).x - m2Particle_GetVelocity(right).x;
+    CHECK(closing < 1.7f, "damping eats approach speed");
+    CHECK(closing > 0.0f, "damping does not reverse the approach by itself");
+
+    // The stability law: nothing crosses one diameter per step.
+    m2ParticleId bullet = m2World_EmitParticle(world, (m2Pos2){3.0, 3.0}, (m2Vec2){1000.0f, 0.0f});
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    m2Vec2 bv = m2Particle_GetVelocity(bullet);
+    CHECK(sqrtf(bv.x * bv.x + bv.y * bv.y) <= 6.001f,
+          "the velocity limit clamps to one diameter per step");
+    m2DestroyWorld(world);
+
+    // Tangential shear: plain water keeps it, viscosity eats it. The
+    // pair normal is y, the shear is x, so pressure and damping never
+    // touch it; only the viscous pass can.
+    m2WorldDef syrupDef = FluidWorldDef(8);
+    syrupDef.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldDef waterDef = syrupDef;
+    syrupDef.particleViscousStrength = 0.5f;
+    m2WorldId water = m2CreateWorld(&waterDef);
+    m2WorldId syrup = m2CreateWorld(&syrupDef);
+    m2ParticleId wSlide = m2World_EmitParticle(water, (m2Pos2){0.0, 0.0}, (m2Vec2){1.0f, 0.0f});
+    m2World_EmitParticle(water, (m2Pos2){0.0, 0.06}, (m2Vec2){0.0f, 0.0f});
+    m2ParticleId sSlide = m2World_EmitParticle(syrup, (m2Pos2){0.0, 0.0}, (m2Vec2){1.0f, 0.0f});
+    m2World_EmitParticle(syrup, (m2Pos2){0.0, 0.06}, (m2Vec2){0.0f, 0.0f});
+    m2World_Step(water, 1.0f / 60.0f, 4);
+    m2World_Step(syrup, 1.0f / 60.0f, 4);
+    CHECK(m2Particle_GetVelocity(wSlide).x > 0.95f, "plain water keeps tangential shear");
+    CHECK(m2Particle_GetVelocity(sSlide).x < 0.85f, "viscosity eats tangential shear");
+    m2DestroyWorld(water);
+    m2DestroyWorld(syrup);
 }
 
 // White-box: the neighbor structure is canonical and complete.
@@ -328,6 +419,7 @@ int main(void)
     TestOverflowIsQuiet();
     TestPairStructure();
     TestPairOverflow();
+    TestRelaxation();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

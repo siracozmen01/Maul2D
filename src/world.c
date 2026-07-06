@@ -909,7 +909,7 @@ m2WorldDef m2DefaultWorldDef(void)
     def.particleGravityScale = 1.0f;
     def.particlePressureStrength = 0.05f;
     def.particleDampingStrength = 1.0f;
-    def.particleViscousStrength = 0.25f;
+    def.particleViscousStrength = 0.0f; // plain water; raise for syrup
     def.internalValue = M2_WORLD_COOKIE;
     return def;
 }
@@ -1058,6 +1058,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         M2_ALLOC(particlePairB, world->particlePairCapacity, int32_t);
         M2_ALLOC(particlePairWeight, world->particlePairCapacity, float);
         M2_ALLOC(particlePairNormal, world->particlePairCapacity, m2Vec2);
+        M2_ALLOC(particleWeights, particleCap, float);
+        M2_ALLOC(particleAccumulation, particleCap, float);
     }
     M2_ALLOC(jointUserData, jointCap, uint64_t);
     M2_ALLOC(jointBreakTorque, jointCap, float);
@@ -1250,6 +1252,8 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particlePairB);
     m2Free(world->particlePairWeight);
     m2Free(world->particlePairNormal);
+    m2Free(world->particleWeights);
+    m2Free(world->particleAccumulation);
     m2Free(world->jointUserData);
     m2Free(world->jointBreakTorque);
     m2Free(world->jointGenerations);
@@ -1455,9 +1459,9 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     m2UpdateIslandsAndWake(world);
     if (world->particleCount > 0)
     {
-        // Neighbor pairs freeze at step start, the reference cadence:
-        // the substep solver reads one canonical list per step.
-        m2UpdateParticlePairs(world);
+        // The whole fluid pass runs once per step before the rigid
+        // solve, the reference schedule; pairs freeze at step start.
+        m2SolveParticles(world, dt);
     }
     uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);

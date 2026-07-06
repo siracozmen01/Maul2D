@@ -153,6 +153,8 @@ typedef struct m2World
     int32_t particlePairCapacity; // 12 per particle of capacity
     int32_t particlePairCount;
     int32_t particlePairOverflow; // deterministic truncation counter
+    float* particleWeights;       // step-transient dimensionless density
+    float* particleAccumulation;  // step-transient pressure accumulator
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;
@@ -390,5 +392,6 @@ int32_t m2ContactConstraintSize(void);
 // stale or null id. Not part of the public ABI.
 m2World* m2World_GetInternal(m2WorldId worldId);
 void m2UpdateParticlePairs(m2World* world);
+void m2SolveParticles(m2World* world, float dt);
 
 #endif // MAUL2D_WORLD_INTERNAL_H

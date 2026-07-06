@@ -161,3 +161,154 @@ void m2UpdateParticlePairs(m2World* world)
         }
     }
 }
+
+// The water pass (chapter slice 3), the reference relaxation solver
+// on the frozen pair list, once per step before the rigid solve:
+// weight (dimensionless density) -> viscosity (system-level strength;
+// zero means plain water) -> gravity -> pressure -> damping ->
+// velocity limit -> advance. All scalars f32 through the pinned op
+// whitelist (sqrtf + divide, never a fast inverse sqrt), min/max as
+// compare+select, every loop in fixed index or pair order.
+void m2SolveParticles(m2World* world, float dt)
+{
+    m2UpdateParticlePairs(world);
+    if (dt <= 0.0f)
+    {
+        return;
+    }
+    float invDt = 1.0f / dt;
+    float diameter = 2.0f * world->particleRadius;
+    int32_t pairCount = world->particlePairCount;
+
+    // Dimensionless density: the sum of contact weights.
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        world->particleWeights[i] = 0.0f;
+    }
+    for (int32_t k = 0; k < pairCount; ++k)
+    {
+        float w = world->particlePairWeight[k];
+        world->particleWeights[world->particlePairA[k]] += w;
+        world->particleWeights[world->particlePairB[k]] += w;
+    }
+
+    // Viscosity kills relative velocity across every pair. The
+    // reference gates this on a per-particle flag; Maul's v1 makes
+    // it a system property (zero strength = plain water), the
+    // per-particle flag can arrive with the behavior flags later.
+    float viscous = world->particleViscousStrength;
+    if (viscous > 0.0f)
+    {
+        for (int32_t k = 0; k < pairCount; ++k)
+        {
+            int32_t a = world->particlePairA[k];
+            int32_t b = world->particlePairB[k];
+            float w = world->particlePairWeight[k];
+            float fx =
+                viscous * w * (world->particleVelocities[b].x - world->particleVelocities[a].x);
+            float fy =
+                viscous * w * (world->particleVelocities[b].y - world->particleVelocities[a].y);
+            world->particleVelocities[a].x += fx;
+            world->particleVelocities[a].y += fy;
+            world->particleVelocities[b].x -= fx;
+            world->particleVelocities[b].y -= fy;
+        }
+    }
+
+    // Gravity, full step, fixed index order.
+    float gx = dt * world->particleGravityScale * world->gravity.x;
+    float gy = dt * world->particleGravityScale * world->gravity.y;
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] != 0)
+        {
+            world->particleVelocities[i].x += gx;
+            world->particleVelocities[i].y += gy;
+        }
+    }
+
+    // Pressure as a linear function of density above the rest weight
+    // (reference constants: min weight 1, pressure cap 0.25 of the
+    // critical pressure; the critical velocity is one diameter per
+    // step, the scale that keeps neighbors discoverable).
+    float criticalVelocity = diameter * invDt;
+    float criticalPressure = world->particleDensity * criticalVelocity * criticalVelocity;
+    float pressurePerWeight = world->particlePressureStrength * criticalPressure;
+    float maxPressure = 0.25f * criticalPressure;
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        float w = world->particleWeights[i];
+        float h = pressurePerWeight * m2MaxF(0.0f, w - 1.0f);
+        world->particleAccumulation[i] = m2MinF(h, maxPressure);
+    }
+    float velocityPerPressure = dt / (world->particleDensity * diameter);
+    for (int32_t k = 0; k < pairCount; ++k)
+    {
+        int32_t a = world->particlePairA[k];
+        int32_t b = world->particlePairB[k];
+        float w = world->particlePairWeight[k];
+        m2Vec2 n = world->particlePairNormal[k];
+        float h = world->particleAccumulation[a] + world->particleAccumulation[b];
+        float f = velocityPerPressure * w * h;
+        world->particleVelocities[a].x -= f * n.x;
+        world->particleVelocities[a].y -= f * n.y;
+        world->particleVelocities[b].x += f * n.x;
+        world->particleVelocities[b].y += f * n.y;
+    }
+
+    // Damping eats approach speed only (vn < 0), linear plus
+    // quadratic, capped at half the approach per pass.
+    float linearDamping = world->particleDampingStrength;
+    float quadraticDamping = 1.0f / criticalVelocity;
+    for (int32_t k = 0; k < pairCount; ++k)
+    {
+        int32_t a = world->particlePairA[k];
+        int32_t b = world->particlePairB[k];
+        float w = world->particlePairWeight[k];
+        m2Vec2 n = world->particlePairNormal[k];
+        float vx = world->particleVelocities[b].x - world->particleVelocities[a].x;
+        float vy = world->particleVelocities[b].y - world->particleVelocities[a].y;
+        float vn = vx * n.x + vy * n.y;
+        if (vn < 0.0f)
+        {
+            float damping = m2MaxF(linearDamping * w, m2MinF(-quadraticDamping * vn, 0.5f));
+            float f = damping * vn;
+            world->particleVelocities[a].x += f * n.x;
+            world->particleVelocities[a].y += f * n.y;
+            world->particleVelocities[b].x -= f * n.x;
+            world->particleVelocities[b].y -= f * n.y;
+        }
+    }
+
+    // The velocity limit is the stability law: nothing crosses more
+    // than one diameter per step, so neighbors stay discoverable and
+    // dense clusters cannot explode.
+    float criticalSq = criticalVelocity * criticalVelocity;
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        float vx = world->particleVelocities[i].x;
+        float vy = world->particleVelocities[i].y;
+        float v2 = vx * vx + vy * vy;
+        if (v2 > criticalSq)
+        {
+            float scale = sqrtf(criticalSq / v2);
+            world->particleVelocities[i].x = vx * scale;
+            world->particleVelocities[i].y = vy * scale;
+        }
+    }
+
+    // Advance, single f64 crossing per axis.
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        world->particlePositions[i].x += (double)(world->particleVelocities[i].x * dt);
+        world->particlePositions[i].y += (double)(world->particleVelocities[i].y * dt);
+    }
+}
