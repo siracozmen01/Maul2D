@@ -208,8 +208,12 @@ the standard cases deterministically. World tuning toggles (contact
 hertz, speculative distance, warm starting) stay pinned because the
 physics itself is part of the determinism contract. Body names are
 what userData is for. Per-shape event enable flags guard costs Maul
-does not have. One rival idea is parked for later rather than
-rejected: conveyor-style surface speed on shapes.
+does not have. A per-step "moved
+bodies" event stream is also left out: enumerate and read transforms
+instead, the readers are cheap and the set of ids is yours to
+manage. Per-body sleep thresholds stay pinned for the same reason
+the world tuning knobs do. One rival idea is parked for later rather
+than rejected: conveyor-style surface speed on shapes.
 
 ## Rollback netcode in one paragraph
 

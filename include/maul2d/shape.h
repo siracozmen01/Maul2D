@@ -259,6 +259,31 @@ extern "C"
                                            m2QueryFilter filter);
     m2RayCastResult m2Shape_RayCast(m2ShapeId shapeId, m2Pos2 origin, m2Vec2 translation);
 
+    /// Every hit along a ray or sweep, not just the first: results
+    /// arrive in ascending fraction order (ties break to the lower
+    /// shape index) and the return value is the TRUE total even when
+    /// it exceeds capacity; when it does, the closest hits are the
+    /// ones kept. Chain segments stay one-sided. Thread class: reader.
+    typedef struct m2RayHit
+    {
+        m2ShapeId shapeId;
+        m2Pos2 point;
+        m2Vec2 normal; // (0,0) on initial overlap
+        float fraction;
+    } m2RayHit;
+
+    int32_t m2World_CastRayAll(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation, m2RayHit* hits,
+                               int32_t capacity, m2QueryFilter filter);
+    int32_t m2World_CastCircleAll(m2WorldId worldId, const m2Circle* circle, m2Transform origin,
+                                  m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                                  m2QueryFilter filter);
+    int32_t m2World_CastCapsuleAll(m2WorldId worldId, const m2Capsule* capsule, m2Transform origin,
+                                   m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                                   m2QueryFilter filter);
+    int32_t m2World_CastPolygonAll(m2WorldId worldId, const m2Polygon* polygon, m2Transform origin,
+                                   m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                                   m2QueryFilter filter);
+
     /// Convex sweeps: the given shape (in its own local frame, posed
     /// by origin) slides along translation; the closest hit wins and
     /// ties break to the lower shape index. Chain segments stay

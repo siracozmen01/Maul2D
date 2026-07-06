@@ -157,6 +157,74 @@ static void TestShapeCastsAndOverlaps(void)
     m2DestroyWorld(world);
 }
 
+// All-hits variants (parity bucket 2): every shape along the path,
+// ascending fractions, truthful totals, closest kept under pressure.
+static void TestAllHits(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2QueryFilter all = m2DefaultQueryFilter();
+
+    // Three walls in a row.
+    m2ShapeId walls[3];
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.position = (m2Pos2){2.0 + (double)i * 3.0, 0.0};
+        m2BodyId post = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon slab = m2MakeBox(0.3f, 2.0f);
+        walls[i] = m2CreatePolygonShape(post, &sd, &slab);
+    }
+    m2RayHit hits[8];
+    int32_t n = m2World_CastRayAll(world, (m2Pos2){-2.0, 0.0}, (m2Vec2){12.0f, 0.0f}, hits, 8, all);
+    CHECK(n == 3, "the ray reports all three walls");
+    CHECK(hits[0].fraction < hits[1].fraction && hits[1].fraction < hits[2].fraction,
+          "in ascending fraction order");
+    CHECK(hits[0].shapeId.index1 == walls[0].index1 && hits[2].shapeId.index1 == walls[2].index1,
+          "closest first, farthest last");
+
+    // Under capacity pressure the total stays truthful and the two
+    // CLOSEST are the ones kept.
+    m2RayHit two[2];
+    int32_t pressed =
+        m2World_CastRayAll(world, (m2Pos2){-2.0, 0.0}, (m2Vec2){12.0f, 0.0f}, two, 2, all);
+    CHECK(pressed == 3, "truthful total under pressure");
+    CHECK(two[0].shapeId.index1 == walls[0].index1 && two[1].shapeId.index1 == walls[1].index1,
+          "and the closest two are kept");
+    CHECK(m2World_CastRayAll(world, (m2Pos2){-2.0, 0.0}, (m2Vec2){12.0f, 0.0f}, NULL, 0, all) == 3,
+          "counting works without an array");
+
+    // A swept circle collects the same walls.
+    m2Circle ball = {{0.0f, 0.0f}, 0.4f};
+    m2Transform pose = {{-2.0, 0.0}, {1.0f, 0.0f}};
+    n = m2World_CastCircleAll(world, &ball, pose, (m2Vec2){12.0f, 0.0f}, hits, 8, all);
+    CHECK(n == 3, "the swept circle reports all three too");
+    CHECK(hits[0].fraction < hits[1].fraction, "sorted the same way");
+
+    // One-sided chain: rising sweeps never count it, diving ones do.
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){20.0, 0.0};
+    m2BodyId shelfBody = m2CreateBody(world, &cd);
+    m2Vec2 pts[5] = {{2.5f, 2.0f}, {1.2f, 2.0f}, {0.0f, 2.0f}, {-1.2f, 2.0f}, {-2.5f, 2.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5;
+    m2CreateChain(shelfBody, &chain);
+    m2Transform below = {{20.0, -1.0}, {1.0f, 0.0f}};
+    CHECK(m2World_CastCircleAll(world, &ball, below, (m2Vec2){0.0f, 6.0f}, NULL, 0, all) == 0,
+          "rising sweeps ghost through the shelf");
+    m2Transform above = {{20.0, 5.0}, {1.0f, 0.0f}};
+    // The dive lands on the shared vertex of the two live links,
+    // so both count: all-hits means ALL.
+    CHECK(m2World_CastCircleAll(world, &ball, above, (m2Vec2){0.0f, -6.0f}, NULL, 0, all) == 2,
+          "diving sweeps count both touched links");
+
+    m2DestroyWorld(world);
+}
+
 static void TestRayClosest(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -521,6 +589,7 @@ int main(void)
     TestContactData();
     TestRayClosest();
     TestShapeCastsAndOverlaps();
+    TestAllHits();
     TestRayGeometries();
     TestRayFarFromOrigin();
     TestOverlap();

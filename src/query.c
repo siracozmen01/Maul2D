@@ -972,3 +972,242 @@ m2RayCastResult m2Shape_RayCast(m2ShapeId shapeId, m2Pos2 origin, m2Vec2 transla
                             origin.y + (double)result.fraction * (double)translation.y};
     return result;
 }
+
+// -------------------------------------------------------- all-hits
+// Bounded keep-the-closest insertion: candidates stream in, the hits
+// array holds the best `capacity` in ascending (fraction, shapeIndex)
+// order, and the TRUE total keeps counting past it. No extra memory,
+// deterministic regardless of tree visit order.
+static int32_t InsertHitSorted(m2RayHit* hits, int32_t kept, int32_t capacity, m2RayHit candidate,
+                               int32_t shapeIndex, const int32_t* keptShapes,
+                               int32_t* keptShapesOut)
+{
+    (void)keptShapes;
+    int32_t at = kept;
+    while (at > 0)
+    {
+        bool after =
+            hits[at - 1].fraction < candidate.fraction ||
+            (hits[at - 1].fraction == candidate.fraction && keptShapesOut[at - 1] < shapeIndex);
+        if (after)
+        {
+            break;
+        }
+        at -= 1;
+    }
+    if (at >= capacity)
+    {
+        return kept; // worse than everything kept
+    }
+    int32_t last = kept < capacity ? kept : capacity - 1;
+    for (int32_t i = last; i > at; --i)
+    {
+        hits[i] = hits[i - 1];
+        keptShapesOut[i] = keptShapesOut[i - 1];
+    }
+    hits[at] = candidate;
+    keptShapesOut[at] = shapeIndex;
+    return kept < capacity ? kept + 1 : kept;
+}
+
+int32_t m2World_CastRayAll(m2WorldId worldId, m2Pos2 origin, m2Vec2 translation, m2RayHit* hits,
+                           int32_t capacity, m2QueryFilter filter)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    int32_t keptShapes[64];
+    int32_t cap = capacity < 64 ? capacity : 64;
+    cap = hits != NULL ? cap : 0;
+    int32_t kept = 0;
+    int32_t total = 0;
+
+    m2RayState ray;
+    ray.origin = origin;
+    ray.translation = translation;
+    ray.filter = filter;
+    ray.fraction = 1.0f; // no pruning: every hit counts
+    ray.shapeIndex = -1;
+    ray.normal = (m2Vec2){0.0f, 0.0f};
+    ray.hit = false;
+    ray.initialOverlap = false;
+
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        const m2DynamicTree* tree = &world->trees[t];
+        const m2TreeNode* nodes = world->treeNodes[t];
+        int32_t stack[256];
+        int32_t top = 0;
+        if (tree->root != M2_NULL_NODE)
+        {
+            stack[top++] = tree->root;
+        }
+        while (top > 0)
+        {
+            int32_t index = stack[--top];
+            if (RayMissesNode(&ray, nodes[index].aabb))
+            {
+                continue;
+            }
+            if (nodes[index].height > 0)
+            {
+                M2_ASSERT(top + 2 <= 256);
+                stack[top++] = nodes[index].child2;
+                stack[top++] = nodes[index].child1;
+                continue;
+            }
+            int32_t shapeIndex = nodes[index].userData;
+            if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, filter))
+            {
+                continue;
+            }
+            m2CastHit hit = RayCastShape(world, shapeIndex, origin, translation, 1.0f);
+            if (!hit.hit)
+            {
+                continue;
+            }
+            bool initialOverlap = hit.normal.x == 0.0f && hit.normal.y == 0.0f;
+            m2RayHit out;
+            out.shapeId.index1 = shapeIndex + 1;
+            out.shapeId.world0 = worldId.index1;
+            out.shapeId.generation = world->shapeGenerations[shapeIndex];
+            out.fraction = initialOverlap ? 0.0f : hit.fraction;
+            out.normal = hit.normal;
+            out.point = (m2Pos2){origin.x + (double)out.fraction * (double)translation.x,
+                                 origin.y + (double)out.fraction * (double)translation.y};
+            total += 1;
+            if (cap > 0)
+            {
+                kept = InsertHitSorted(hits, kept, cap, out, shapeIndex, NULL, keptShapes);
+            }
+        }
+    }
+    return total;
+}
+
+static int32_t CastProxyAll(m2WorldId worldId, const m2DistanceProxy* castLocal, m2Transform pose,
+                            m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                            m2QueryFilter filter)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    m2ProxyQuery q = MakeProxyQuery(castLocal, pose, translation);
+
+    double lox = q.pose.p.x - (double)q.boundRadius;
+    double loy = q.pose.p.y - (double)q.boundRadius;
+    double hix = q.pose.p.x + (double)q.boundRadius;
+    double hiy = q.pose.p.y + (double)q.boundRadius;
+    double tx = (double)translation.x;
+    double ty = (double)translation.y;
+    m2AABB aabb;
+    aabb.lowerBound.x = tx < 0.0 ? lox + tx : lox;
+    aabb.lowerBound.y = ty < 0.0 ? loy + ty : loy;
+    aabb.upperBound.x = tx > 0.0 ? hix + tx : hix;
+    aabb.upperBound.y = ty > 0.0 ? hiy + ty : hiy;
+
+    int32_t keptShapes[64];
+    int32_t cap = capacity < 64 ? capacity : 64;
+    cap = hits != NULL ? cap : 0;
+    int32_t kept = 0;
+    int32_t total = 0;
+
+    for (int32_t t = 0; t < M2_TREE_COUNT; ++t)
+    {
+        int32_t found = m2Tree_Query(&world->trees[t], world->treeNodes[t], aabb,
+                                     world->queryScratch, world->shapeCapacity);
+        for (int32_t h = 0; h < found; ++h)
+        {
+            int32_t shapeIndex = world->queryScratch[h];
+            if (world->shapeAlive[shapeIndex] == 0 || !QueryShouldSee(world, shapeIndex, filter))
+            {
+                continue;
+            }
+            m2DistanceProxy target;
+            m2DistanceProxy cast;
+            m2Vec2 translationLocal;
+            m2Vec2 startLocal;
+            ProxiesInBodyFrame(world, shapeIndex, &q, &target, &cast, &translationLocal,
+                               &startLocal);
+            if (ChainGhostSide(world, shapeIndex, startLocal))
+            {
+                continue;
+            }
+            m2CastResult hit = m2ShapeCastProxy(&target, &cast, translationLocal, 1.0f);
+            if (!hit.hit)
+            {
+                continue;
+            }
+            int32_t body = world->shapeBody[shapeIndex];
+            m2Transform xf = world->transforms[body];
+            bool initialOverlap = hit.normal.x == 0.0f && hit.normal.y == 0.0f;
+            m2RayHit out;
+            out.shapeId.index1 = shapeIndex + 1;
+            out.shapeId.world0 = worldId.index1;
+            out.shapeId.generation = world->shapeGenerations[shapeIndex];
+            out.fraction = initialOverlap ? 0.0f : hit.fraction;
+            if (initialOverlap)
+            {
+                out.normal = (m2Vec2){0.0f, 0.0f};
+                out.point = pose.p;
+            }
+            else
+            {
+                out.normal = (m2Vec2){xf.q.c * hit.normal.x - xf.q.s * hit.normal.y,
+                                      xf.q.s * hit.normal.x + xf.q.c * hit.normal.y};
+                out.point =
+                    (m2Pos2){xf.p.x + (double)(xf.q.c * hit.pointA.x - xf.q.s * hit.pointA.y),
+                             xf.p.y + (double)(xf.q.s * hit.pointA.x + xf.q.c * hit.pointA.y)};
+            }
+            total += 1;
+            if (cap > 0)
+            {
+                kept = InsertHitSorted(hits, kept, cap, out, shapeIndex, NULL, keptShapes);
+            }
+        }
+    }
+    return total;
+}
+
+int32_t m2World_CastCircleAll(m2WorldId worldId, const m2Circle* circle, m2Transform origin,
+                              m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                              m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = circle->center;
+    p.count = 1;
+    p.radius = circle->radius;
+    return CastProxyAll(worldId, &p, origin, translation, hits, capacity, filter);
+}
+
+int32_t m2World_CastCapsuleAll(m2WorldId worldId, const m2Capsule* capsule, m2Transform origin,
+                               m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                               m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    p.points[0] = capsule->point1;
+    p.points[1] = capsule->point2;
+    p.count = 2;
+    p.radius = capsule->radius;
+    return CastProxyAll(worldId, &p, origin, translation, hits, capacity, filter);
+}
+
+int32_t m2World_CastPolygonAll(m2WorldId worldId, const m2Polygon* polygon, m2Transform origin,
+                               m2Vec2 translation, m2RayHit* hits, int32_t capacity,
+                               m2QueryFilter filter)
+{
+    m2DistanceProxy p;
+    for (int32_t i = 0; i < polygon->count; ++i)
+    {
+        p.points[i] = polygon->vertices[i];
+    }
+    p.count = polygon->count;
+    p.radius = polygon->radius;
+    return CastProxyAll(worldId, &p, origin, translation, hits, capacity, filter);
+}
