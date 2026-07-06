@@ -1016,6 +1016,121 @@ static void TestMotorAndMouseJoints(void)
     m2DestroyWorld(world);
 }
 
+// The richer distance joint (parity bucket 2): a hard length range
+// over the spring, runtime retargeting, and runtime softness.
+static void TestDistanceRange(void)
+{
+    // The hard range rows run on the stiff default softness, so when
+    // the range disagrees with a soft rod, the range wins. That is
+    // the observable contract: a squishy rope reeled hard.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2JointId ropes[2];
+    m2BodyId crates[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 8.0;
+        m2BodyDef ad = m2DefaultBodyDef();
+        ad.position = (m2Pos2){x, 8.0};
+        m2BodyId hook = m2CreateBody(world, &ad);
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){x, 6.0};
+        crates[i] = m2CreateBody(world, &cd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 5.0f;
+        m2Polygon crate = m2MakeBox(0.5f, 0.5f);
+        m2CreatePolygonShape(crates[i], &sd, &crate);
+        m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+        jd.bodyIdA = hook;
+        jd.bodyIdB = crates[i];
+        jd.length = 2.0f;
+        jd.hertz = 0.5f; // a squishy rod that converges near 2
+        jd.dampingRatio = 0.7f;
+        if (i == 1)
+        {
+            jd.minLength = 0.5f;
+            jd.maxLength = 1.5f; // fights the rod, and must win
+        }
+        ropes[i] = m2CreateDistanceJoint(world, &jd);
+    }
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double hangFree = 8.0 - m2Body_GetPosition(crates[0]).y;
+    double hangClamped = 8.0 - m2Body_GetPosition(crates[1]).y;
+    CHECK(hangFree > 1.9, "the free rope settles at its length");
+    CHECK(hangClamped < 1.7, "the ranged rope is held at max length instead");
+    float lo = 0.0f;
+    float hi = 0.0f;
+    m2Joint_GetLimits(ropes[1], &lo, &hi);
+    CHECK(lo == 0.5f && hi == 1.5f, "the range reads back through GetLimits");
+
+    // Runtime: reel the free one in the same way.
+    m2DistanceJoint_SetLengthRange(ropes[0], 0.5f, 1.5f);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double reeled = 8.0 - m2Body_GetPosition(crates[0]).y;
+    CHECK(reeled < 1.7, "a runtime range reels the crate in");
+
+    // Min side: force the clamped one OUT beyond its rod.
+    m2DistanceJoint_SetLengthRange(ropes[1], 2.6f, 5.0f);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double pushed = 8.0 - m2Body_GetPosition(crates[1]).y;
+    CHECK(pushed > 2.4, "the min bound pushes the load out past the rod");
+
+    // Runtime spring retuning is journaled and takes effect: soften
+    // the free rope hugely and give it a shove; it wobbles (peak
+    // deviation from its clamp grows), then stiffen and it pins.
+    m2Joint_SetSpringHertz(ropes[0], 0.1f);
+    m2Joint_SetSpringDampingRatio(ropes[0], 0.05f);
+    m2Body_ApplyLinearImpulseToCenter(crates[0], (m2Vec2){30.0f, 0.0f});
+    double wobble = 0.0;
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        double sway = m2Body_GetPosition(crates[0]).x;
+        sway = sway < 0.0 ? -sway : sway;
+        wobble = sway > wobble ? sway : wobble;
+    }
+    CHECK(wobble > 0.5, "a shoved pendulum sways");
+
+    // Retarget a rigid rod: the crate follows the new length.
+    m2BodyDef ad2 = m2DefaultBodyDef();
+    ad2.position = (m2Pos2){16.0, 8.0};
+    m2BodyId hook2 = m2CreateBody(world, &ad2);
+    m2BodyDef cd2 = m2DefaultBodyDef();
+    cd2.type = m2_dynamicBody;
+    cd2.position = (m2Pos2){16.0, 7.0};
+    m2BodyId weight = m2CreateBody(world, &cd2);
+    m2ShapeDef sd2 = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(weight, &sd2, &unit);
+    m2DistanceJointDef rig = m2DefaultDistanceJointDef();
+    rig.bodyIdA = hook2;
+    rig.bodyIdB = weight;
+    m2JointId rod = m2CreateDistanceJoint(world, &rig); // rigid, length 1
+    m2DistanceJoint_SetLength(rod, 2.5f);
+    for (int32_t i = 0; i < 180; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double drop = 8.0 - m2Body_GetPosition(weight).y;
+    CHECK(drop > 2.3 && drop < 2.7, "a retargeted rigid rod lowers the load");
+
+    m2DestroyWorld(world);
+}
+
 static void TestJointBreaking(void)
 {
     // Twin ropes carry the same heavy crate; one has a break limit
@@ -1342,6 +1457,7 @@ int main(void)
     TestReactionGetters();
     TestCollideConnectedAndFilterJoint();
     TestMotorAndMouseJoints();
+    TestDistanceRange();
     TestJointBreaking();
     TestBreakRollback();
 

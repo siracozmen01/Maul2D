@@ -1169,6 +1169,17 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
             c->axis = length > 1.19209290e-7f ? (m2Vec2){dx / length, dy / length}
                                               : (m2Vec2){0.0f, 1.0f}; // canonical fallback
             c->baseC = length - world->jointLength[j];
+            // The rod's spawn-time length rides the (unused) motor
+            // speed slot so the limit rows can track absolute length;
+            // flag bit3 marks an active hard range.
+            c->motorSpeed = length;
+            if (world->jointLower[j] > 0.0f || world->jointUpper[j] < 3.0e38f)
+            {
+                c->flags |= 8;
+                // Hard stops stay hard even on a soft rope: the limit
+                // rows run on the stiff default, reference-style.
+                c->springSoftness = MakeSoft(60.0f, 2.0f, h);
+            }
             float crA = Cross(c->rA, c->axis);
             float crB = Cross(c->rB, c->axis);
             float k = mA + mB + iA * crA * crA + iB * crB * crB;
@@ -1306,8 +1317,9 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
         m2JointConstraint* c = joints + i;
         if (c->type == 0)
         {
-            ApplyJointImpulse(world, c,
-                              (m2Vec2){c->impulse.x * c->axis.x, c->impulse.x * c->axis.y});
+            float axial = (c->flags & 8) != 0 ? c->impulse.x + c->lowerImpulse - c->upperImpulse
+                                              : c->impulse.x;
+            ApplyJointImpulse(world, c, (m2Vec2){axial * c->axis.x, axial * c->axis.y});
         }
         else if (c->type == 1 || c->type == 3 || c->type == 6)
         {
@@ -1406,6 +1418,73 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             float impulse = -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
             c->impulse.x += impulse;
             ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
+
+            if ((c->flags & 8) != 0)
+            {
+                // Hard length range (reference distance_joint.c): one
+                // one-sided row per bound on the shared axis, reading
+                // fresh world velocities after each apply.
+                float lengthNow = c->motorSpeed + ds.x * c->axis.x + ds.y * c->axis.y;
+                {
+                    m2Vec2 vA2 = world->linearVelocities[c->bodyA];
+                    float wA2 = world->angularVelocities[c->bodyA];
+                    m2Vec2 vB2 = world->linearVelocities[c->bodyB];
+                    float wB2 = world->angularVelocities[c->bodyB];
+                    m2Vec2 vrA2 = {vA2.x - wA2 * c->rA.y, vA2.y + wA2 * c->rA.x};
+                    m2Vec2 vrB2 = {vB2.x - wB2 * c->rB.y, vB2.y + wB2 * c->rB.x};
+                    float cdotL = (vrB2.x - vrA2.x) * c->axis.x + (vrB2.y - vrA2.y) * c->axis.y;
+                    float C = lengthNow - c->lower;
+                    float biasL = 0.0f;
+                    float massL = 1.0f;
+                    float scaleL = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        biasL = C * invH; // speculative
+                    }
+                    else if (useBias)
+                    {
+                        biasL = c->springSoftness.biasRate * C;
+                        massL = c->springSoftness.massScale;
+                        scaleL = c->springSoftness.impulseScale;
+                    }
+                    float imp = -massL * c->axialMass * (cdotL + biasL) - scaleL * c->lowerImpulse;
+                    float next = c->lowerImpulse + imp;
+                    next = next > 0.0f ? next : 0.0f;
+                    imp = next - c->lowerImpulse;
+                    c->lowerImpulse = next;
+                    ApplyJointImpulse(world, c, (m2Vec2){imp * c->axis.x, imp * c->axis.y});
+                }
+                {
+                    m2Vec2 vA2 = world->linearVelocities[c->bodyA];
+                    float wA2 = world->angularVelocities[c->bodyA];
+                    m2Vec2 vB2 = world->linearVelocities[c->bodyB];
+                    float wB2 = world->angularVelocities[c->bodyB];
+                    m2Vec2 vrA2 = {vA2.x - wA2 * c->rA.y, vA2.y + wA2 * c->rA.x};
+                    m2Vec2 vrB2 = {vB2.x - wB2 * c->rB.y, vB2.y + wB2 * c->rB.x};
+                    // Upper bound: the constraint runs the other way.
+                    float cdotU = (vrA2.x - vrB2.x) * c->axis.x + (vrA2.y - vrB2.y) * c->axis.y;
+                    float C = c->upper - lengthNow;
+                    float biasU = 0.0f;
+                    float massU = 1.0f;
+                    float scaleU = 0.0f;
+                    if (C > 0.0f)
+                    {
+                        biasU = C * invH;
+                    }
+                    else if (useBias)
+                    {
+                        biasU = c->springSoftness.biasRate * C;
+                        massU = c->springSoftness.massScale;
+                        scaleU = c->springSoftness.impulseScale;
+                    }
+                    float imp = -massU * c->axialMass * (cdotU + biasU) - scaleU * c->upperImpulse;
+                    float next = c->upperImpulse + imp;
+                    next = next > 0.0f ? next : 0.0f;
+                    imp = next - c->upperImpulse;
+                    c->upperImpulse = next;
+                    ApplyJointImpulse(world, c, (m2Vec2){-imp * c->axis.x, -imp * c->axis.y});
+                }
+            }
         }
         else if (c->type == 1 || c->type == 3)
         {
@@ -1899,9 +1978,16 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
     *torque = 0.0f;
     switch (world->jointType[j])
     {
-    case 0: // distance: axial row only
-        *force = m2AbsF(impulse.x) * invH;
+    case 0: // distance: axial row, plus range rows when bounded
+    {
+        float axial = impulse.x;
+        if (world->jointLower[j] > 0.0f || world->jointUpper[j] < 3.0e38f)
+        {
+            axial += world->jointLowerImpulse[j] - world->jointUpperImpulse[j];
+        }
+        *force = m2AbsF(axial) * invH;
         break;
+    }
     case 1: // revolute: point block linear, motor/limits as torque
         *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
         *torque = m2AbsF(axialTrio) * invH;

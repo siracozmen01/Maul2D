@@ -39,7 +39,11 @@ extern "C"
         m2Vec2 localAnchorA; // body-local, f32
         m2Vec2 localAnchorB;
         float length; // meters; <= 0 derives from spawn poses
-        float hertz;  // 0 = stiff default
+        /// Hard length range, off by default (0 .. huge). When a
+        /// bound is active it clamps regardless of the spring.
+        float minLength;
+        float maxLength; // <= 0 means unbounded
+        float hertz;     // 0 = stiff default
         float dampingRatio;
         uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
@@ -216,6 +220,19 @@ extern "C"
     /// the joint during the step, deterministically, and reports it in
     /// m2World_GetJointEvents. Zero (the default) means unbreakable.
     void m2Joint_SetBreakLimits(m2JointId jointId, float maxForce, float maxTorque);
+
+    /// Runtime softness: the main row's spring (weld: linear row;
+    /// mouse: the drag spring). Motor and filter joints have no
+    /// spring and reject loudly. Angular variants are weld-only.
+    /// Distance extras: retarget the rod length or clamp it into a
+    /// hard range (accumulated impulses reset, reference-style);
+    /// read the range back through m2Joint_GetLimits. All journaled.
+    void m2Joint_SetSpringHertz(m2JointId jointId, float hertz);
+    void m2Joint_SetSpringDampingRatio(m2JointId jointId, float dampingRatio);
+    void m2Joint_SetAngularSpringHertz(m2JointId jointId, float hertz);
+    void m2Joint_SetAngularSpringDampingRatio(m2JointId jointId, float dampingRatio);
+    void m2DistanceJoint_SetLength(m2JointId jointId, float length);
+    void m2DistanceJoint_SetLengthRange(m2JointId jointId, float minLength, float maxLength);
 
     /// Reaction load the joint carried on the last step, from the
     /// stored impulses times that step's inverse substep dt. This is

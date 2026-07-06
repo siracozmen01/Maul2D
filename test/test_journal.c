@@ -221,6 +221,18 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Body_SetUserData(bob, 999);           // op 47
     m2Shape_SetUserData(reshapeShape, 111); // op 48
     m2Joint_SetUserData(gripper, 222);      // op 49
+    m2BodyDef drd = m2DefaultBodyDef();
+    drd.position = (m2Pos2){-4.0, 6.0};
+    m2BodyId drHook = m2CreateBody(world, &drd);
+    m2DistanceJointDef drj = m2DefaultDistanceJointDef();
+    drj.bodyIdA = drHook;
+    drj.bodyIdB = bob;
+    drj.hertz = 1.0f;
+    m2JointId leash = m2CreateDistanceJoint(world, &drj);
+    m2DistanceJoint_SetLength(leash, 1.8f);            // param 12
+    m2DistanceJoint_SetLengthRange(leash, 0.4f, 2.2f); // params 13+14
+    m2Joint_SetSpringHertz(leash, 6.0f);               // param 8
+    m2Joint_SetSpringDampingRatio(leash, 0.5f);        // param 9
     for (int32_t i = 0; i < 30; ++i)
     {
         m2World_Step(world, 1.0f / 120.0f, 2); // second dt flavor

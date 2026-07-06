@@ -124,6 +124,7 @@ static int32_t ShapeTreeIndex(const m2World* world, int32_t shapeIndex)
 // ALL moved proxies enter the moved set - shapes of dynamic, kinematic,
 // and static bodies alike (topic-02 §4.2).
 static float RelativeJointAngle(m2Rot qA, m2Rot qB);
+static int32_t JointSlotChecked(const m2World* world, m2JointId jointId);
 
 static void PushMoved(m2World* world, int32_t shapeIndex)
 {
@@ -4221,6 +4222,10 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
     }
     m2JointId jointId = FinishJoint(world, worldId, index, 0, bodyA, bodyB, def->localAnchorA,
                                     def->localAnchorB, length, def->hertz, def->dampingRatio);
+    // The hard range: off by default (0 .. huge); a def maxLength <= 0
+    // means unbounded, mirroring "length <= 0 derives".
+    world->jointLower[index] = def->minLength > 0.0f ? def->minLength : 0.0f;
+    world->jointUpper[index] = def->maxLength > 0.0f ? def->maxLength : 3.4e38f;
     world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)
@@ -4535,6 +4540,37 @@ void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, f
     case m2_jointParamBreakTorque:
         world->jointBreakTorque[index] = value;
         break;
+    case m2_jointParamHertz:
+        world->jointHertz[index] = value;
+        break;
+    case m2_jointParamDamping:
+        world->jointDamping[index] = value;
+        break;
+    case m2_jointParamAngularHertz:
+        world->jointHertz2[index] = value;
+        break;
+    case m2_jointParamAngularDamping:
+        world->jointDamping2[index] = value;
+        break;
+    case m2_jointParamLength:
+        // Reference semantics: retargeting the rod drops its memory.
+        world->jointLength[index] = value;
+        world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
+        world->jointLowerImpulse[index] = 0.0f;
+        world->jointUpperImpulse[index] = 0.0f;
+        break;
+    case m2_jointParamMinLength:
+        world->jointLower[index] = value;
+        world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
+        world->jointLowerImpulse[index] = 0.0f;
+        world->jointUpperImpulse[index] = 0.0f;
+        break;
+    case m2_jointParamMaxLength:
+        world->jointUpper[index] = value;
+        world->jointImpulse[index] = (m2Vec2){0.0f, 0.0f};
+        world->jointLowerImpulse[index] = 0.0f;
+        world->jointUpperImpulse[index] = 0.0f;
+        break;
     default:
         world->jointUpper[index] = value;
         break;
@@ -4598,6 +4634,90 @@ void m2Joint_SetLimits(m2JointId jointId, float lower, float upper)
         m2SetJointParamInternal(world, jointId, m2_jointParamLower, lower);
         m2SetJointParamInternal(world, jointId, m2_jointParamUpper, upper);
     }
+}
+
+static bool JointHasSpringRow(const m2World* world, int32_t index)
+{
+    uint8_t type = world->jointType[index];
+    return type != 5 && type != 6; // filter has no rows, motor no spring
+}
+
+void m2Joint_SetSpringHertz(m2JointId jointId, float hertz)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || !JointHasSpringRow(world, index) || !(hertz >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamHertz, hertz);
+}
+
+void m2Joint_SetSpringDampingRatio(m2JointId jointId, float dampingRatio)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || !JointHasSpringRow(world, index) || !(dampingRatio >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamDamping, dampingRatio);
+}
+
+void m2Joint_SetAngularSpringHertz(m2JointId jointId, float hertz)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || world->jointType[index] != 3 || !(hertz >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamAngularHertz, hertz);
+}
+
+void m2Joint_SetAngularSpringDampingRatio(m2JointId jointId, float dampingRatio)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || world->jointType[index] != 3 || !(dampingRatio >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamAngularDamping, dampingRatio);
+}
+
+void m2DistanceJoint_SetLength(m2JointId jointId, float length)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || world->jointType[index] != 0 || !(length > 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamLength, length);
+}
+
+void m2DistanceJoint_SetLengthRange(m2JointId jointId, float minLength, float maxLength)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? JointSlotChecked(world, jointId) : -1;
+    if (index < 0 || world->jointType[index] != 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    // Reference clamps: slop floor, ordered pair.
+    float lo = minLength > 0.005f ? minLength : 0.005f;
+    float hi = maxLength > 0.005f ? maxLength : 0.005f;
+    float lower = lo < hi ? lo : hi;
+    float upper = lo < hi ? hi : lo;
+    m2SetJointParamInternal(world, jointId, m2_jointParamMinLength, lower);
+    m2SetJointParamInternal(world, jointId, m2_jointParamMaxLength, upper);
 }
 
 void m2Joint_SetBreakLimits(m2JointId jointId, float maxForce, float maxTorque)

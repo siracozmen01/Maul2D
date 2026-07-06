@@ -287,6 +287,13 @@ enum
     m2_jointParamUpper = 5,
     m2_jointParamBreakForce = 6,
     m2_jointParamBreakTorque = 7,
+    m2_jointParamHertz = 8,
+    m2_jointParamDamping = 9,
+    m2_jointParamAngularHertz = 10,
+    m2_jointParamAngularDamping = 11,
+    m2_jointParamLength = 12,    // distance only; resets impulses
+    m2_jointParamMinLength = 13, // distance only; resets impulses
+    m2_jointParamMaxLength = 14,
 };
 
 // Convex distance and casts (src/distance.c, slice 63): one GJK

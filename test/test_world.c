@@ -902,6 +902,7 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.localAnchorA = m2Joint_GetLocalAnchorA(id);
             jd.localAnchorB = m2Joint_GetLocalAnchorB(id);
             jd.length = m2Joint_GetLength(id);
+            m2Joint_GetLimits(id, &jd.minLength, &jd.maxLength);
             jd.collideConnected = m2Joint_GetCollideConnected(id);
             jd.hertz = m2Joint_GetHertz(id);
             jd.dampingRatio = m2Joint_GetDampingRatio(id);
@@ -1068,6 +1069,8 @@ static void TestMirrorRebuild(void)
     dj.bodyIdB = boxA;
     dj.hertz = 4.0f;
     dj.dampingRatio = 0.6f;
+    dj.minLength = 0.5f;
+    dj.maxLength = 4.0f;
     m2JointId rope = m2CreateDistanceJoint(world, &dj);
     m2Joint_SetBreakLimits(rope, 60.0f, 0.0f);
     m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();

@@ -569,7 +569,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(7);
+        uint32_t which = Pick(9);
         if (which == 0)
         {
             m2Joint_SetMotorSpeed(joint, (float)((int32_t)Pick(9) - 4));
@@ -609,10 +609,28 @@ static void DoRandomOp(m2WorldId world)
                 m2MouseJoint_SetTarget(joint, (m2Pos2){base.x + tx, base.y + ty});
             }
         }
-        else
+        else if (which == 6)
         {
             uint64_t data = (uint64_t)Pick(1000);
             m2Joint_SetUserData(joint, data);
+        }
+        else if (which == 7)
+        {
+            float hertz = (float)Pick(30) * 0.5f;
+            m2JointType type = m2Joint_GetType(joint);
+            if (type != m2_motorJoint && type != m2_filterJoint)
+            {
+                m2Joint_SetSpringHertz(joint, hertz);
+            }
+        }
+        else
+        {
+            float lo = 0.2f + (float)Pick(10) * 0.1f;
+            float hi = lo + 0.2f + (float)Pick(15) * 0.1f;
+            if (m2Joint_GetType(joint) == m2_distanceJoint)
+            {
+                m2DistanceJoint_SetLengthRange(joint, lo, hi);
+            }
         }
     }
 }
