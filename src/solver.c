@@ -1381,8 +1381,7 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
         {
             // Gear: one angular impulse, ratio-weighted on side A.
             float L = c->impulse.x;
-            world->angularVelocities[c->bodyA] +=
-                world->invInertia[c->bodyA] * (c->motorSpeed * L);
+            world->angularVelocities[c->bodyA] += world->invInertia[c->bodyA] * (c->motorSpeed * L);
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * L;
         }
         else if (c->type == 7)
@@ -1733,18 +1732,17 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             float impulseScale = 0.0f;
             if (useBias)
             {
-                float dA = m2Atan2(world->deltaRotations[c->bodyA].s,
-                                   world->deltaRotations[c->bodyA].c);
-                float dB = m2Atan2(world->deltaRotations[c->bodyB].s,
-                                   world->deltaRotations[c->bodyB].c);
+                float dA =
+                    m2Atan2(world->deltaRotations[c->bodyA].s, world->deltaRotations[c->bodyA].c);
+                float dB =
+                    m2Atan2(world->deltaRotations[c->bodyB].s, world->deltaRotations[c->bodyB].c);
                 float C = c->baseAngle + ratio * dA + dB;
                 bias = c->softness.biasRate * C;
                 massScale = c->softness.massScale;
                 impulseScale = c->softness.impulseScale;
             }
             float cdot = ratio * wA + wB;
-            float impulse =
-                -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
+            float impulse = -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
             c->impulse.x += impulse;
             world->angularVelocities[c->bodyA] = wA + iA * (ratio * impulse);
             world->angularVelocities[c->bodyB] = wB + iB * impulse;
