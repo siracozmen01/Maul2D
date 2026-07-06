@@ -37,6 +37,7 @@ extern "C"
         float angularDamping;
         bool fixedRotation; // never rotates: infinite rotational inertia
         bool enableSleep;   // false = this body never sleeps
+        bool isEnabled;     // false = created dormant, outside simulation
         bool isBullet;      // continuous collision vs non-bullets (topic-07)
         uint64_t userData;  // opaque, copied verbatim through snapshots
         int32_t internalValue;
@@ -69,6 +70,29 @@ extern "C"
     /// waking is island-transitive at the next step.
     bool m2Body_IsAwake(m2BodyId bodyId);
     m2BodyType m2Body_GetType(m2BodyId bodyId);
+
+    /// Mass properties: mass in kg, body-local centroid, rotational
+    /// inertia about the body ORIGIN. SetMassData overrides what the
+    /// shapes derived; any later shape change or fixed-rotation flip
+    /// recomputes from shapes again (documented lifetime). Journaled.
+    typedef struct m2MassData
+    {
+        float mass;
+        m2Vec2 center;           // body-local centroid
+        float rotationalInertia; // about the body origin
+    } m2MassData;
+
+    void m2Body_SetMassData(m2BodyId bodyId, m2MassData massData);
+    m2MassData m2Body_GetMassData(m2BodyId bodyId);
+    void m2Body_ApplyMassFromShapes(m2BodyId bodyId);
+
+    /// Disable removes the body from simulation without destroying it:
+    /// shapes leave the broadphase (contacts end, riders wake), joints
+    /// stay attached but inert, queries no longer see it. Enable puts
+    /// it back where it is. Both journaled. Thread class: writer.
+    void m2Body_Disable(m2BodyId bodyId);
+    void m2Body_Enable(m2BodyId bodyId);
+    bool m2Body_IsEnabled(m2BodyId bodyId);
     m2Vec2 m2Body_GetLocalCenter(m2BodyId bodyId); // body-frame center of mass
     bool m2Body_IsBullet(m2BodyId bodyId);
     float m2Body_GetGravityScale(m2BodyId bodyId);

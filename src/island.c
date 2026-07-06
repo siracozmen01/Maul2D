@@ -103,7 +103,8 @@ void m2UpdateIslandsAndWake(m2World* world)
     // Joints connect islands exactly like touching contacts do.
     for (int32_t j = 0; j < world->maxJointIndex; ++j)
     {
-        if (world->jointAlive[j] == 0)
+        if (world->jointAlive[j] == 0 || world->disabled[world->jointBodyA[j]] != 0 ||
+            world->disabled[world->jointBodyB[j]] != 0)
         {
             continue;
         }
@@ -190,7 +191,7 @@ void m2UpdateSleep(m2World* world, float dt)
             world->sleepTimes[i] = 0.0f;
             continue;
         }
-        if (world->sleepEnabled == 0 || world->sleepEnables[i] == 0)
+        if (world->sleepEnabled == 0 || world->sleepEnables[i] == 0 || world->disabled[i] != 0)
         {
             world->sleepTimes[i] = 0.0f; // this body is not allowed to drowse
             continue;

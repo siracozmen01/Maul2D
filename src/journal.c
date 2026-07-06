@@ -560,6 +560,45 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             m2MouseJoint_SetTarget(mt.joint, mt.target);
             break;
         }
+        case m2_opDisableBody:
+        {
+            M2_READ_OP(m2BodyId, body);
+            body.world0 = here;
+            m2Body_Disable(body);
+            break;
+        }
+        case m2_opEnableBody:
+        {
+            M2_READ_OP(m2BodyId, body);
+            body.world0 = here;
+            m2Body_Enable(body);
+            break;
+        }
+        case m2_opSetMassData:
+        {
+            struct m2OpMassData
+            {
+                m2BodyId body;
+                m2MassData data;
+            };
+            M2_READ_OP(struct m2OpMassData, md);
+            md.body.world0 = here;
+            m2Body_SetMassData(md.body, md.data);
+            break;
+        }
+        case m2_opMassFromShapes:
+        {
+            M2_READ_OP(m2BodyId, body);
+            body.world0 = here;
+            m2Body_ApplyMassFromShapes(body);
+            break;
+        }
+        case m2_opExplode:
+        {
+            M2_READ_OP(m2ExplosionDef, boom);
+            m2World_Explode(worldId, &boom);
+            break;
+        }
         case m2_opApplyTorque:
         {
             struct m2OpTorque

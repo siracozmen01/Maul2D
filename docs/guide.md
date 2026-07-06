@@ -121,6 +121,17 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Dormancy, mass, and blasts
+
+`m2Body_Disable` parks a body outside the simulation without
+destroying it: contacts end, riders wake, queries stop seeing it,
+joints wait; `m2Body_Enable` puts it back where it stood.
+`m2Body_SetMassData` overrides shape-derived mass until the next
+shape change recomputes it, and `m2Body_ApplyMassFromShapes` asks
+for that recompute by name. `m2World_Explode` is one deterministic
+blast: full impulse inside the radius, linear falloff to zero across
+the band, filtered by category, replayed by one journal op.
+
 ## Utility joints
 
 The motor joint drives one body's transform toward offsets from

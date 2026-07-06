@@ -1113,6 +1113,11 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
         {
             continue; // a mouse joint only ever moves body B
         }
+        if (world->disabled[world->jointBodyA[j]] != 0 ||
+            world->disabled[world->jointBodyB[j]] != 0)
+        {
+            continue; // a dormant end pauses the whole joint
+        }
         int32_t bodyA = world->jointBodyA[j];
         int32_t bodyB = world->jointBodyB[j];
         if ((world->types[bodyA] != (uint8_t)m2_dynamicBody || world->asleep[bodyA] != 0) &&
@@ -1974,7 +1979,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
             if (world->alive[i] == 0 || world->types[i] != (uint8_t)m2_dynamicBody ||
-                world->asleep[i] != 0)
+                world->asleep[i] != 0 || world->disabled[i] != 0)
             {
                 continue;
             }
@@ -2003,7 +2008,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         // Bullet substep origins, captured before positions move.
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
-            if (world->bullets[i] != 0)
+            if (world->bullets[i] != 0 && world->disabled[i] == 0)
             {
                 world->ccdPrevPositions[i] = world->transforms[i].p;
             }
@@ -2013,7 +2018,7 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
         for (int32_t i = 0; i < world->maxBodyIndex; ++i)
         {
             if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody ||
-                world->asleep[i] != 0)
+                world->asleep[i] != 0 || world->disabled[i] != 0)
             {
                 continue;
             }

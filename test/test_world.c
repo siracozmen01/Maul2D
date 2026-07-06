@@ -1269,9 +1269,118 @@ static void TestBodyDynamicsPack(void)
     m2DestroyWorld(nap);
 }
 
+// Integration extras (parity sprint 4a): dormancy that ends contacts
+// and wakes riders, mass overrides with a documented lifetime, and
+// one deterministic blast.
+static void TestDormancyMassAndExplosions(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(20.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+
+    // Dormancy: a pedestal with a sleeper on top goes dormant; the
+    // rider wakes and falls (the destroy-path wake law, third user).
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.position = (m2Pos2){0.0, 0.75};
+    m2BodyId pedestal = m2CreateBody(world, &pd);
+    m2Polygon post = m2MakeBox(0.6f, 0.75f);
+    m2CreatePolygonShape(pedestal, &fs, &post);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 1.95};
+    m2BodyId rider = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(rider, &sd, &unit);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(rider), "the rider sleeps on the pedestal");
+    m2Body_Disable(pedestal);
+    CHECK(!m2Body_IsEnabled(pedestal), "dormancy reads back");
+    for (int32_t i = 0; i < 90; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(rider).y < 0.6, "the rider wakes and lands on the floor");
+    m2RayCastResult probe = m2World_CastRayClosest(world, (m2Pos2){0.0, 5.0}, (m2Vec2){0.0f, -4.0f},
+                                                   m2DefaultQueryFilter());
+    CHECK(!probe.hit, "a dormant body is invisible to queries");
+    m2Body_Enable(pedestal);
+    probe = m2World_CastRayClosest(world, (m2Pos2){0.0, 5.0}, (m2Vec2){0.0f, -4.5f},
+                                   m2DefaultQueryFilter());
+    CHECK(probe.hit, "and reappears where it stood");
+
+    // Mass override: twice the mass, same impulse, half the speed.
+    m2BodyDef md = m2DefaultBodyDef();
+    md.type = m2_dynamicBody;
+    md.position = (m2Pos2){8.0, 5.0};
+    m2BodyId heavy = m2CreateBody(world, &md);
+    m2CreatePolygonShape(heavy, &sd, &unit);
+    m2MassData original = m2Body_GetMassData(heavy);
+    m2MassData doubled = original;
+    doubled.mass = original.mass * 2.0f;
+    doubled.rotationalInertia = original.rotationalInertia * 2.0f;
+    m2Body_SetMassData(heavy, doubled);
+    CHECK(m2Body_GetMass(heavy) > original.mass * 1.9f, "the override sticks");
+    m2Body_ApplyLinearImpulse(heavy, (m2Vec2){original.mass * 2.0f, 0.0f},
+                              m2Body_GetPosition(heavy));
+    float vx = m2Body_GetLinearVelocity(heavy).x;
+    CHECK(vx > 0.9f && vx < 1.1f, "twice the mass takes half the speed");
+    m2Body_ApplyMassFromShapes(heavy);
+    m2MassData back = m2Body_GetMassData(heavy);
+    CHECK(back.mass < original.mass * 1.1f, "shapes take the mass back on request");
+
+    // Explosion: two crates flank the blast inside the radius, a third
+    // sits in the falloff band, a fourth is filtered out by mask.
+    double bx = 20.0;
+    m2BodyId crates[4];
+    double at[4] = {bx - 1.0, bx + 1.0, bx + 3.0, bx - 1.0};
+    double ay[4] = {0.45, 0.45, 0.45, 1.6};
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){at[i], ay[i]};
+        crates[i] = m2CreateBody(world, &cd);
+        m2ShapeDef xs = m2DefaultShapeDef();
+        if (i == 3)
+        {
+            xs.categoryBits = 0x8000u; // outside the blast mask
+        }
+        m2CreatePolygonShape(crates[i], &xs, &unit);
+    }
+    m2ExplosionDef boom = m2DefaultExplosionDef();
+    boom.position = (m2Pos2){bx, 0.45};
+    boom.radius = 1.5f;
+    boom.falloff = 2.0f;
+    boom.impulse = 3.0f;
+    boom.maskBits = 0x1u;
+    m2World_Explode(world, &boom);
+    float vLeft = m2Body_GetLinearVelocity(crates[0]).x;
+    float vRight = m2Body_GetLinearVelocity(crates[1]).x;
+    float vFar = m2Body_GetLinearVelocity(crates[2]).x;
+    CHECK(vLeft < -1.0f, "the left crate flies left");
+    CHECK(vRight > 1.0f, "the right crate flies right");
+    CHECK(vFar > 0.1f && vFar < vRight, "the falloff crate gets a weaker push");
+    float vMasked = m2Body_GetLinearVelocity(crates[3]).x;
+    CHECK(vMasked == 0.0f, "the masked crate never feels it");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestDormancyMassAndExplosions();
     TestBodyDynamicsPack();
     TestMirrorRebuild();
     TestEnumerationWalk();

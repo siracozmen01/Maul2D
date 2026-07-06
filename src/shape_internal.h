@@ -30,13 +30,6 @@ typedef struct m2ShapeGeometry
 _Static_assert(sizeof(m2Polygon) == 136, "polygon layout is ABI");
 _Static_assert(sizeof(m2ShapeGeometry) == 140, "geometry union must be padding-free");
 
-typedef struct m2MassData
-{
-    float mass;
-    m2Vec2 center;           // body-local centroid
-    float rotationalInertia; // about the body origin
-} m2MassData;
-
 bool m2ValidateCircle(const m2Circle* circle);
 bool m2ValidateCapsule(const m2Capsule* capsule);
 bool m2ValidateSegment(const m2Segment* segment);

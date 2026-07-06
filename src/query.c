@@ -579,7 +579,7 @@ int32_t m2World_OverlapAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper, m2Sha
 // both proxies meet in the TARGET's body-local frame (the same single
 // f64 crossing as rays).
 
-static m2DistanceProxy GeometryProxy(const m2ShapeGeometry* g)
+m2DistanceProxy m2GeometryProxy(const m2ShapeGeometry* g)
 {
     m2DistanceProxy p;
     p.count = 1;
@@ -654,7 +654,7 @@ static void ProxiesInBodyFrame(const m2World* world, int32_t shapeIndex, const m
 {
     int32_t body = world->shapeBody[shapeIndex];
     m2Transform xf = world->transforms[body];
-    *target = GeometryProxy(&world->shapeGeometry[shapeIndex]);
+    *target = m2GeometryProxy(&world->shapeGeometry[shapeIndex]);
 
     m2Vec2 rel = {(float)(q->pose.p.x - xf.p.x), (float)(q->pose.p.y - xf.p.y)};
     m2Vec2 relLocal = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};

@@ -468,6 +468,34 @@ static void DoRandomOp(m2WorldId world)
         }
         return;
     }
+    if (roll == 75)
+    {
+        m2BodyId body = RandomBody(world);
+        if (body.index1 != 0)
+        {
+            if (Pick(2) == 0)
+            {
+                m2Body_Disable(body);
+            }
+            else
+            {
+                m2Body_Enable(body);
+            }
+        }
+        return;
+    }
+    if (roll == 76)
+    {
+        m2ExplosionDef boom = m2DefaultExplosionDef();
+        double ex = PickCoord();
+        double ey = (double)Pick(60) * 0.1;
+        boom.position = (m2Pos2){ex, ey};
+        boom.radius = 0.5f + (float)Pick(20) * 0.1f;
+        boom.falloff = 0.5f + (float)Pick(10) * 0.1f;
+        boom.impulse = (float)Pick(30) * 0.2f;
+        m2World_Explode(world, &boom);
+        return;
+    }
     if (roll < 79)
     {
         float gx = (float)((int32_t)Pick(5) - 2) * 0.5f;

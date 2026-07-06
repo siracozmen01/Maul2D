@@ -72,6 +72,24 @@ extern "C"
     /// World-wide sleep master switch, journaled. Disabling wakes
     /// every sleeping dynamic body (a sleeper must not outlive the
     /// rule that let it sleep). Thread class: writer / reader.
+    /// One deterministic blast: every dynamic shape whose category
+    /// passes maskBits and whose closest point lies inside
+    /// radius+falloff gets an outward impulse at that point, full
+    /// strength inside radius, fading linearly to zero across the
+    /// falloff band. One journal op replays the whole thing.
+    typedef struct m2ExplosionDef
+    {
+        m2Pos2 position;
+        float radius;
+        float falloff;
+        float impulse; // newton seconds at full strength
+        uint32_t maskBits;
+        int32_t internalValue;
+    } m2ExplosionDef;
+
+    m2ExplosionDef m2DefaultExplosionDef(void);
+    void m2World_Explode(m2WorldId worldId, const m2ExplosionDef* def);
+
     void m2World_EnableSleeping(m2WorldId worldId, bool flag);
     bool m2World_IsSleepingEnabled(m2WorldId worldId);
 

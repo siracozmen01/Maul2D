@@ -185,6 +185,18 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     grip.target = (m2Pos2){2.0, 1.0};
     m2JointId gripper = m2CreateMouseJoint(world, &grip);
     m2MouseJoint_SetTarget(gripper, (m2Pos2){3.0, 2.0}); // op 34
+    m2Body_Disable(ram);                                 // op 35
+    m2Body_Enable(ram);                                  // op 36
+    m2MassData heavier = m2Body_GetMassData(bob);
+    heavier.mass *= 2.0f;
+    heavier.rotationalInertia *= 2.0f;
+    m2Body_SetMassData(bob, heavier); // op 37
+    m2Body_ApplyMassFromShapes(bob);  // op 38
+    m2ExplosionDef boom = m2DefaultExplosionDef();
+    boom.position = (m2Pos2){1.0, 0.5};
+    boom.radius = 2.0f;
+    boom.impulse = 1.5f;
+    m2World_Explode(world, &boom); // op 39
     for (int32_t i = 0; i < 30; ++i)
     {
         m2World_Step(world, 1.0f / 120.0f, 2); // second dt flavor

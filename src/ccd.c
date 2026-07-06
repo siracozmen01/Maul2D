@@ -216,7 +216,7 @@ void m2SolveContinuous(m2World* world)
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
     {
         if (world->alive[i] == 0 || world->bullets[i] == 0 || world->asleep[i] != 0 ||
-            world->types[i] != (uint8_t)m2_dynamicBody)
+            world->disabled[i] != 0 || world->types[i] != (uint8_t)m2_dynamicBody)
         {
             continue;
         }

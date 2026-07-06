@@ -28,8 +28,9 @@
 #define M2_FJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2FilterJointDef) << 8) ^ 10)
 #define M2_MOJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MotorJointDef) << 8) ^ 11)
 #define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
+#define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 22u
+#define M2_SNAPSHOT_VERSION 23u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1016,6 +1017,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(sleepEnables, cap, uint8_t);
     M2_ALLOC(forces, cap, m2Vec2);
     M2_ALLOC(torques, cap, float);
+    M2_ALLOC(disabled, cap, uint8_t);
     M2_ALLOC(shapeChain, shapeCap, int32_t);
     M2_ALLOC(chainAlive, shapeCap, uint8_t);
     M2_ALLOC(chainBody, shapeCap, int32_t);
@@ -1187,6 +1189,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->sleepEnables);
     m2Free(world->forces);
     m2Free(world->torques);
+    m2Free(world->disabled);
     m2Free(world->shapeChain);
     m2Free(world->chainAlive);
     m2Free(world->chainBody);
@@ -1290,7 +1293,8 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
                 // A body that JUST fell asleep still owes one manifold
                 // refresh (its stash can be one solve stale - the same
                 // freshness rule the frozen-pair skip lives by).
-                anyoneStirring = world->asleep[i] == 0 || world->sleepStreak[i] < 2;
+                anyoneStirring =
+                    world->disabled[i] == 0 && (world->asleep[i] == 0 || world->sleepStreak[i] < 2);
             }
             else if (world->types[i] == (uint8_t)m2_kinematicBody)
             {
@@ -1318,7 +1322,8 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     // order within a body (both snapshot-deterministic).
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
     {
-        if (world->alive[i] == 0 || world->types[i] == (uint8_t)m2_staticBody ||
+        if (world->alive[i] == 0 || world->disabled[i] != 0 ||
+            world->types[i] == (uint8_t)m2_staticBody ||
             (world->types[i] == (uint8_t)m2_dynamicBody && world->asleep[i] != 0))
         {
             continue;
@@ -1563,6 +1568,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->sleepEnables, (size_t)world->bodyCapacity * sizeof(uint8_t));
     M2_BLOCK(world->forces, (size_t)world->bodyCapacity * sizeof(m2Vec2));
     M2_BLOCK(world->torques, (size_t)world->bodyCapacity * sizeof(float));
+    M2_BLOCK(world->disabled, (size_t)world->bodyCapacity * sizeof(uint8_t));
     M2_BLOCK(world->shapeChain, (size_t)world->shapeCapacity * sizeof(int32_t));
     M2_BLOCK(world->chainAlive, (size_t)world->shapeCapacity * sizeof(uint8_t));
     M2_BLOCK(world->chainBody, (size_t)world->shapeCapacity * sizeof(int32_t));
@@ -1725,6 +1731,7 @@ m2BodyDef m2DefaultBodyDef(void)
     def.rotation = (m2Rot){1.0f, 0.0f};
     def.gravityScale = 1.0f;
     def.enableSleep = true;
+    def.isEnabled = true;
     def.internalValue = M2_BODY_COOKIE;
     return def;
 }
@@ -1757,6 +1764,7 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->sleepEnables[index] = def->enableSleep ? 1 : 0;
     world->forces[index] = (m2Vec2){0.0f, 0.0f};
     world->torques[index] = 0.0f;
+    world->disabled[index] = def->isEnabled ? 0 : 1;
     world->userData[index] = def->userData;
     world->types[index] = (uint8_t)def->type;
     world->alive[index] = 1;
@@ -1797,11 +1805,10 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     return id;
 }
 
-static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
+// M19 bookending shared by destroy and disable: end every touching
+// contact of this shape, wake its riders, drop the proxy, prune pairs.
+static void RetireShapeFromBroadphase(m2World* world, int32_t shapeIndex)
 {
-    // M19 bookending: a destroyed shape ends every touching contact it
-    // had, id captured before the generation bump. Between steps these
-    // land in the pending queue and flush into the next step's buffers.
     for (int32_t i = 0; i < world->pairCount; ++i)
     {
         if (world->pairTouching[i] == 0)
@@ -1842,7 +1849,11 @@ static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
         world->proxyIds[shapeIndex] = M2_NULL_NODE;
     }
     PrunePairsOfShape(world, shapeIndex);
+}
 
+static void DestroyShapeInternal(m2World* world, int32_t shapeIndex)
+{
+    RetireShapeFromBroadphase(world, shapeIndex);
     world->shapeAlive[shapeIndex] = 0;
     if (world->shapeGenerations[shapeIndex] == UINT16_MAX)
     {
@@ -2623,21 +2634,27 @@ static m2ShapeId CreateShape(m2BodyId bodyId, const m2ShapeDef* def,
         world->maxShapeIndex = index + 1;
     }
 
-    int32_t tree = world->types[bodyIndex];
-    world->proxyIds[index] = m2Tree_Insert(&world->trees[tree], world->treeNodes[tree],
-                                           Fatten(ShapeTightAABB(world, index)), index);
-    if (world->proxyIds[index] == M2_NULL_NODE)
+    if (world->disabled[bodyIndex] == 0)
     {
-        // Node pool exhausted: undo everything; capacity error, not UB.
-        world->bodyShapeHead[bodyIndex] = world->shapeNext[index];
-        world->shapeAlive[index] = 0;
-        world->shapeFreeHead =
-            (world->shapeFreeHead + world->shapeCapacity - 1) % world->shapeCapacity;
-        world->shapeFreeQueue[world->shapeFreeHead] = index;
-        world->shapeFreeCount += 1;
-        return m2_nullShapeId;
+        int32_t tree = world->types[bodyIndex];
+        world->proxyIds[index] = m2Tree_Insert(&world->trees[tree], world->treeNodes[tree],
+                                               Fatten(ShapeTightAABB(world, index)), index);
+        if (world->proxyIds[index] == M2_NULL_NODE)
+        {
+            // Node pool exhausted: undo everything; capacity error, not UB.
+            world->bodyShapeHead[bodyIndex] = world->shapeNext[index];
+            world->shapeAlive[index] = 0;
+            world->shapeFreeHead =
+                (world->shapeFreeHead + world->shapeCapacity - 1) % world->shapeCapacity;
+            world->shapeFreeQueue[world->shapeFreeHead] = index;
+            world->shapeFreeCount += 1;
+            return m2_nullShapeId;
+        }
+        PushMoved(world, index);
     }
-    PushMoved(world, index);
+    // Dormant bodies keep the shape out of the trees until Enable, but
+    // EVERYTHING else (mass, journaling, the id) proceeds normally so
+    // replays mint identical worlds.
     RecomputeMass(world, bodyIndex);
 
     m2ShapeId id = {index + 1, bodyId.world0, world->shapeGenerations[index]};
@@ -3830,6 +3847,219 @@ void m2DestroyJointInternal(m2World* world, int32_t index)
     world->jointFreeQueue[world->jointFreeTail] = index;
     world->jointFreeTail = (world->jointFreeTail + 1) % world->jointCapacity;
     world->jointFreeCount += 1;
+}
+
+void m2Body_Disable(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->disabled[index] != 0)
+    {
+        return; // already dormant: no-op stays unjournaled
+    }
+    m2JournalRecord(world, m2_opDisableBody, &bodyId, (int32_t)sizeof(bodyId));
+    for (int32_t s = world->bodyShapeHead[index]; s != -1; s = world->shapeNext[s])
+    {
+        RetireShapeFromBroadphase(world, s);
+    }
+    world->disabled[index] = 1;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+void m2Body_Enable(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->disabled[index] == 0)
+    {
+        return;
+    }
+    m2JournalRecord(world, m2_opEnableBody, &bodyId, (int32_t)sizeof(bodyId));
+    world->disabled[index] = 0;
+    int32_t tree = world->types[index];
+    for (int32_t s = world->bodyShapeHead[index]; s != -1; s = world->shapeNext[s])
+    {
+        world->proxyIds[s] = m2Tree_Insert(&world->trees[tree], world->treeNodes[tree],
+                                           Fatten(ShapeTightAABB(world, s)), s);
+        PushMoved(world, s);
+    }
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+bool m2Body_IsEnabled(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    return index >= 0 && world->disabled[index] == 0;
+}
+
+void m2Body_SetMassData(m2BodyId bodyId, m2MassData massData)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0 || world->types[index] != (uint8_t)m2_dynamicBody || !(massData.mass > 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2BodyId body;
+            m2MassData data;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.body = bodyId;
+        record.data = massData;
+        m2JournalRecord(world, m2_opSetMassData, &record, (int32_t)sizeof(record));
+    }
+    world->invMass[index] = 1.0f / massData.mass;
+    float inertiaCenter =
+        massData.rotationalInertia - massData.mass * (massData.center.x * massData.center.x +
+                                                      massData.center.y * massData.center.y);
+    world->invInertia[index] =
+        world->fixedRotations[index] == 0 && inertiaCenter > 0.0f ? 1.0f / inertiaCenter : 0.0f;
+    world->localCenters[index] = massData.center;
+    world->asleep[index] = 0;
+    world->sleepTimes[index] = 0.0f;
+}
+
+m2MassData m2Body_GetMassData(m2BodyId bodyId)
+{
+    m2MassData data = {0.0f, {0.0f, 0.0f}, 0.0f};
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return data;
+    }
+    float invMass = world->invMass[index];
+    data.mass = invMass > 0.0f ? 1.0f / invMass : 0.0f;
+    data.center = world->localCenters[index];
+    float invI = world->invInertia[index];
+    float inertiaCenter = invI > 0.0f ? 1.0f / invI : 0.0f;
+    data.rotationalInertia =
+        inertiaCenter + data.mass * (data.center.x * data.center.x + data.center.y * data.center.y);
+    return data;
+}
+
+void m2Body_ApplyMassFromShapes(m2BodyId bodyId)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2JournalRecord(world, m2_opMassFromShapes, &bodyId, (int32_t)sizeof(bodyId));
+    RecomputeMass(world, index);
+    if (world->types[index] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[index] = 0;
+        world->sleepTimes[index] = 0.0f;
+    }
+}
+
+m2ExplosionDef m2DefaultExplosionDef(void)
+{
+    m2ExplosionDef def;
+    memset(&def, 0, sizeof(def));
+    def.radius = 1.0f;
+    def.falloff = 0.5f;
+    def.impulse = 1.0f;
+    def.maskBits = 0xFFFFFFFFu;
+    def.internalValue = M2_EXPLODE_COOKIE;
+    return def;
+}
+
+void m2World_Explode(m2WorldId worldId, const m2ExplosionDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_EXPLODE_COOKIE ||
+        !(def->radius >= 0.0f) || !(def->falloff > 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2JournalRecord(world, m2_opExplode, def, (int32_t)sizeof(*def));
+    // The blast applies raw impulses below; they must not be recorded
+    // twice (the chain-create suppression pattern).
+    uint8_t journalWasActive = world->journalActive;
+    world->journalActive = 0;
+
+    float reach = def->radius + def->falloff;
+    for (int32_t s = 0; s < world->maxShapeIndex; ++s)
+    {
+        if (world->shapeAlive[s] == 0 || world->shapeSensor[s] != 0 ||
+            (world->shapeCategory[s] & def->maskBits) == 0)
+        {
+            continue;
+        }
+        int32_t body = world->shapeBody[s];
+        if (world->types[body] != (uint8_t)m2_dynamicBody || world->disabled[body] != 0)
+        {
+            continue;
+        }
+        // Closest point on the shape to the blast center, in the
+        // shape's body frame (one f64 crossing).
+        m2Transform xf = world->transforms[body];
+        m2Vec2 rel = {(float)(def->position.x - xf.p.x), (float)(def->position.y - xf.p.y)};
+        m2Vec2 local = {xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+        m2DistanceProxy target = m2GeometryProxy(&world->shapeGeometry[s]);
+        m2DistanceProxy point;
+        point.points[0] = local;
+        point.count = 1;
+        point.radius = 0.0f;
+        m2DistanceResult d = m2ShapeDistance(&target, &point);
+        float dist = d.distance - target.radius;
+        if (dist > reach)
+        {
+            continue;
+        }
+        // Blast direction: away from the center. Deep overlap falls
+        // back to the body-center direction; a dead-centered blast on
+        // a centered body has no direction and skips, loudly fair.
+        m2Vec2 dir;
+        if (dist > 0.0f)
+        {
+            dir = (m2Vec2){-d.normal.x, -d.normal.y}; // normal points shape->center
+        }
+        else
+        {
+            m2Vec2 lc = world->localCenters[body];
+            dir = (m2Vec2){lc.x - local.x, lc.y - local.y};
+            float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
+            if (!(len > 0.0f))
+            {
+                continue;
+            }
+            dir = (m2Vec2){dir.x / len, dir.y / len};
+            dist = 0.0f;
+        }
+        float scale = dist <= def->radius ? 1.0f : 1.0f - (dist - def->radius) / def->falloff;
+        float mag = def->impulse * scale;
+        m2Vec2 hitLocal = {d.pointA.x + target.radius * d.normal.x,
+                           d.pointA.y + target.radius * d.normal.y};
+        m2Vec2 lc = world->localCenters[body];
+        m2Vec2 arm = {hitLocal.x - lc.x, hitLocal.y - lc.y};
+        m2Vec2 impulseLocal = {mag * dir.x, mag * dir.y};
+        // Rotate impulse and arm out to world axes for the velocity
+        // update (angular uses the local cross, identical either way).
+        m2Vec2 impulseWorld = {xf.q.c * impulseLocal.x - xf.q.s * impulseLocal.y,
+                               xf.q.s * impulseLocal.x + xf.q.c * impulseLocal.y};
+        world->linearVelocities[body].x += world->invMass[body] * impulseWorld.x;
+        world->linearVelocities[body].y += world->invMass[body] * impulseWorld.y;
+        world->angularVelocities[body] +=
+            world->invInertia[body] * (arm.x * impulseLocal.y - arm.y * impulseLocal.x);
+        world->asleep[body] = 0;
+        world->sleepTimes[body] = 0.0f;
+    }
+    world->journalActive = journalWasActive;
 }
 
 m2FilterJointDef m2DefaultFilterJointDef(void)

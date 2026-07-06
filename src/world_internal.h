@@ -43,6 +43,7 @@ typedef struct m2World
     uint8_t* fixedRotations; // invInertia forced 0 (snapshot state)
     uint8_t* sleepEnables;   // 0 = this body never sleeps (snapshot state)
     m2Vec2* forces;          // accumulated, cleared at step end (snapshot state)
+    uint8_t* disabled;       // 1 = outside simulation, shapes proxy-less (snapshot state)
     float* torques;          // (snapshot state)
     uint64_t* userData;
     uint8_t* types;
@@ -257,6 +258,11 @@ enum
     m2_opCreateMouseJoint = 32,
     m2_opMotorOffsets = 33,
     m2_opMouseTarget = 34,
+    m2_opDisableBody = 35,
+    m2_opEnableBody = 36,
+    m2_opSetMassData = 37,
+    m2_opMassFromShapes = 38,
+    m2_opExplode = 39,
 };
 
 // Journaled joint parameter channel (op 16).
@@ -298,6 +304,7 @@ typedef struct m2CastResult
     bool hit;
 } m2CastResult;
 
+m2DistanceProxy m2GeometryProxy(const struct m2ShapeGeometry* g);
 m2DistanceResult m2ShapeDistance(const m2DistanceProxy* proxyA, const m2DistanceProxy* proxyB);
 m2CastResult m2ShapeCastProxy(const m2DistanceProxy* proxyA, const m2DistanceProxy* proxyB,
                               m2Vec2 translation, float maxFraction);
