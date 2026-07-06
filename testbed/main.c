@@ -8,7 +8,8 @@
 //   left drag   grab bodies (a mouse joint, of course)
 //   right drag  pan          wheel  zoom
 //   space       pause        S      single step
-//   tab         next scene   R      restart scene
+//   tab         next scene   F5     restart scene
+//   R (hold)    REWIND TIME through the snapshot ring
 //   E           explosion at the cursor
 //   B           drop a box at the cursor
 //   arrows      drive (scenes with a car)
@@ -18,6 +19,8 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // ---------------------------------------------------------------- camera
 // World positions are f64; the camera subtracts its center in double
@@ -295,10 +298,94 @@ static void SceneDemolition(m2WorldId world)
     tbAddBox(world, 6.0, 2.6, 0.35f, 0.8f);
 }
 
+// A ragdoll out of capsules and limited revolutes; jointed bodies do
+// not self-collide by default, which is exactly what a ragdoll wants.
+static m2BodyId tbCapsulePart(m2WorldId world, double x, double y, float hx, float r)
+{
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){x, y};
+    m2BodyId part = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = 1.0f;
+    sd.friction = 0.4f;
+    m2Capsule cap = {{-hx, 0.0f}, {hx, 0.0f}, r};
+    m2CreateCapsuleShape(part, &sd, &cap);
+    return part;
+}
+
+static void tbPin(m2WorldId world, m2BodyId a, m2BodyId b, m2Vec2 anchorA, m2Vec2 anchorB,
+                  float lower, float upper)
+{
+    m2RevoluteJointDef jd = m2DefaultRevoluteJointDef();
+    jd.bodyIdA = a;
+    jd.bodyIdB = b;
+    jd.localAnchorA = anchorA;
+    jd.localAnchorB = anchorB;
+    jd.enableLimit = true;
+    jd.lowerAngle = lower;
+    jd.upperAngle = upper;
+    m2CreateRevoluteJoint(world, &jd);
+}
+
+static void tbMakeRagdoll(m2WorldId world, double x, double y)
+{
+    m2BodyId torso = tbCapsulePart(world, x, y, 0.02f, 0.34f);
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.type = m2_dynamicBody;
+    hd.position = (m2Pos2){x, y + 0.62};
+    m2BodyId head = m2CreateBody(world, &hd);
+    m2ShapeDef hs = m2DefaultShapeDef();
+    hs.density = 0.8f;
+    m2Circle skull = {{0.0f, 0.0f}, 0.2f};
+    m2CreateCircleShape(head, &hs, &skull);
+    tbPin(world, torso, head, (m2Vec2){0.0f, 0.4f}, (m2Vec2){0.0f, -0.22f}, -0.5f, 0.5f);
+
+    for (int32_t side = 0; side < 2; ++side)
+    {
+        double dir = side == 0 ? -1.0 : 1.0;
+        m2BodyId upperArm = tbCapsulePart(world, x + dir * 0.45, y + 0.25, 0.2f, 0.09f);
+        tbPin(world, torso, upperArm, (m2Vec2){(float)dir * 0.1f, 0.3f},
+              (m2Vec2){(float)-dir * 0.25f, 0.0f}, -2.2f, 2.2f);
+        m2BodyId lowerArm = tbCapsulePart(world, x + dir * 0.95, y + 0.25, 0.2f, 0.08f);
+        tbPin(world, upperArm, lowerArm, (m2Vec2){(float)dir * 0.25f, 0.0f},
+              (m2Vec2){(float)-dir * 0.25f, 0.0f}, side == 0 ? -2.4f : 0.0f,
+              side == 0 ? 0.0f : 2.4f);
+        m2BodyId thigh = tbCapsulePart(world, x + dir * 0.12, y - 0.62, 0.24f, 0.11f);
+        tbPin(world, torso, thigh, (m2Vec2){(float)dir * 0.1f, -0.32f},
+              (m2Vec2){(float)-dir * 0.28f, 0.0f}, -1.2f, 1.2f);
+        m2BodyId shin = tbCapsulePart(world, x + dir * 0.12, y - 1.14, 0.22f, 0.1f);
+        tbPin(world, thigh, shin, (m2Vec2){(float)dir * 0.28f, 0.0f},
+              (m2Vec2){(float)-dir * 0.26f, 0.0f}, side == 0 ? 0.0f : -2.4f,
+              side == 0 ? 2.4f : 0.0f);
+    }
+}
+
+static void SceneRagdolls(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    // A staircase for them to crumple down.
+    for (int32_t s = 0; s < 7; ++s)
+    {
+        m2BodyDef sd = m2DefaultBodyDef();
+        sd.position = (m2Pos2){-8.0 + (double)s * 2.0, (double)s * 0.7};
+        m2BodyId step = m2CreateBody(world, &sd);
+        m2ShapeDef ss = m2DefaultShapeDef();
+        ss.friction = 0.6f;
+        m2Polygon slab = m2MakeBox(1.0f, 0.35f);
+        m2CreatePolygonShape(step, &ss, &slab);
+    }
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        tbMakeRagdoll(world, 4.0 + (double)i * 0.4, 7.0 + (double)i * 2.4);
+    }
+}
+
 static const tbScene s_scenes[] = {
     {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, false},
     {"car: arrows to drive, terrain is a chain", SceneCar, true},
     {"demolition: E to blast, motor platform ferries", SceneDemolition, false},
+    {"ragdolls: grab and drag; hold R to rewind time", SceneRagdolls, false},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
 
@@ -314,6 +401,16 @@ int main(void)
     bool paused = false;
     double simTime = 0.0;
     m2JointId grip = m2_nullJointId;
+
+    // THE REWIND RING: bit-exact snapshots of recent history. Hold R
+    // and time runs backward; release and the simulation resumes from
+    // wherever you let go. This is the rollback contract, visible.
+    uint8_t* ring = NULL;
+    int32_t ringEntry = 0; // bytes per snapshot
+    int32_t ringCapacity = 0;
+    int32_t ringCount = 0;  // valid entries behind the present
+    int32_t ringStride = 2; // capture every Nth step
+    int32_t stepParity = 0;
 
     m2DebugDraw draw = {0};
     draw.drawPolygon = tbDrawPolygon;
@@ -342,6 +439,14 @@ int main(void)
             def.shapeCapacity = 1024;
             def.jointCapacity = 64;
             world = m2CreateWorld(&def);
+            free(ring);
+            ringEntry = m2World_SnapshotSize(world);
+            int64_t budget = 256ll * 1024ll * 1024ll;
+            int64_t fit = budget / (int64_t)ringEntry;
+            ringCapacity = fit < 30 ? 30 : (fit > 400 ? 400 : (int32_t)fit);
+            ring = malloc((size_t)ringCapacity * (size_t)ringEntry);
+            ringCount = 0;
+            stepParity = 0;
             s_driveWheelA = m2_nullBodyId;
             s_driveWheelB = m2_nullBodyId;
             s_driveJointA = m2_nullJointId;
@@ -360,7 +465,7 @@ int main(void)
             pendingScene = (sceneIndex + 1) % TB_SCENE_COUNT;
             reload = true;
         }
-        if (IsKeyPressed(KEY_R))
+        if (IsKeyPressed(KEY_F5))
         {
             pendingScene = sceneIndex;
             reload = true;
@@ -467,12 +572,35 @@ int main(void)
             m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ferry, 0.0f}, 0.0f);
         }
 
-        // ---- step ----
+        // ---- step or rewind ----
+        bool rewinding = IsKeyDown(KEY_R) && ring != NULL && ringCount > 0;
         bool single = IsKeyPressed(KEY_S);
-        if ((!paused || single) && world.index1 != 0)
+        if (rewinding)
+        {
+            // Pop the newest snapshot and live there. Local handles into
+            // the future (the grip and its anchor) are now stale by
+            // definition; drop them and let the registries be the truth.
+            grip = m2_nullJointId;
+            ringCount -= 1;
+            m2World_Restore(world, ring + (size_t)ringCount * (size_t)ringEntry, ringEntry);
+            simTime -= (double)ringStride / 60.0;
+        }
+        else if ((!paused || single) && world.index1 != 0)
         {
             m2World_Step(world, 1.0f / 60.0f, 4);
             simTime += 1.0 / 60.0;
+            stepParity = (stepParity + 1) % ringStride;
+            if (stepParity == 0 && ring != NULL)
+            {
+                if (ringCount == ringCapacity)
+                {
+                    // Slide the window: forget the oldest snapshot.
+                    memmove(ring, ring + ringEntry, (size_t)(ringCapacity - 1) * (size_t)ringEntry);
+                    ringCount -= 1;
+                }
+                m2World_Snapshot(world, ring + (size_t)ringCount * (size_t)ringEntry, ringEntry);
+                ringCount += 1;
+            }
         }
 
         // ---- render ----
@@ -491,12 +619,28 @@ int main(void)
                             counters.bodies, counters.awakeBodies, counters.shapes, counters.joints,
                             profile.stepMs, paused ? "  [paused]" : ""),
                  12, 36, 16, GRAY);
-        DrawText("drag: grab   rmb: pan   wheel: zoom   tab: scene   r: reset   space: pause   "
-                 "s: step   e: boom   b: box",
+        DrawText("drag: grab   rmb: pan   wheel: zoom   tab: scene   f5: reset   space: pause  "
+                 " s: step   e: boom   b: box   HOLD R: REWIND TIME",
                  12, s_screenHeight - 26, 14, GRAY);
+        if (ring != NULL && ringCapacity > 0)
+        {
+            float frac = (float)ringCount / (float)ringCapacity;
+            int barWidth = (int)(260.0f * frac);
+            DrawRectangle(s_screenWidth - 280, s_screenHeight - 30, 260, 10,
+                          (Color){60, 60, 70, 255});
+            DrawRectangle(s_screenWidth - 280, s_screenHeight - 30, barWidth, 10,
+                          rewinding ? (Color){240, 120, 60, 255} : (Color){90, 170, 240, 255});
+            DrawText(rewinding ? "<< rewinding" : "history", s_screenWidth - 280,
+                     s_screenHeight - 48, 14, rewinding ? ORANGE : GRAY);
+        }
+        DrawText(TextFormat("step %llu  hash %016llx",
+                            (unsigned long long)m2World_GetStepCount(world),
+                            (unsigned long long)m2World_Hash(world)),
+                 12, 58, 14, (Color){120, 200, 140, 255});
         EndDrawing();
     }
 
+    free(ring);
     if (world.index1 != 0)
     {
         m2DestroyWorld(world);
