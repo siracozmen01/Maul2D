@@ -6,7 +6,11 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status: 1.5
+## Status: 1.6
+
+Water is in: an opt-in deterministic particle fluid (LiquidFun
+lineage) living inside the same snapshot, journal and hash contract
+as everything else. See the Water chapter in the guide.
 
 Baseline: x64 builds target AVX2+FMA (Haswell 2013+); arm64 uses
 NEON. Configure with -DMAUL2D_SIMD=scalar for a portable fmaf
