@@ -125,6 +125,7 @@ typedef struct tbScene
     void (*setup)(m2WorldId world);
     void (*tick)(m2WorldId world, double simTime); // optional per-step logic
     bool hasCar;
+    bool hasCharacter; // the mover-kit kinematic character
 } tbScene;
 
 static m2BodyId s_driveWheelA;
@@ -653,15 +654,177 @@ static void SceneCurtain(m2WorldId world)
     m2CreatePolygonShape(anvil, &as2, &block);
 }
 
+// ------------------------------------------- the mover-kit character
+// A kinematic character that is NOT a body: just a capsule, a pose
+// and a velocity living in the viewer, driven entirely by the public
+// mover kit (CollideMover -> SolvePlanes -> ClipVector). Standing on
+// a moving platform inherits its velocity, one-way shelves work from
+// both sides, and none of it perturbs the simulation.
+static m2Pos2 s_charPos;
+static m2Vec2 s_charVel;
+static bool s_charGrounded;
+static const m2Capsule s_charShape = {{0.0f, -0.35f}, {0.0f, 0.35f}, 0.3f};
+
+static void CharacterReset(double x, double y)
+{
+    s_charPos = (m2Pos2){x, y};
+    s_charVel = (m2Vec2){0.0f, 0.0f};
+    s_charGrounded = false;
+}
+
+static void CharacterUpdate(m2WorldId world, float dt)
+{
+    // Input: run and jump.
+    float wish = 0.0f;
+    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
+    {
+        wish += 8.0f;
+    }
+    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
+    {
+        wish -= 8.0f;
+    }
+    float blend = s_charGrounded ? 0.25f : 0.06f; // air control is weaker
+    s_charVel.x += (wish - s_charVel.x) * blend;
+    s_charVel.y -= 24.0f * dt; // snappier-than-physics platformer gravity
+    if (s_charVel.y < -30.0f)
+    {
+        s_charVel.y = -30.0f;
+    }
+    if (s_charGrounded && (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) || IsKeyPressed(KEY_SPACE)))
+    {
+        s_charVel.y = 11.0f;
+    }
+
+    // Gather planes at the current pose.
+    m2Transform pose = {s_charPos, {1.0f, 0.0f}};
+    m2PlaneResult found[16];
+    int32_t n = m2World_CollideMover(world, &s_charShape, pose, found, 16, m2DefaultQueryFilter());
+    n = n < 16 ? n : 16;
+    m2CollisionPlane planes[16];
+    m2Vec2 carry = {0.0f, 0.0f};
+    for (int32_t i = 0; i < n; ++i)
+    {
+        planes[i].normal = found[i].normal;
+        planes[i].separation = found[i].separation;
+        planes[i].pushLimit = 3.4e38f;
+        planes[i].push = 0.0f;
+        planes[i].clipVelocity = true;
+        if (found[i].normal.y > 0.7f)
+        {
+            // Ride whatever we stand on (the ferry moment).
+            m2BodyId under = m2Shape_GetBody(found[i].shapeId);
+            m2Vec2 vUnder = m2Body_GetLinearVelocity(under);
+            carry = vUnder;
+        }
+    }
+
+    m2Vec2 delta = {(s_charVel.x + carry.x) * dt, (s_charVel.y + carry.y) * dt};
+    m2PlaneSolverResult solved = m2SolvePlanes(delta, planes, n);
+    s_charPos.x += (double)solved.translation.x;
+    s_charPos.y += (double)solved.translation.y;
+    s_charVel = m2ClipVector(s_charVel, planes, n);
+
+    s_charGrounded = false;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        if (planes[i].push > 0.0f && planes[i].normal.y > 0.7f)
+        {
+            s_charGrounded = true;
+        }
+    }
+    if (s_charPos.y < -8.0)
+    {
+        CharacterReset(-10.0, 2.0); // fell off the world
+    }
+}
+
+static void CharacterDraw(void)
+{
+    m2Pos2 p1 = {s_charPos.x + (double)s_charShape.point1.x,
+                 s_charPos.y + (double)s_charShape.point1.y};
+    m2Pos2 p2 = {s_charPos.x + (double)s_charShape.point2.x,
+                 s_charPos.y + (double)s_charShape.point2.y};
+    tbDrawCapsule(p1, p2, s_charShape.radius, s_charGrounded ? 0x50E080u : 0xE0B050u, NULL);
+}
+
+static void ScenePlatformer(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 26.0);
+    CharacterReset(-10.0, 2.0);
+
+    // A slope up to the shelf run.
+    m2BodyDef sd = m2DefaultBodyDef();
+    sd.position = (m2Pos2){-5.0, 0.8};
+    sd.rotation = (m2Rot){0.94f, 0.34f};
+    m2BodyId ramp = m2CreateBody(world, &sd);
+    m2ShapeDef rs = m2DefaultShapeDef();
+    rs.friction = 0.9f;
+    m2Polygon board = m2MakeBox(2.6f, 0.2f);
+    m2CreatePolygonShape(ramp, &rs, &board);
+
+    // Three one-way shelves, stair-cased: jump up through them.
+    for (int32_t level = 0; level < 3; ++level)
+    {
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.position = (m2Pos2){1.0 + (double)level * 4.0, 2.4 + (double)level * 2.0};
+        m2BodyId shelf = m2CreateBody(world, &cd);
+        m2Vec2 pts[5] = {{2.2f, 0.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {-1.0f, 0.0f}, {-2.2f, 0.0f}};
+        m2ChainDef chain = m2DefaultChainDef();
+        chain.points = pts;
+        chain.count = 5;
+        m2CreateChain(shelf, &chain);
+    }
+
+    // The ferry: a motor-joint platform patrolling under the far gap.
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){15.0, 4.0};
+    m2BodyId beacon = m2CreateBody(world, &ad);
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){15.0, 4.0};
+    m2BodyId deckBody = m2CreateBody(world, &pd);
+    m2ShapeDef ps = m2DefaultShapeDef();
+    ps.density = 3.0f;
+    ps.friction = 0.9f;
+    m2Polygon deck = m2MakeBox(1.5f, 0.15f);
+    m2CreatePolygonShape(deckBody, &ps, &deck);
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = beacon;
+    mj.bodyIdB = deckBody;
+    mj.maxForce = 500.0f;
+    mj.maxTorque = 200.0f;
+    s_driveJointA = m2CreateMotorJoint(world, &mj);
+
+    // Crates to shoulder around at ground level.
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        tbAddBox(world, 6.0 + (double)i * 1.1, 0.45, 0.4f, 0.6f);
+    }
+}
+
+static void ScenePlatformerTick(m2WorldId world, double simTime)
+{
+    (void)world;
+    if (m2Joint_IsValid(s_driveJointA) && m2Joint_GetType(s_driveJointA) == m2_motorJoint)
+    {
+        float ferry = (float)(3.0 * sin(simTime * 0.6));
+        m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ferry, 0.0f}, 0.0f);
+    }
+}
+
 static const tbScene s_scenes[] = {
-    {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, NULL, false},
-    {"car: arrows to drive, terrain is a chain", SceneCar, NULL, true},
-    {"demolition: E to blast, motor platform ferries", SceneDemolition, SceneDemolitionTick, false},
-    {"ragdolls: grab and drag; hold R to rewind time", SceneRagdolls, NULL, false},
-    {"dominoes: one marble, forty tiles", SceneDominoes, NULL, false},
-    {"one-way course: fling the ball up through shelves", SceneOneWayCourse, NULL, false},
-    {"joint zoo: every joint, one rig each", SceneJointZoo, SceneJointZooTick, false},
-    {"curtain: breakable ropes, one anvil", SceneCurtain, NULL, false},
+    {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, NULL, false, false},
+    {"car: arrows to drive, terrain is a chain", SceneCar, NULL, true, false},
+    {"demolition: E to blast, motor platform ferries", SceneDemolition, SceneDemolitionTick, false,
+     false},
+    {"ragdolls: grab and drag; hold R to rewind time", SceneRagdolls, NULL, false, false},
+    {"dominoes: one marble, forty tiles", SceneDominoes, NULL, false, false},
+    {"one-way course: fling the ball up through shelves", SceneOneWayCourse, NULL, false, false},
+    {"joint zoo: every joint, one rig each", SceneJointZoo, SceneJointZooTick, false, false},
+    {"curtain: breakable ropes, one anvil", SceneCurtain, NULL, false, false},
+    {"platformer: A/D run, W jump, ride the ferry (mover kit)", ScenePlatformer,
+     ScenePlatformerTick, false, true},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
 
@@ -879,6 +1042,12 @@ int main(void)
             {
                 s_scenes[sceneIndex].tick(world, simTime);
             }
+            if (s_scenes[sceneIndex].hasCharacter)
+            {
+                // The character lives in the viewer, not the world:
+                // rewind rewinds the world under its feet only.
+                CharacterUpdate(world, 1.0f / 60.0f);
+            }
             stepParity = (stepParity + 1) % ringStride;
             if (stepParity == 0 && ring != NULL)
             {
@@ -900,6 +1069,10 @@ int main(void)
         if (world.index1 != 0)
         {
             m2World_Draw(world, &draw);
+        }
+        if (s_scenes[sceneIndex].hasCharacter)
+        {
+            CharacterDraw();
         }
         m2Counters counters = m2World_GetCounters(world);
         m2Profile profile = m2World_GetProfile(world);
