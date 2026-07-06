@@ -43,6 +43,8 @@ extern "C"
         float particleDampingStrength;  // reference default 1.0
         float particleViscousStrength;  // strength for viscous-FLAGGED particles (reference 0.25)
         float particlePowderStrength;   // strength for powder-flagged grains (reference 0.5)
+        float particleSpringStrength;   // spring-flagged batches (reference 0.25)
+        float particleElasticStrength;  // elastic-flagged batches (reference 0.25)
         float particleTensilePressureStrength; // surface tension, reference 0.2
         float particleTensileNormalStrength;   // reference 0.2
         /// Solver worker threads including the caller (clamped to 8).

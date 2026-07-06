@@ -183,6 +183,7 @@ void m2UpdateParticlePairs(m2World* world)
 // for now: bodies push water, the water pushes back in the next
 // slice.
 #define M2_PARTICLE_CANDIDATES 32
+#define M2_FILL_COLUMNS        256
 
 static void UpdateParticleBodyContacts(m2World* world)
 {
@@ -512,6 +513,13 @@ void m2SolveParticles(m2World* world, float dt)
         float w = world->particleWeights[i];
         float h = pressurePerWeight * m2MaxF(0.0f, w - 1.0f);
         world->particleAccumulation[i] = m2MinF(h, maxPressure);
+        // Powder and tensile particles produce no dynamic pressure
+        // (the reference's k_noPressureFlags): they carry their own
+        // repulsion and cohesion laws instead.
+        if ((world->particleFlags[i] & (m2_powderParticle | m2_tensileParticle)) != 0)
+        {
+            world->particleAccumulation[i] = 0.0f;
+        }
     }
     float velocityPerPressure = dt / (world->particleDensity * diameter);
     for (int32_t k = 0; k < bodyContactCount; ++k)
@@ -603,6 +611,89 @@ void m2SolveParticles(m2World* world, float dt)
             world->particleVelocities[a].y += f * n.y;
             world->particleVelocities[b].x -= f * n.x;
             world->particleVelocities[b].y -= f * n.y;
+        }
+    }
+
+    // Jelly, late for stability like the reference: elastic triads
+    // pull toward their spawn shape through a best-fit rotation, then
+    // springs pull toward their spawn lengths. Both read predicted
+    // positions (p + dt*v) and correct velocities.
+    if (world->particleTriadCount > 0)
+    {
+        float strength = invDt * world->particleElasticStrength;
+        for (int32_t k = 0; k < world->particleTriadCount; ++k)
+        {
+            int32_t a = world->particleTriadA[k];
+            int32_t b = world->particleTriadB[k];
+            int32_t c = world->particleTriadC[k];
+            m2Vec2 oa = world->particleTriadPA[k];
+            m2Vec2 ob = world->particleTriadPB[k];
+            m2Vec2 oc = world->particleTriadPC[k];
+            double pax =
+                world->particlePositions[a].x + (double)(dt * world->particleVelocities[a].x);
+            double pay =
+                world->particlePositions[a].y + (double)(dt * world->particleVelocities[a].y);
+            double pbx =
+                world->particlePositions[b].x + (double)(dt * world->particleVelocities[b].x);
+            double pby =
+                world->particlePositions[b].y + (double)(dt * world->particleVelocities[b].y);
+            double pcx =
+                world->particlePositions[c].x + (double)(dt * world->particleVelocities[c].x);
+            double pcy =
+                world->particlePositions[c].y + (double)(dt * world->particleVelocities[c].y);
+            double midx = (pax + pbx + pcx) / 3.0;
+            double midy = (pay + pby + pcy) / 3.0;
+            float ax = (float)(pax - midx);
+            float ay = (float)(pay - midy);
+            float bx = (float)(pbx - midx);
+            float by = (float)(pby - midy);
+            float cx = (float)(pcx - midx);
+            float cy = (float)(pcy - midy);
+            float rs = oa.x * ay - oa.y * ax + (ob.x * by - ob.y * bx) + (oc.x * cy - oc.y * cx);
+            float rc = oa.x * ax + oa.y * ay + (ob.x * bx + ob.y * by) + (oc.x * cx + oc.y * cy);
+            float r2 = rs * rs + rc * rc;
+            if (r2 <= 1.0e-12f)
+            {
+                continue; // degenerate triad this step: never a NaN
+            }
+            float inv = 1.0f / sqrtf(r2);
+            rs *= inv;
+            rc *= inv;
+            world->particleVelocities[a].x += strength * (rc * oa.x - rs * oa.y - ax);
+            world->particleVelocities[a].y += strength * (rs * oa.x + rc * oa.y - ay);
+            world->particleVelocities[b].x += strength * (rc * ob.x - rs * ob.y - bx);
+            world->particleVelocities[b].y += strength * (rs * ob.x + rc * ob.y - by);
+            world->particleVelocities[c].x += strength * (rc * oc.x - rs * oc.y - cx);
+            world->particleVelocities[c].y += strength * (rs * oc.x + rc * oc.y - cy);
+        }
+    }
+    if (world->particleSpringCount > 0)
+    {
+        float strength = invDt * world->particleSpringStrength;
+        for (int32_t k = 0; k < world->particleSpringCount; ++k)
+        {
+            int32_t a = world->particleSpringA[k];
+            int32_t b = world->particleSpringB[k];
+            double pax =
+                world->particlePositions[a].x + (double)(dt * world->particleVelocities[a].x);
+            double pay =
+                world->particlePositions[a].y + (double)(dt * world->particleVelocities[a].y);
+            double pbx =
+                world->particlePositions[b].x + (double)(dt * world->particleVelocities[b].x);
+            double pby =
+                world->particlePositions[b].y + (double)(dt * world->particleVelocities[b].y);
+            float dx = (float)(pbx - pax);
+            float dy = (float)(pby - pay);
+            float r1 = sqrtf(dx * dx + dy * dy);
+            if (r1 <= 1.0e-6f)
+            {
+                continue;
+            }
+            float f = strength * (world->particleSpringRest[k] - r1) / r1;
+            world->particleVelocities[a].x -= f * dx;
+            world->particleVelocities[a].y -= f * dy;
+            world->particleVelocities[b].x += f * dx;
+            world->particleVelocities[b].y += f * dy;
         }
     }
 
@@ -723,10 +814,38 @@ int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* pol
         maxX = m2MaxF(maxX, polygon->vertices[i].x);
         maxY = m2MaxF(maxY, polygon->vertices[i].y);
     }
-    int32_t emitted = 0;
-    for (float y = minY + 0.5f * stride; y < maxY; y += stride)
+    if ((maxX - minX) / stride >= (float)M2_FILL_COLUMNS)
     {
-        for (float x = minX + 0.5f * stride; x < maxX; x += stride)
+        M2_ASSERT(false); // wider than the fill lattice allows
+        return 0;
+    }
+
+    // The whole fill is ONE journal op (inner emits suppressed, the
+    // chain-create precedent): replay must rebuild the springs and
+    // triads too, and those are captured here, not in the emits.
+    int32_t journalWas = world->journalActive;
+    world->journalActive = 0;
+
+    int32_t* emitted = (int32_t*)world->particleProxies; // borrowed scratch
+    int32_t prevRow[M2_FILL_COLUMNS];
+    int32_t currRow[M2_FILL_COLUMNS];
+    for (int32_t i = 0; i < M2_FILL_COLUMNS; ++i)
+    {
+        prevRow[i] = -1;
+        currRow[i] = -1;
+    }
+    bool wantSprings = (flags & m2_springParticle) != 0;
+    bool wantTriads = (flags & m2_elasticParticle) != 0;
+    int32_t count = 0;
+    bool full = false;
+    for (float y = minY + 0.5f * stride; y < maxY && !full; y += stride)
+    {
+        for (int32_t i = 0; i < M2_FILL_COLUMNS; ++i)
+        {
+            currRow[i] = -1;
+        }
+        int32_t col = 0;
+        for (float x = minX + 0.5f * stride; x < maxX && !full; x += stride, ++col)
         {
             bool inside = true;
             for (int32_t i = 0; i < polygon->count && inside; ++i)
@@ -743,10 +862,95 @@ int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* pol
                 worldId, (m2Pos2){position.x + (double)x, position.y + (double)y}, velocity, flags);
             if (id.index1 == 0)
             {
-                return emitted; // pool full: a quiet runtime fact
+                full = true; // pool full: a quiet runtime fact
+                break;
             }
-            emitted += 1;
+            int32_t slot = id.index1 - 1;
+            emitted[count] = slot;
+            count += 1;
+            currRow[col] = slot;
+            if (wantTriads)
+            {
+                // Two triangles per complete lattice cell, rest shape
+                // centered on each triad's spawn centroid.
+                int32_t left = col > 0 ? currRow[col - 1] : -1;
+                int32_t below = prevRow[col];
+                int32_t belowLeft = col > 0 ? prevRow[col - 1] : -1;
+                if (left >= 0 && below >= 0 && belowLeft >= 0 &&
+                    world->particleTriadCount + 2 <= world->particleTriadCapacity)
+                {
+                    int32_t t = world->particleTriadCount;
+                    world->particleTriadA[t] = belowLeft;
+                    world->particleTriadB[t] = below;
+                    world->particleTriadC[t] = left;
+                    world->particleTriadPA[t] = (m2Vec2){-stride / 3.0f, -stride / 3.0f};
+                    world->particleTriadPB[t] = (m2Vec2){2.0f * stride / 3.0f, -stride / 3.0f};
+                    world->particleTriadPC[t] = (m2Vec2){-stride / 3.0f, 2.0f * stride / 3.0f};
+                    world->particleTriadA[t + 1] = below;
+                    world->particleTriadB[t + 1] = slot;
+                    world->particleTriadC[t + 1] = left;
+                    world->particleTriadPA[t + 1] = (m2Vec2){stride / 3.0f, -2.0f * stride / 3.0f};
+                    world->particleTriadPB[t + 1] = (m2Vec2){stride / 3.0f, stride / 3.0f};
+                    world->particleTriadPC[t + 1] = (m2Vec2){-2.0f * stride / 3.0f, stride / 3.0f};
+                    world->particleTriadCount = t + 2;
+                }
+            }
+        }
+        for (int32_t i = 0; i < M2_FILL_COLUMNS; ++i)
+        {
+            prevRow[i] = currRow[i];
         }
     }
-    return emitted;
+
+    if (wantSprings)
+    {
+        // Every batch pair inside one diameter becomes a spring that
+        // remembers its spawn length; ascending order, canonical.
+        float diameter = 2.0f * world->particleRadius;
+        for (int32_t i = 0; i < count; ++i)
+        {
+            for (int32_t j = i + 1; j < count; ++j)
+            {
+                int32_t a = emitted[i];
+                int32_t b = emitted[j];
+                float dx = (float)(world->particlePositions[b].x - world->particlePositions[a].x);
+                float dy = (float)(world->particlePositions[b].y - world->particlePositions[a].y);
+                float distSq = dx * dx + dy * dy;
+                if (distSq >= diameter * diameter || distSq <= 0.0f)
+                {
+                    continue;
+                }
+                if (world->particleSpringCount >= world->particleSpringCapacity)
+                {
+                    continue; // deterministic truncation, documented
+                }
+                int32_t k = world->particleSpringCount;
+                world->particleSpringA[k] = a;
+                world->particleSpringB[k] = b;
+                world->particleSpringRest[k] = sqrtf(distSq);
+                world->particleSpringCount = k + 1;
+            }
+        }
+    }
+
+    world->journalActive = journalWas;
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2Polygon polygon;
+            m2Pos2 position;
+            m2Vec2 velocity;
+            uint32_t flags;
+            int32_t expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.polygon = *polygon;
+        record.position = position;
+        record.velocity = velocity;
+        record.flags = flags;
+        record.expected = count;
+        m2JournalRecord(world, m2_opFillParticles, &record, (int32_t)sizeof(record));
+    }
+    return count;
 }

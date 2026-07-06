@@ -33,7 +33,7 @@
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 30u
+#define M2_SNAPSHOT_VERSION 31u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -912,6 +912,8 @@ m2WorldDef m2DefaultWorldDef(void)
     def.particleDampingStrength = 1.0f;
     def.particleViscousStrength = 0.25f; // used by viscous-flagged particles only
     def.particlePowderStrength = 0.5f;
+    def.particleSpringStrength = 0.25f;  // overlapping nets sum; reference value
+    def.particleElasticStrength = 0.25f; // stiff blobs combine spring|elastic flags
     def.particleTensilePressureStrength = 0.2f;
     def.particleTensileNormalStrength = 0.2f;
     def.internalValue = M2_WORLD_COOKIE;
@@ -933,7 +935,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
           !(def->particlePressureStrength >= 0.0f) || !(def->particleDampingStrength >= 0.0f) ||
           !(def->particleViscousStrength >= 0.0f) ||
           !(def->particleTensilePressureStrength >= 0.0f) ||
-          !(def->particleTensileNormalStrength >= 0.0f) || !(def->particlePowderStrength >= 0.0f))))
+          !(def->particleTensileNormalStrength >= 0.0f) || !(def->particlePowderStrength >= 0.0f) ||
+          !(def->particleSpringStrength >= 0.0f) || !(def->particleElasticStrength >= 0.0f))))
     {
         // Fluids config is validated loudly: the radius floor is 4x
         // linear slop so the skin laws keep meaning.
@@ -979,6 +982,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->particleViscousStrength = def->particleViscousStrength;
     world->particleTensilePressure = def->particleTensilePressureStrength;
     world->particlePowderStrength = def->particlePowderStrength;
+    world->particleSpringStrength = def->particleSpringStrength;
+    world->particleElasticStrength = def->particleElasticStrength;
     world->particleTensileNormal = def->particleTensileNormalStrength;
 
     bool ok = true;
@@ -1073,6 +1078,17 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         M2_ALLOC(particleWeights, particleCap, float);
         M2_ALLOC(particleAccumulation, particleCap, float);
         M2_ALLOC(particleAccumulation2, particleCap, m2Vec2);
+        world->particleSpringCapacity = 4 * particleCap;
+        M2_ALLOC(particleSpringA, world->particleSpringCapacity, int32_t);
+        M2_ALLOC(particleSpringB, world->particleSpringCapacity, int32_t);
+        M2_ALLOC(particleSpringRest, world->particleSpringCapacity, float);
+        world->particleTriadCapacity = 2 * particleCap;
+        M2_ALLOC(particleTriadA, world->particleTriadCapacity, int32_t);
+        M2_ALLOC(particleTriadB, world->particleTriadCapacity, int32_t);
+        M2_ALLOC(particleTriadC, world->particleTriadCapacity, int32_t);
+        M2_ALLOC(particleTriadPA, world->particleTriadCapacity, m2Vec2);
+        M2_ALLOC(particleTriadPB, world->particleTriadCapacity, m2Vec2);
+        M2_ALLOC(particleTriadPC, world->particleTriadCapacity, m2Vec2);
         world->particleBodyCapacity = 4 * particleCap;
         M2_ALLOC(particleBodyParticle, world->particleBodyCapacity, int32_t);
         M2_ALLOC(particleBodyBody, world->particleBodyCapacity, int32_t);
@@ -1277,6 +1293,15 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particleWeights);
     m2Free(world->particleAccumulation);
     m2Free(world->particleAccumulation2);
+    m2Free(world->particleSpringA);
+    m2Free(world->particleSpringB);
+    m2Free(world->particleSpringRest);
+    m2Free(world->particleTriadA);
+    m2Free(world->particleTriadB);
+    m2Free(world->particleTriadC);
+    m2Free(world->particleTriadPA);
+    m2Free(world->particleTriadPB);
+    m2Free(world->particleTriadPC);
     m2Free(world->particleBodyParticle);
     m2Free(world->particleBodyBody);
     m2Free(world->particleBodyWeight);
@@ -1712,6 +1737,17 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         M2_BLOCK(&world->particleFreeCount, sizeof(int32_t));
         M2_BLOCK(&world->particleCount, sizeof(int32_t));
         M2_BLOCK(&world->maxParticleIndex, sizeof(int32_t));
+        M2_BLOCK(world->particleSpringA, (size_t)world->particleSpringCapacity * sizeof(int32_t));
+        M2_BLOCK(world->particleSpringB, (size_t)world->particleSpringCapacity * sizeof(int32_t));
+        M2_BLOCK(world->particleSpringRest, (size_t)world->particleSpringCapacity * sizeof(float));
+        M2_BLOCK(&world->particleSpringCount, sizeof(int32_t));
+        M2_BLOCK(world->particleTriadA, (size_t)world->particleTriadCapacity * sizeof(int32_t));
+        M2_BLOCK(world->particleTriadB, (size_t)world->particleTriadCapacity * sizeof(int32_t));
+        M2_BLOCK(world->particleTriadC, (size_t)world->particleTriadCapacity * sizeof(int32_t));
+        M2_BLOCK(world->particleTriadPA, (size_t)world->particleTriadCapacity * sizeof(m2Vec2));
+        M2_BLOCK(world->particleTriadPB, (size_t)world->particleTriadCapacity * sizeof(m2Vec2));
+        M2_BLOCK(world->particleTriadPC, (size_t)world->particleTriadCapacity * sizeof(m2Vec2));
+        M2_BLOCK(&world->particleTriadCount, sizeof(int32_t));
     }
 #undef M2_BLOCK
     return cursor;
@@ -1864,6 +1900,20 @@ uint64_t m2World_Hash(m2WorldId worldId)
             h = m2Hash64(h, &world->particleVelocities[i], (int32_t)sizeof(m2Vec2));
             h = m2Hash64(h, &world->particleFlags[i], (int32_t)sizeof(uint32_t));
         }
+        h = m2Hash64(h, &world->particleSpringCount, (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringA,
+                     world->particleSpringCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringB,
+                     world->particleSpringCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringRest,
+                     world->particleSpringCount * (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->particleTriadCount, (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadA,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadB,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadC,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
     }
     return h;
 }
@@ -6461,6 +6511,44 @@ void m2World_DestroyParticle(m2ParticleId particleId)
     }
     world->particleAlive[index] = 0;
     world->particleGenerations[index] += 1; // retire under a fresh generation
+    // Jelly bookkeeping: springs and triads die with their particle,
+    // compacted in order so the lists stay canonical.
+    if (world->particleSpringCount > 0)
+    {
+        int32_t keep = 0;
+        for (int32_t k = 0; k < world->particleSpringCount; ++k)
+        {
+            if (world->particleSpringA[k] == index || world->particleSpringB[k] == index)
+            {
+                continue;
+            }
+            world->particleSpringA[keep] = world->particleSpringA[k];
+            world->particleSpringB[keep] = world->particleSpringB[k];
+            world->particleSpringRest[keep] = world->particleSpringRest[k];
+            keep += 1;
+        }
+        world->particleSpringCount = keep;
+    }
+    if (world->particleTriadCount > 0)
+    {
+        int32_t keep = 0;
+        for (int32_t k = 0; k < world->particleTriadCount; ++k)
+        {
+            if (world->particleTriadA[k] == index || world->particleTriadB[k] == index ||
+                world->particleTriadC[k] == index)
+            {
+                continue;
+            }
+            world->particleTriadA[keep] = world->particleTriadA[k];
+            world->particleTriadB[keep] = world->particleTriadB[k];
+            world->particleTriadC[keep] = world->particleTriadC[k];
+            world->particleTriadPA[keep] = world->particleTriadPA[k];
+            world->particleTriadPB[keep] = world->particleTriadPB[k];
+            world->particleTriadPC[keep] = world->particleTriadPC[k];
+            keep += 1;
+        }
+        world->particleTriadCount = keep;
+    }
     world->particleFreeQueue[(world->particleFreeHead + world->particleFreeCount) %
                              world->particleCapacity] = index;
     world->particleFreeCount += 1;

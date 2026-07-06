@@ -148,6 +148,8 @@ typedef struct m2World
     float particleTensilePressure;
     float particleTensileNormal;
     float particlePowderStrength;
+    float particleSpringStrength;
+    float particleElasticStrength;
     // Step-transient fluid scratch: rebuilt from positions every
     // step, never walked, never hashed (the island precedent).
     void* particleProxies; // capacity * 16 bytes (key, index, pad)
@@ -163,6 +165,21 @@ typedef struct m2World
     float* particleAccumulation;   // step-transient pressure accumulator
     m2Vec2* particleAccumulation2; // step-transient tensile normals
     uint32_t particleFlagsUnion;   // OR over live pairs (transient)
+    // Jelly: persistent springs and shape-restoring triads captured
+    // at fill time (snapshot state, unlike the transient neighbors).
+    int32_t* particleSpringA;
+    int32_t* particleSpringB;
+    float* particleSpringRest;
+    int32_t particleSpringCapacity; // 4 per particle of capacity
+    int32_t particleSpringCount;
+    int32_t* particleTriadA;
+    int32_t* particleTriadB;
+    int32_t* particleTriadC;
+    m2Vec2* particleTriadPA; // rest offsets about the triad centroid
+    m2Vec2* particleTriadPB;
+    m2Vec2* particleTriadPC;
+    int32_t particleTriadCapacity; // 2 per particle of capacity
+    int32_t particleTriadCount;
     // Step-transient particle-vs-body contacts (one per particle and
     // touched shape, canonical particle-then-shape order).
     int32_t* particleBodyParticle;
@@ -334,6 +351,7 @@ enum
     m2_opDestroyParticle = 54,
     m2_opSetParticleVelocity = 55,
     m2_opCreateRatchetJoint = 56,
+    m2_opFillParticles = 57,
 };
 
 // Journaled joint parameter channel (op 16).

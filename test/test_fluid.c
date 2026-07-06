@@ -170,6 +170,9 @@ static void TestJournalReplay(void)
     m2World_DestroyParticle(ids[8]);
     m2World_DestroyParticle(ids[9]);
     m2World_EmitParticle(world, (m2Pos2){0.5, 8.0}, (m2Vec2){0.0f, -1.0f}, 0);
+    m2Polygon jellyTub = m2MakeBox(0.2f, 0.15f);
+    m2World_FillPolygonWithParticles(world, &jellyTub, (m2Pos2){2.0, 6.0}, (m2Vec2){0.0f, 0.0f},
+                                     m2_springParticle | m2_elasticParticle); // op 57
     for (int32_t i = 0; i < 20; ++i)
     {
         m2World_Step(world, 1.0f / 60.0f, 4);
@@ -667,6 +670,103 @@ static void TestParticleFill(void)
     m2DestroyWorld(small);
 }
 
+// Jelly: spring nets remember their spawn lengths, elastic triads
+// their spawn shape; the state persists, journals, and dies with
+// its particles.
+static void TestJelly(void)
+{
+    // Stretch recovery in zero gravity: fling every particle outward
+    // at eight times its offset and the net pulls the blob back to
+    // its spawn extent.
+    m2WorldDef def = FluidWorldDef(128);
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2Polygon blob = m2MakeBox(0.3f, 0.3f);
+    int32_t made = m2World_FillPolygonWithParticles(world, &blob, (m2Pos2){0.0, 0.0},
+                                                    (m2Vec2){0.0f, 0.0f}, m2_springParticle);
+    CHECK(made == 64, "the lattice fills its 8 by 8");
+    m2World* w = m2World_GetInternal(world);
+    CHECK(w->particleSpringCount > 90 && w->particleSpringCount < 130,
+          "each lattice cell contributes its springs");
+    m2ParticleId ids[128];
+    int32_t n = m2World_GetParticles(world, ids, 128);
+    for (int32_t i = 0; i < n; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(ids[i]);
+        m2Particle_SetVelocity(ids[i], (m2Vec2){(float)(p.x * 8.0), (float)(p.y * 8.0)});
+    }
+    for (int32_t s = 0; s < 240; ++s)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double x0 = 1.0e9, x1 = -1.0e9;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(ids[i]);
+        x0 = p.x < x0 ? p.x : x0;
+        x1 = p.x > x1 ? p.x : x1;
+    }
+    CHECK(x1 - x0 > 0.4 && x1 - x0 < 0.8, "the stretched net springs back to its extent");
+    m2DestroyWorld(world);
+
+    // Cohesion under gravity: a jelly blob slumps but holds while a
+    // plain water twin runs off across the whole slab.
+    m2WorldDef gdef = FluidWorldDef(256);
+    m2WorldId gw = m2CreateWorld(&gdef);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.2};
+    m2Polygon slab = m2MakeBox(10.0f, 0.2f);
+    m2CreatePolygonShape(m2CreateBody(gw, &fd), &sd, &slab);
+    m2World_FillPolygonWithParticles(gw, &blob, (m2Pos2){-2.0, 0.42}, (m2Vec2){0.0f, 0.0f},
+                                     m2_springParticle | m2_elasticParticle);
+    m2World_FillPolygonWithParticles(gw, &blob, (m2Pos2){2.0, 0.42}, (m2Vec2){0.0f, 0.0f}, 0);
+    for (int32_t s = 0; s < 600; ++s)
+    {
+        m2World_Step(gw, 1.0f / 60.0f, 4);
+    }
+    m2ParticleId all[256];
+    int32_t total = m2World_GetParticles(gw, all, 256);
+    double jx0 = 1.0e9, jx1 = -1.0e9, wx0 = 1.0e9, wx1 = -1.0e9;
+    for (int32_t i = 0; i < total; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(all[i]);
+        uint32_t flags = m2Particle_GetFlags(all[i]);
+        if ((flags & m2_springParticle) != 0)
+        {
+            jx0 = p.x < jx0 ? p.x : jx0;
+            jx1 = p.x > jx1 ? p.x : jx1;
+        }
+        else
+        {
+            wx0 = p.x < wx0 ? p.x : wx0;
+            wx1 = p.x > wx1 ? p.x : wx1;
+        }
+    }
+    CHECK(jx1 - jx0 < 4.0, "jelly slumps but holds together");
+    CHECK(wx1 - wx0 > 8.0, "the water twin runs off across the slab");
+    CHECK(jx1 - jx0 < (wx1 - wx0) * 0.5, "the nets at least halve the spread");
+
+    // Death: killing a particle takes its springs and triads along.
+    m2World* gwi = m2World_GetInternal(gw);
+    int32_t springsBefore = gwi->particleSpringCount;
+    int32_t triadsBefore = gwi->particleTriadCount;
+    CHECK(springsBefore > 0 && triadsBefore > 0, "the jelly carries its nets");
+    m2ParticleId victim = m2_nullParticleId;
+    for (int32_t i = 0; i < total; ++i)
+    {
+        if ((m2Particle_GetFlags(all[i]) & m2_springParticle) != 0)
+        {
+            victim = all[i];
+            break;
+        }
+    }
+    m2World_DestroyParticle(victim);
+    CHECK(gwi->particleSpringCount < springsBefore, "springs die with their particle");
+    m2World_Step(gw, 1.0f / 60.0f, 4);
+    m2DestroyWorld(gw);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -726,6 +826,7 @@ int main(void)
     TestBuoyancy();
     TestSurfaceTension();
     TestParticleFill();
+    TestJelly();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

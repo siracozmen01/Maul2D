@@ -46,6 +46,8 @@ extern "C"
         m2_tensileParticle = 1u << 0,
         m2_viscousParticle = 1u << 1,
         m2_powderParticle = 1u << 2,
+        m2_springParticle = 1u << 3,  // pairwise springs captured at fill
+        m2_elasticParticle = 1u << 4, // shape-restoring triads captured at fill
     } m2ParticleFlags;
 
     /// Emit one particle at a world position. Returns the null id
@@ -77,7 +79,10 @@ extern "C"
     /// particles on the reference stride (0.75 diameters), row-major
     /// bottom-up, left to right: deterministic by construction. Stops
     /// quietly when the pool fills; returns the number emitted.
-    /// Thread class: writer (a composition of journaled emits).
+    /// Spring and elastic flags make the batch a body: springs
+    /// remember their spawn lengths, elastic triads remember their
+    /// spawn shape, both captured here, journaled as one op, and
+    /// carried by every snapshot. Thread class: writer.
     int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* polygon,
                                              m2Pos2 position, m2Vec2 velocity, uint32_t flags);
 

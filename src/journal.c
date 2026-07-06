@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 29u
+#define M2_JOURNAL_VERSION 30u
 
 typedef struct m2JournalHeader
 {
@@ -821,6 +821,23 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             rj.def.bodyIdB.world0 = here;
             m2JointId made = m2CreateRatchetJoint(worldId, &rj.def);
             M2_ASSERT(made.index1 == rj.expected.index1);
+            (void)made;
+            break;
+        }
+        case m2_opFillParticles:
+        {
+            struct m2OpFill
+            {
+                m2Polygon polygon;
+                m2Pos2 position;
+                m2Vec2 velocity;
+                uint32_t flags;
+                int32_t expected;
+            };
+            M2_READ_OP(struct m2OpFill, fp);
+            int32_t made = m2World_FillPolygonWithParticles(worldId, &fp.polygon, fp.position,
+                                                            fp.velocity, fp.flags);
+            M2_ASSERT(made == fp.expected);
             (void)made;
             break;
         }

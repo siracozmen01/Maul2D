@@ -171,7 +171,13 @@ sparse spray beads up and clings instead of drifting apart; viscous
 particles drag their neighbors (honey); powder grains repel when
 packed tighter than the rest stride and never cohere (sand, rubble).
 The def carries the reference strengths for all of them, pinned at
-world creation.
+world creation. Spring and elastic flags turn a fill into a body:
+springs remember their spawn lengths, elastic triads remember their
+spawn shape, the whole batch journals as one op and rides every
+snapshot, and the nets die with their particles. Jelly stiffness
+scales with the def strengths: the reference runs several particle
+iterations per step where Maul pins one, so firm small blobs want
+higher strengths and big soft masses want the defaults.
 
 Water obeys the house laws: sensors are invisible to it, one-way
 chain platforms hold it only on their solid side, bodies push it and
