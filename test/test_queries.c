@@ -225,6 +225,107 @@ static void TestAllHits(void)
     m2DestroyWorld(world);
 }
 
+// The mover kit: planes in a corner, the solver respecting both,
+// velocity clipped against what was hit, and the chain law held.
+static void TestMoverKit(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    m2WorldId world = m2CreateWorld(&def);
+    m2QueryFilter all = m2DefaultQueryFilter();
+
+    // A floor and a wall meeting at the origin corner.
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(8.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.position = (m2Pos2){4.5, 2.0};
+    m2BodyId wall = m2CreateBody(world, &wd);
+    m2Polygon post = m2MakeBox(0.5f, 2.5f);
+    m2CreatePolygonShape(wall, &fs, &post);
+
+    // A capsule mover standing on the floor near the wall.
+    m2Capsule mover = {{0.0f, -0.4f}, {0.0f, 0.4f}, 0.3f};
+    m2Transform pose = {{3.69, 0.71}, {1.0f, 0.0f}};
+    m2PlaneResult found[8];
+    int32_t n = m2World_CollideMover(world, &mover, pose, found, 8, all);
+    CHECK(n == 2, "the corner offers two planes");
+    CHECK(found[0].shapeId.index1 < found[1].shapeId.index1, "ascending shape order");
+    // One normal points up (the floor), one points -x (the wall).
+    bool sawFloor = false;
+    bool sawWall = false;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        sawFloor = sawFloor || found[i].normal.y > 0.9f;
+        sawWall = sawWall || found[i].normal.x < -0.9f;
+    }
+    CHECK(sawFloor && sawWall, "with the right orientations");
+
+    // Drive into the corner: the solver returns a translation that
+    // respects both planes instead of tunneling.
+    m2CollisionPlane planes[8];
+    for (int32_t i = 0; i < n; ++i)
+    {
+        planes[i].normal = found[i].normal;
+        planes[i].separation = found[i].separation;
+        planes[i].pushLimit = 3.4e38f;
+        planes[i].push = 0.0f;
+        planes[i].clipVelocity = true;
+    }
+    m2Vec2 wish = {0.5f, -0.3f}; // into the wall AND the floor
+    m2PlaneSolverResult solved = m2SolvePlanes(wish, planes, n);
+    float floorLeak = 0.0f;
+    float wallLeak = 0.0f;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        float after = planes[i].separation + solved.translation.x * planes[i].normal.x +
+                      solved.translation.y * planes[i].normal.y;
+        if (planes[i].normal.y > 0.9f)
+        {
+            floorLeak = after;
+        }
+        else
+        {
+            wallLeak = after;
+        }
+    }
+    CHECK(floorLeak > -0.02f && wallLeak > -0.02f,
+          "the solved translation stays out of both planes");
+
+    // Velocity clipping: the into-corner velocity loses its normal
+    // components, keeps what slides.
+    m2Vec2 clipped = m2ClipVector((m2Vec2){2.0f, -1.0f}, planes, n);
+    CHECK(clipped.x < 0.1f && clipped.x >= 0.0f, "the wall eats the x approach");
+    CHECK(clipped.y >= -0.05f, "the floor eats the downward part");
+
+    // Free air: no planes at all.
+    m2Transform sky = {{-5.0, 5.0}, {1.0f, 0.0f}};
+    CHECK(m2World_CollideMover(world, &mover, sky, NULL, 0, all) == 0, "clear air is clear");
+
+    // One-way shelf: standing under it collects nothing, standing on
+    // it collects the shelf.
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.position = (m2Pos2){-4.0, 2.0};
+    m2BodyId shelfBody = m2CreateBody(world, &cd);
+    m2Vec2 pts[5] = {{2.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}, {-1.0f, 0.0f}, {-2.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5;
+    m2CreateChain(shelfBody, &chain);
+    m2Transform under = {{-4.5, 1.3}, {1.0f, 0.0f}};
+    CHECK(m2World_CollideMover(world, &mover, under, NULL, 0, all) == 0,
+          "under the shelf the mover is a ghost");
+    m2Transform standing = {{-4.5, 2.71}, {1.0f, 0.0f}}; // mid-link, one plane
+    CHECK(m2World_CollideMover(world, &mover, standing, NULL, 0, all) == 1,
+          "standing on it collects the shelf plane");
+
+    m2DestroyWorld(world);
+}
+
 static void TestRayClosest(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -590,6 +691,7 @@ int main(void)
     TestRayClosest();
     TestShapeCastsAndOverlaps();
     TestAllHits();
+    TestMoverKit();
     TestRayGeometries();
     TestRayFarFromOrigin();
     TestOverlap();

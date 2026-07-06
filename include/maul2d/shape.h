@@ -284,6 +284,44 @@ extern "C"
                                    m2Vec2 translation, m2RayHit* hits, int32_t capacity,
                                    m2QueryFilter filter);
 
+    /// The character mover kit (reference architecture, Maul frames):
+    /// m2World_CollideMover gathers the collision planes touching a
+    /// posed capsule (separation measured from the pose, negative
+    /// means penetration; ascending shape order; truthful total; the
+    /// one-sided chain law applies). Assemble them into
+    /// m2CollisionPlane entries, run m2SolvePlanes on your desired
+    /// step delta to get a translation that respects every plane, and
+    /// m2ClipVector to strip velocity pointing into what you hit. For
+    /// the sweep itself, m2World_CastCapsuleClosest already is the
+    /// mover cast. Thread class: reader (pure math for the solver).
+    typedef struct m2PlaneResult
+    {
+        m2ShapeId shapeId;
+        m2Vec2 normal;    // from the shape toward the mover
+        float separation; // gap along the normal; negative = overlap
+        m2Pos2 point;     // closest point on the shape's surface
+    } m2PlaneResult;
+
+    typedef struct m2CollisionPlane
+    {
+        m2Vec2 normal;
+        float separation;
+        float pushLimit; // 3.4e38f = rigid; smaller = squishy wall
+        float push;      // written by m2SolvePlanes
+        bool clipVelocity;
+    } m2CollisionPlane;
+
+    typedef struct m2PlaneSolverResult
+    {
+        m2Vec2 translation;
+        int32_t iterationCount;
+    } m2PlaneSolverResult;
+
+    int32_t m2World_CollideMover(m2WorldId worldId, const m2Capsule* mover, m2Transform origin,
+                                 m2PlaneResult* results, int32_t capacity, m2QueryFilter filter);
+    m2PlaneSolverResult m2SolvePlanes(m2Vec2 targetDelta, m2CollisionPlane* planes, int32_t count);
+    m2Vec2 m2ClipVector(m2Vec2 vector, const m2CollisionPlane* planes, int32_t count);
+
     /// Convex sweeps: the given shape (in its own local frame, posed
     /// by origin) slides along translation; the closest hit wins and
     /// ties break to the lower shape index. Chain segments stay

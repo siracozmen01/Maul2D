@@ -187,6 +187,17 @@ mirroring its def field. The surface is complete in a provable sense:
 the mirror test rebuilds a world from public getters alone and holds
 hash equality with the original through 90 steps.
 
+## The character mover
+
+`m2World_CollideMover` gathers the collision planes touching a posed
+capsule (one-sided chains included), `m2SolvePlanes` turns your
+desired step into a translation that respects every plane with the
+reference's accumulated-push solver, and `m2ClipVector` strips the
+velocity you just spent. The sweep half of a controller is
+`m2World_CastCapsuleClosest`, which already is the mover cast. All
+of it is pure reading and pure math: a kinematic character built on
+these replays bit-exactly like everything else.
+
 ## Sweeps and overlaps
 
 Character controllers live on `m2World_CastCircleClosest` and its
