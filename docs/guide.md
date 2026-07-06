@@ -121,6 +121,17 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Body dynamics
+
+Forces accumulate across calls and live for exactly one step
+(`m2Body_ApplyForce`, `ApplyForceToCenter`, `ApplyTorque`); impulses
+remain for instant changes. Linear and angular damping decay
+velocity with the reference's Pade form. `m2Body_SetFixedRotation`
+makes rotation a mass property (inertia recomputes, spin stops).
+Sleep has two scopes: `m2Body_EnableSleep(id, false)` keeps one body
+alert forever, `m2World_EnableSleeping(world, false)` wakes and
+holds everyone. Every mutation here is journaled.
+
 ## Walking the world
 
 An editor or engine layer can enumerate everything from a bare world

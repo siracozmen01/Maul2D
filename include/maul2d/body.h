@@ -33,8 +33,12 @@ extern "C"
         m2Vec2 linearVelocity;
         float angularVelocity; // radians/s
         float gravityScale;
-        bool isBullet;     // continuous collision vs non-bullets (topic-07)
-        uint64_t userData; // opaque, copied verbatim through snapshots
+        float linearDamping; // 1/(1+h*d) per substep, reference form
+        float angularDamping;
+        bool fixedRotation; // never rotates: infinite rotational inertia
+        bool enableSleep;   // false = this body never sleeps
+        bool isBullet;      // continuous collision vs non-bullets (topic-07)
+        uint64_t userData;  // opaque, copied verbatim through snapshots
         int32_t internalValue;
     } m2BodyDef;
 
@@ -99,6 +103,26 @@ extern "C"
     void m2Body_SetType(m2BodyId bodyId, m2BodyType type);
 
     void m2Body_ApplyLinearImpulse(m2BodyId bodyId, m2Vec2 impulse, m2Pos2 worldPoint);
+
+    /// Continuous forces: accumulated across calls, applied during the
+    /// step, cleared when it ends. Waking is implied. Journaled.
+    /// Thread class: writer.
+    void m2Body_ApplyForce(m2BodyId bodyId, m2Vec2 force, m2Pos2 worldPoint);
+    void m2Body_ApplyForceToCenter(m2BodyId bodyId, m2Vec2 force);
+    void m2Body_ApplyTorque(m2BodyId bodyId, float torque);
+
+    /// Runtime body dynamics tuning, journaled. Fixed rotation zeroes
+    /// the angular velocity and recomputes inertia; disabling sleep
+    /// wakes the body so it cannot stay asleep illegally.
+    void m2Body_SetLinearDamping(m2BodyId bodyId, float damping);
+    float m2Body_GetLinearDamping(m2BodyId bodyId);
+    void m2Body_SetAngularDamping(m2BodyId bodyId, float damping);
+    float m2Body_GetAngularDamping(m2BodyId bodyId);
+    void m2Body_SetGravityScale(m2BodyId bodyId, float scale);
+    void m2Body_SetFixedRotation(m2BodyId bodyId, bool flag);
+    bool m2Body_IsFixedRotation(m2BodyId bodyId);
+    void m2Body_EnableSleep(m2BodyId bodyId, bool flag);
+    bool m2Body_IsSleepEnabled(m2BodyId bodyId);
     void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse);
 
     static const m2BodyId m2_nullBodyId = {0, 0, 0};

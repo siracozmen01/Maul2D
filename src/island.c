@@ -190,6 +190,11 @@ void m2UpdateSleep(m2World* world, float dt)
             world->sleepTimes[i] = 0.0f;
             continue;
         }
+        if (world->sleepEnabled == 0 || world->sleepEnables[i] == 0)
+        {
+            world->sleepTimes[i] = 0.0f; // this body is not allowed to drowse
+            continue;
+        }
         world->sleepTimes[i] += dt;
     }
 

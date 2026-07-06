@@ -1093,9 +1093,126 @@ static void TestMirrorRebuild(void)
     m2DestroyWorld(world);
 }
 
+// The body dynamics pack (slice 62): forces with one-step lifetime,
+// Pade damping, fixed rotation as a mass property, and sleep control
+// at both scopes. Reference forms, journaled channels, snapshot v20.
+static void TestBodyDynamicsPack(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, 0.0f}); // isolate the pack
+
+    // Force: F = m*a, integrated over a second.
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 10.0};
+    m2BodyId pushed = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f); // 0.64 kg at density 1
+    m2CreatePolygonShape(pushed, &sd, &unit);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2Body_ApplyForceToCenter(pushed, (m2Vec2){6.4f, 0.0f}); // a = 10
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float vx = m2Body_GetLinearVelocity(pushed).x;
+    CHECK(vx > 9.0f && vx < 11.0f, "one second of F=ma reaches ten");
+
+    // One-step lifetime: no further force, velocity coasts.
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float coast = m2Body_GetLinearVelocity(pushed).x;
+    CHECK(coast > vx - 0.01f && coast < vx + 0.01f, "forces die with their step");
+
+    // Damping: exp(-c*t) via Pade, c=4 over one second leaves ~e^-4.
+    m2Body_SetLinearDamping(pushed, 4.0f);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float damped = m2Body_GetLinearVelocity(pushed).x;
+    CHECK(damped > 0.05f && damped < 0.5f, "damping decays like the reference");
+
+    // Torque spins, angular damping stills.
+    m2Body_ApplyTorque(pushed, 5.0f);
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_GetAngularVelocity(pushed) > 0.0f, "torque spins");
+    m2Body_SetAngularDamping(pushed, 8.0f);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float spin = m2Body_GetAngularVelocity(pushed);
+    CHECK(spin < 0.05f, "angular damping stills the spin");
+
+    // Fixed rotation: an off-center impulse must not rotate it.
+    m2BodyDef fdd = m2DefaultBodyDef();
+    fdd.type = m2_dynamicBody;
+    fdd.position = (m2Pos2){5.0, 10.0};
+    fdd.fixedRotation = true;
+    m2BodyId upright = m2CreateBody(world, &fdd);
+    m2CreatePolygonShape(upright, &sd, &unit);
+    m2Body_ApplyLinearImpulse(upright, (m2Vec2){0.0f, 2.0f}, (m2Pos2){5.4, 10.0});
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_GetAngularVelocity(upright) == 0.0f, "fixed rotation never spins");
+    CHECK(m2Body_IsFixedRotation(upright), "and reads back");
+    m2Body_SetFixedRotation(upright, false);
+    m2Body_ApplyLinearImpulse(upright, (m2Vec2){0.0f, 2.0f}, (m2Pos2){5.4, 10.0});
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    CHECK(m2Body_GetAngularVelocity(upright) != 0.0f, "released, it spins again");
+
+    m2DestroyWorld(world);
+
+    // Sleep control at both scopes, on a world with real gravity.
+    m2WorldId nap = m2CreateWorld(&def);
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(nap, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef nd = m2DefaultBodyDef();
+    nd.type = m2_dynamicBody;
+    nd.position = (m2Pos2){-2.0, 0.45};
+    m2BodyId sleeper = m2CreateBody(nap, &nd);
+    m2CreatePolygonShape(sleeper, &sd, &unit);
+    m2BodyDef id2 = nd;
+    id2.position = (m2Pos2){2.0, 0.45};
+    id2.enableSleep = false;
+    m2BodyId insomniac = m2CreateBody(nap, &id2);
+    m2CreatePolygonShape(insomniac, &sd, &unit);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(nap, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(sleeper), "the plain twin sleeps");
+    CHECK(m2Body_IsAwake(insomniac), "the flagged twin never does");
+    CHECK(!m2Body_IsSleepEnabled(insomniac), "and reads back");
+
+    m2World_EnableSleeping(nap, false);
+    CHECK(m2Body_IsAwake(sleeper), "killing the master switch wakes the sleeper");
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(nap, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_IsAwake(sleeper), "and nobody sleeps while it is off");
+    m2World_EnableSleeping(nap, true);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(nap, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(sleeper), "switch back on, naps resume");
+    m2DestroyWorld(nap);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestBodyDynamicsPack();
     TestMirrorRebuild();
     TestEnumerationWalk();
     TestDestroyWakesSleepers();

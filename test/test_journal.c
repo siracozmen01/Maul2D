@@ -165,7 +165,13 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     }
     m2DestroyBody(victim);
     m2DestroyJoint(rod);
-    m2DestroyChain(chainId); // op 24
+    m2DestroyChain(chainId);                              // op 24
+    m2Body_ApplyForceToCenter(bob, (m2Vec2){3.0f, 1.0f}); // op 28
+    m2Body_ApplyTorque(bob, 0.8f);                        // op 29
+    m2Body_SetLinearDamping(bob, 0.2f);                   // op 25
+    m2Body_SetFixedRotation(bob, true);                   // op 25
+    m2World_EnableSleeping(world, false);                 // op 26
+    m2World_EnableSleeping(world, true);
     for (int32_t i = 0; i < 30; ++i)
     {
         m2World_Step(world, 1.0f / 120.0f, 2); // second dt flavor

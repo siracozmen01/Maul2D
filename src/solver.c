@@ -1808,8 +1808,19 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             {
                 continue;
             }
-            world->linearVelocities[i].x += world->gravity.x * world->gravityScales[i] * h;
-            world->linearVelocities[i].y += world->gravity.y * world->gravityScales[i] * h;
+            // Reference form: v = lvd + damp * v, with the Pade damping
+            // 1/(1+h*d) and lvd = h*invM*force + h*gScale*g. Torque and
+            // angular damping mirror it.
+            float linDamp = 1.0f / (1.0f + h * world->linearDampings[i]);
+            float angDamp = 1.0f / (1.0f + h * world->angularDampings[i]);
+            float lvdx = h * world->invMass[i] * world->forces[i].x +
+                         h * world->gravityScales[i] * world->gravity.x;
+            float lvdy = h * world->invMass[i] * world->forces[i].y +
+                         h * world->gravityScales[i] * world->gravity.y;
+            world->linearVelocities[i].x = lvdx + linDamp * world->linearVelocities[i].x;
+            world->linearVelocities[i].y = lvdy + linDamp * world->linearVelocities[i].y;
+            world->angularVelocities[i] = h * world->invInertia[i] * world->torques[i] +
+                                          angDamp * world->angularVelocities[i];
         }
 
         WarmStartJoints(world, joints, jointCount);

@@ -28,7 +28,8 @@ typedef struct m2World
     // World-global mutable block (snapshot state).
     m2Vec2 gravity;
     uint64_t stepCount;
-    float lastInvH; // inverse substep dt of the last solve (snapshot state)
+    uint8_t sleepEnabled; // world-wide sleep master switch (snapshot state)
+    float lastInvH;       // inverse substep dt of the last solve (snapshot state)
 
     // Body storage: parallel POD arrays, fixed capacity.
     int32_t bodyCapacity;
@@ -37,6 +38,12 @@ typedef struct m2World
     m2Vec2* linearVelocities;
     float* angularVelocities;
     float* gravityScales;
+    float* linearDampings;   // Pade-damped in integrate (snapshot state)
+    float* angularDampings;  // (snapshot state)
+    uint8_t* fixedRotations; // invInertia forced 0 (snapshot state)
+    uint8_t* sleepEnables;   // 0 = this body never sleeps (snapshot state)
+    m2Vec2* forces;          // accumulated, cleared at step end (snapshot state)
+    float* torques;          // (snapshot state)
     uint64_t* userData;
     uint8_t* types;
     uint8_t* alive;
@@ -209,6 +216,7 @@ void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def
 void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
 void m2DestroyJointInternal(m2World* world, int32_t index);
 void m2SetShapeParamInternal(m2World* world, m2ShapeId shapeId, uint8_t param, float value);
+void m2SetBodyParamInternal(m2World* world, m2BodyId bodyId, uint8_t param, float value);
 
 // Journal ops (fixed-size payloads, little-endian raw structs).
 enum
@@ -237,6 +245,11 @@ enum
     m2_opShapeParam = 22, // friction (0) / restitution (1)
     m2_opSetFilter = 23,
     m2_opDestroyChain = 24,
+    m2_opBodyParam = 25, // linDamp(0)/angDamp(1)/gravScale(2)/fixedRot(3)/enableSleep(4)
+    m2_opEnableSleeping = 26,
+    m2_opApplyForce = 27,
+    m2_opApplyForceCenter = 28,
+    m2_opApplyTorque = 29,
 };
 
 // Journaled joint parameter channel (op 16).

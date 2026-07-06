@@ -361,7 +361,7 @@ static void DoRandomOp(m2WorldId world)
         {
             return;
         }
-        uint32_t which = Pick(5);
+        uint32_t which = Pick(10);
         if (which == 0)
         {
             float vx = (float)((int32_t)Pick(9) - 4);
@@ -389,9 +389,39 @@ static void DoRandomOp(m2WorldId world)
             double ty = (double)Pick(60) * 0.1;
             m2Body_SetTransform(body, (m2Pos2){tx, ty}, identity);
         }
-        else
+        else if (which == 4)
         {
             m2Body_SetType(body, (m2BodyType)Pick(3));
+        }
+        else if (which == 5)
+        {
+            if (m2Body_GetType(body) == m2_dynamicBody)
+            {
+                float fx = (float)((int32_t)Pick(9) - 4) * 3.0f;
+                float fy = (float)((int32_t)Pick(9) - 4) * 3.0f;
+                m2Body_ApplyForceToCenter(body, (m2Vec2){fx, fy});
+            }
+        }
+        else if (which == 6)
+        {
+            if (m2Body_GetType(body) == m2_dynamicBody)
+            {
+                float torque = (float)((int32_t)Pick(9) - 4) * 2.0f;
+                m2Body_ApplyTorque(body, torque);
+            }
+        }
+        else if (which == 7)
+        {
+            m2Body_SetFixedRotation(body, Pick(2) == 0);
+        }
+        else if (which == 8)
+        {
+            float damping = (float)Pick(6) * 0.1f;
+            m2Body_SetLinearDamping(body, damping);
+        }
+        else
+        {
+            m2Body_EnableSleep(body, Pick(4) != 0);
         }
         return;
     }

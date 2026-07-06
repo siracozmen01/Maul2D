@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 14u
+#define M2_JOURNAL_VERSION 15u
 
 typedef struct m2JournalHeader
 {
@@ -440,6 +440,66 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_READ_OP(m2ChainId, chain);
             chain.world0 = here;
             m2DestroyChain(chain);
+            break;
+        }
+        case m2_opBodyParam:
+        {
+            struct m2OpBodyParam
+            {
+                m2BodyId body;
+                float value;
+                uint8_t param;
+            };
+            M2_READ_OP(struct m2OpBodyParam, bp);
+            bp.body.world0 = here;
+            m2SetBodyParamInternal(world, bp.body, bp.param, bp.value);
+            break;
+        }
+        case m2_opEnableSleeping:
+        {
+            struct m2OpSleepFlag
+            {
+                uint8_t flag;
+            };
+            M2_READ_OP(struct m2OpSleepFlag, sf);
+            m2World_EnableSleeping(worldId, sf.flag != 0);
+            break;
+        }
+        case m2_opApplyForce:
+        {
+            struct m2OpForce
+            {
+                m2BodyId body;
+                m2Vec2 force;
+                m2Pos2 point;
+            };
+            M2_READ_OP(struct m2OpForce, fo);
+            fo.body.world0 = here;
+            m2Body_ApplyForce(fo.body, fo.force, fo.point);
+            break;
+        }
+        case m2_opApplyForceCenter:
+        {
+            struct m2OpForceCenter
+            {
+                m2BodyId body;
+                m2Vec2 force;
+            };
+            M2_READ_OP(struct m2OpForceCenter, fc);
+            fc.body.world0 = here;
+            m2Body_ApplyForceToCenter(fc.body, fc.force);
+            break;
+        }
+        case m2_opApplyTorque:
+        {
+            struct m2OpTorque
+            {
+                m2BodyId body;
+                float torque;
+            };
+            M2_READ_OP(struct m2OpTorque, tq);
+            tq.body.world0 = here;
+            m2Body_ApplyTorque(tq.body, tq.torque);
             break;
         }
         case m2_opApplyLinearImpulse:

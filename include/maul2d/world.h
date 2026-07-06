@@ -69,6 +69,12 @@ extern "C"
     void m2World_SetGravity(m2WorldId worldId, m2Vec2 gravity);
     m2Vec2 m2World_GetGravity(m2WorldId worldId);
 
+    /// World-wide sleep master switch, journaled. Disabling wakes
+    /// every sleeping dynamic body (a sleeper must not outlive the
+    /// rule that let it sleep). Thread class: writer / reader.
+    void m2World_EnableSleeping(m2WorldId worldId, bool flag);
+    bool m2World_IsSleepingEnabled(m2WorldId worldId);
+
     /// Debug drawing: the engine walks its state and calls back; you
     /// render. Polygon vertices arrive BODY-LOCAL with the body's f64
     /// origin and rotation so your renderer can compose camera-relative
