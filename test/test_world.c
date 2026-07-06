@@ -870,6 +870,15 @@ static m2WorldId MirrorWorld(m2WorldId source, const m2WorldDef* def)
             jd.bodyIdB = b;
             made = m2CreateFilterJoint(mirror, &jd);
         }
+        else if (type == m2_gearJoint)
+        {
+            m2GearJointDef jd = m2DefaultGearJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.ratio = m2GearJoint_GetRatio(id);
+            jd.collideConnected = m2Joint_GetCollideConnected(id);
+            made = m2CreateGearJoint(mirror, &jd);
+        }
         else if (type == m2_motorJoint)
         {
             m2MotorJointDef jd = m2DefaultMotorJointDef();
@@ -1104,6 +1113,11 @@ static void TestMirrorRebuild(void)
     wj.angularHertz = 6.0f;
     wj.angularDampingRatio = 0.8f;
     m2CreateWeldJoint(world, &wj);
+    m2GearJointDef cog = m2DefaultGearJointDef();
+    cog.bodyIdA = boxB;
+    cog.bodyIdB = boxD;
+    cog.ratio = 1.5f;
+    m2CreateGearJoint(world, &cog);
     m2MotorJointDef chase = m2DefaultMotorJointDef();
     chase.bodyIdA = hook;
     chase.bodyIdB = boxC;

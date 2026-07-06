@@ -1131,6 +1131,87 @@ static void TestDistanceRange(void)
     m2DestroyWorld(world);
 }
 
+// The gear joint: two pinned flywheels coupled at a ratio; drive
+// one, the other counter-spins scaled; retune the ratio live; the
+// phase survives many full turns.
+static void TestGearJoint(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2World_SetGravity(world, (m2Vec2){0.0f, 0.0f});
+
+    m2BodyId wheels[2];
+    m2JointId pins[2];
+    for (int32_t i = 0; i < 2; ++i)
+    {
+        double x = (double)i * 3.0;
+        m2BodyDef pd = m2DefaultBodyDef();
+        pd.position = (m2Pos2){x, 2.0};
+        m2BodyId post = m2CreateBody(world, &pd);
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){x, 2.0};
+        wheels[i] = m2CreateBody(world, &wd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Circle disc = {{0.0f, 0.0f}, 0.5f};
+        m2CreateCircleShape(wheels[i], &sd, &disc);
+        m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+        rj.bodyIdA = post;
+        rj.bodyIdB = wheels[i];
+        if (i == 0)
+        {
+            rj.enableMotor = true;
+            rj.motorSpeed = 3.0f;
+            rj.maxMotorTorque = 50.0f;
+        }
+        pins[i] = m2CreateRevoluteJoint(world, &rj);
+    }
+    (void)pins;
+    m2GearJointDef gj = m2DefaultGearJointDef();
+    gj.bodyIdA = wheels[0];
+    gj.bodyIdB = wheels[1];
+    gj.ratio = 2.0f;
+    m2JointId gear = m2CreateGearJoint(world, &gj);
+
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    float wA = m2Body_GetAngularVelocity(wheels[0]);
+    float wB = m2Body_GetAngularVelocity(wheels[1]);
+    CHECK(wA > 2.7f && wA < 3.3f, "the driven wheel reaches its motor speed");
+    CHECK(wB < -5.4f && wB > -6.6f, "the geared wheel counter-spins at twice the rate");
+    CHECK(m2Joint_GetReactionTorque(gear) > 0.0f, "the gear carries torque");
+    CHECK(m2GearJoint_GetRatio(gear) == 2.0f, "the ratio reads back");
+
+    // Many full turns later the coupling still holds exactly: cut the
+    // motor and the ratio persists through the coast-down.
+    m2Joint_EnableMotor(pins[0], false);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    wA = m2Body_GetAngularVelocity(wheels[0]);
+    wB = m2Body_GetAngularVelocity(wheels[1]);
+    CHECK(wA > 0.5f, "the pair coasts");
+    CHECK(wB / wA < -1.9f && wB / wA > -2.1f, "still locked at the ratio");
+
+    // Live retune halves the coupling.
+    m2GearJoint_SetRatio(gear, 1.0f);
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    wA = m2Body_GetAngularVelocity(wheels[0]);
+    wB = m2Body_GetAngularVelocity(wheels[1]);
+    CHECK(wA != 0.0f && wB / wA < -0.9f && wB / wA > -1.1f, "the new ratio takes over");
+
+    m2DestroyWorld(world);
+}
+
 static void TestJointBreaking(void)
 {
     // Twin ropes carry the same heavy crate; one has a break limit
@@ -1458,6 +1539,7 @@ int main(void)
     TestCollideConnectedAndFilterJoint();
     TestMotorAndMouseJoints();
     TestDistanceRange();
+    TestGearJoint();
     TestJointBreaking();
     TestBreakRollback();
 

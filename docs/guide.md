@@ -145,6 +145,12 @@ the band, filtered by category, replayed by one journal op.
 
 ## Utility joints
 
+The gear joint couples two bodies' spins at a ratio (positive for
+meshed cogs, negative for belts) with an accumulated phase that
+stays exact across any number of full turns; pin the bodies with
+their own joints, the gear only owns rotation.
+
+
 The motor joint drives one body's transform toward offsets from
 another with force and torque budgets: moving platforms retarget
 with `m2MotorJoint_SetOffsets` every frame and the physics stays

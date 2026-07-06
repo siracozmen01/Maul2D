@@ -1244,6 +1244,25 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
                                ? MakeSoft(world->jointHertz2[j], world->jointDamping2[j], h)
                                : MakeSoft(60.0f, 2.0f, h);
         }
+        else if (c->type == 8)
+        {
+            // Gear: accumulate the phase by how far each body actually
+            // rotated since last prepare (per-step deltas stay far from
+            // the wrap, so many full turns remain exact), then couple
+            // the spins. ratio rides jointLength -> loaded fields.
+            float ratio = world->jointLength[j];
+            m2Rot prevA = {world->jointLocalAnchorA[j].x, world->jointLocalAnchorA[j].y};
+            m2Rot prevB = {world->jointLocalAnchorB[j].x, world->jointLocalAnchorB[j].y};
+            float phase = world->jointRefAngle[j];
+            phase += ratio * RelativeRotAngle(prevA, qA) + RelativeRotAngle(prevB, qB);
+            world->jointRefAngle[j] = phase;
+            world->jointLocalAnchorA[j] = (m2Vec2){qA.c, qA.s};
+            world->jointLocalAnchorB[j] = (m2Vec2){qB.c, qB.s};
+            c->baseAngle = phase;
+            c->motorSpeed = ratio; // carried into the solve
+            float k = ratio * ratio * iA + iB;
+            c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
+        }
         else if (c->type == 7)
         {
             // Mouse: only body B has rows. Grab arm rB comes from the
@@ -1357,6 +1376,14 @@ static void WarmStartJoints(m2World* world, m2JointConstraint* joints, int32_t c
             float axial = c->motorImpulse + c->lowerImpulse - c->upperImpulse;
             world->angularVelocities[c->bodyA] -= world->invInertia[c->bodyA] * axial;
             world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * axial;
+        }
+        else if (c->type == 8)
+        {
+            // Gear: one angular impulse, ratio-weighted on side A.
+            float L = c->impulse.x;
+            world->angularVelocities[c->bodyA] +=
+                world->invInertia[c->bodyA] * (c->motorSpeed * L);
+            world->angularVelocities[c->bodyB] += world->invInertia[c->bodyB] * L;
         }
         else if (c->type == 7)
         {
@@ -1692,6 +1719,35 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                 world->linearVelocities[c->bodyB] = vB;
                 world->angularVelocities[c->bodyB] = wB;
             }
+        }
+        else if (c->type == 8)
+        {
+            // Gear: C = ratio*angleA + angleB - phase0, tracked through
+            // the substep delta rotations; stiff-biased like the weld
+            // angle row.
+            float ratio = c->motorSpeed;
+            float iA = world->invInertia[c->bodyA];
+            float iB = world->invInertia[c->bodyB];
+            float bias = 0.0f;
+            float massScale = 1.0f;
+            float impulseScale = 0.0f;
+            if (useBias)
+            {
+                float dA = m2Atan2(world->deltaRotations[c->bodyA].s,
+                                   world->deltaRotations[c->bodyA].c);
+                float dB = m2Atan2(world->deltaRotations[c->bodyB].s,
+                                   world->deltaRotations[c->bodyB].c);
+                float C = c->baseAngle + ratio * dA + dB;
+                bias = c->softness.biasRate * C;
+                massScale = c->softness.massScale;
+                impulseScale = c->softness.impulseScale;
+            }
+            float cdot = ratio * wA + wB;
+            float impulse =
+                -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
+            c->impulse.x += impulse;
+            world->angularVelocities[c->bodyA] = wA + iA * (ratio * impulse);
+            world->angularVelocities[c->bodyB] = wB + iB * impulse;
         }
         else if (c->type == 7)
         {
@@ -2037,6 +2093,9 @@ void m2JointReactionMagnitudes(const m2World* world, int32_t j, float invH, floa
     case 7: // mouse: same accumulator shape, body B only
         *force = sqrtf(impulse.x * impulse.x + impulse.y * impulse.y) * invH;
         *torque = m2AbsF(world->jointMotorImpulse[j]) * invH;
+        break;
+    case 8: // gear: pure torque coupling
+        *torque = m2AbsF(impulse.x) * invH;
         break;
     default: // wheel: (perp, spring) linear, motor as torque
     {

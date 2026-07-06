@@ -222,6 +222,12 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Body_SetDominance(bob, 3);            // op 50
     m2Shape_SetUserData(reshapeShape, 111); // op 48
     m2Joint_SetUserData(gripper, 222);      // op 49
+    m2GearJointDef cogDef = m2DefaultGearJointDef();
+    cogDef.bodyIdA = bob;
+    cogDef.bodyIdB = ram;
+    cogDef.ratio = 2.0f;
+    m2JointId cog = m2CreateGearJoint(world, &cogDef); // op 51
+    m2GearJoint_SetRatio(cog, 1.5f);                   // param 15
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

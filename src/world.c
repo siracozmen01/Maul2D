@@ -29,6 +29,7 @@
 #define M2_MOJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MotorJointDef) << 8) ^ 11)
 #define M2_MSJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2MouseJointDef) << 8) ^ 12)
 #define M2_EXPLODE_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2ExplosionDef) << 8) ^ 13)
+#define M2_GJOINT_COOKIE    (M2_COOKIE ^ ((int32_t)sizeof(m2GearJointDef) << 8) ^ 14)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
 #define M2_SNAPSHOT_VERSION 25u
 
@@ -125,6 +126,7 @@ static int32_t ShapeTreeIndex(const m2World* world, int32_t shapeIndex)
 // and static bodies alike (topic-02 §4.2).
 static float RelativeJointAngle(m2Rot qA, m2Rot qB);
 static int32_t JointSlotChecked(const m2World* world, m2JointId jointId);
+static int32_t TypedJointSlot(m2World* world, m2JointId jointId, uint8_t type);
 
 static void PushMoved(m2World* world, int32_t shapeIndex)
 {
@@ -4575,6 +4577,9 @@ void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, f
         world->jointLowerImpulse[index] = 0.0f;
         world->jointUpperImpulse[index] = 0.0f;
         break;
+    case m2_jointParamGearRatio:
+        world->jointLength[index] = value; // phase carries over on purpose
+        break;
     default:
         world->jointUpper[index] = value;
         break;
@@ -5089,6 +5094,89 @@ m2JointId m2CreateFilterJoint(m2WorldId worldId, const m2FilterJointDef* def)
         m2JournalRecord(world, m2_opCreateFilterJoint, &record, (int32_t)sizeof(record));
     }
     return jointId;
+}
+
+m2GearJointDef m2DefaultGearJointDef(void)
+{
+    m2GearJointDef def;
+    memset(&def, 0, sizeof(def));
+    def.ratio = 1.0f;
+    def.internalValue = M2_GJOINT_COOKIE;
+    return def;
+}
+
+// Gear registry mapping: ratio rides jointLength; the two previous
+// body rotations ride the anchor slots as (c, s) pairs so the phase
+// accumulator in prepare survives any number of full turns; the
+// accumulated phase itself rides jointRefAngle. All snapshot state.
+m2JointId m2CreateGearJoint(m2WorldId worldId, const m2GearJointDef* def)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || def == NULL || def->internalValue != M2_GJOINT_COOKIE ||
+        !(def->ratio != 0.0f))
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t bodyA = BodySlot(world, def->bodyIdA);
+    int32_t bodyB = BodySlot(world, def->bodyIdB);
+    if (bodyA < 0 || bodyB < 0 || bodyA == bodyB)
+    {
+        M2_ASSERT(false);
+        return m2_nullJointId;
+    }
+    int32_t index = AllocateJoint(world);
+    if (index < 0)
+    {
+        return m2_nullJointId;
+    }
+    m2Vec2 zero = {0.0f, 0.0f};
+    m2JointId jointId =
+        FinishJoint(world, worldId, index, 8, bodyA, bodyB, zero, zero, 0.0f, 0.0f, 0.0f);
+    world->jointLength[index] = def->ratio;
+    m2Rot qA = world->transforms[bodyA].q;
+    m2Rot qB = world->transforms[bodyB].q;
+    world->jointLocalAnchorA[index] = (m2Vec2){qA.c, qA.s};
+    world->jointLocalAnchorB[index] = (m2Vec2){qB.c, qB.s};
+    world->jointRefAngle[index] = 0.0f; // in phase by definition at birth
+    world->jointUserData[index] = def->userData;
+    world->jointCollide[index] = def->collideConnected ? 1 : 0;
+    if (def->collideConnected == false)
+    {
+        RefilterJointedBodies(world, bodyA, bodyB);
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2GearJointDef def;
+            m2JointId expected;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.def = *def;
+        record.expected = jointId;
+        m2JournalRecord(world, m2_opCreateGearJoint, &record, (int32_t)sizeof(record));
+    }
+    return jointId;
+}
+
+void m2GearJoint_SetRatio(m2JointId jointId, float ratio)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 8) : -1;
+    if (index < 0 || !(ratio != 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2SetJointParamInternal(world, jointId, m2_jointParamGearRatio, ratio);
+}
+
+float m2GearJoint_GetRatio(m2JointId jointId)
+{
+    m2World* world = WorldFromIndex(jointId.world0);
+    int32_t index = world != NULL ? TypedJointSlot(world, jointId, 8) : -1;
+    return index >= 0 ? world->jointLength[index] : 0.0f;
 }
 
 m2MotorJointDef m2DefaultMotorJointDef(void)

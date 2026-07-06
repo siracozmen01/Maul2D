@@ -209,7 +209,18 @@ static void DoRandomOp(m2WorldId world)
         m2Vec2 anchorB = {abx, aby};
         m2JointId made = {0, 0, 0};
         bool collide = Pick(4) == 0;
-        uint32_t type = Pick(8);
+        uint32_t type = Pick(9);
+        if (type == 8)
+        {
+            m2GearJointDef jd = m2DefaultGearJointDef();
+            jd.bodyIdA = a;
+            jd.bodyIdB = b;
+            jd.collideConnected = collide;
+            float ratio = 0.5f + (float)Pick(4) * 0.5f;
+            jd.ratio = Pick(2) == 0 ? ratio : -ratio;
+            m2CreateGearJoint(world, &jd);
+            return;
+        }
         if (type == 6)
         {
             m2MotorJointDef jd = m2DefaultMotorJointDef();
