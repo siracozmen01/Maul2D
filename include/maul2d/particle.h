@@ -37,10 +37,15 @@ extern "C"
     /// Per-particle behavior flags, set at emit. Plain water is 0.
     /// Tensile particles attract their tensile neighbors (surface
     /// tension): droplets bead up and cling instead of dispersing.
+    /// Viscous particles drag their neighbors (honey, syrup);
+    /// powder grains repel when packed tighter than the rest stride
+    /// and never cohere (sand, rubble, dust).
     typedef enum m2ParticleFlags
     {
         m2_waterParticle = 0,
         m2_tensileParticle = 1u << 0,
+        m2_viscousParticle = 1u << 1,
+        m2_powderParticle = 1u << 2,
     } m2ParticleFlags;
 
     /// Emit one particle at a world position. Returns the null id

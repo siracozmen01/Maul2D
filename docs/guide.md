@@ -167,9 +167,11 @@ water; raise it for syrup. m2World_FillPolygonWithParticles pours
 a whole pool in one call (row-major on the reference stride,
 deterministic layout). Emit takes behavior flags: tensile
 particles attract their tensile neighbors (surface tension), so
-sparse spray beads up and clings instead of drifting apart; the def
-carries the two reference strengths if you want to retune the
-effect at world creation.
+sparse spray beads up and clings instead of drifting apart; viscous
+particles drag their neighbors (honey); powder grains repel when
+packed tighter than the rest stride and never cohere (sand, rubble).
+The def carries the reference strengths for all of them, pinned at
+world creation.
 
 Water obeys the house laws: sensors are invisible to it, one-way
 chain platforms hold it only on their solid side, bodies push it and

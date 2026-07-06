@@ -909,7 +909,8 @@ m2WorldDef m2DefaultWorldDef(void)
     def.particleGravityScale = 1.0f;
     def.particlePressureStrength = 0.05f;
     def.particleDampingStrength = 1.0f;
-    def.particleViscousStrength = 0.0f; // plain water; raise for syrup
+    def.particleViscousStrength = 0.25f; // used by viscous-flagged particles only
+    def.particlePowderStrength = 0.5f;
     def.particleTensilePressureStrength = 0.2f;
     def.particleTensileNormalStrength = 0.2f;
     def.internalValue = M2_WORLD_COOKIE;
@@ -931,7 +932,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
           !(def->particlePressureStrength >= 0.0f) || !(def->particleDampingStrength >= 0.0f) ||
           !(def->particleViscousStrength >= 0.0f) ||
           !(def->particleTensilePressureStrength >= 0.0f) ||
-          !(def->particleTensileNormalStrength >= 0.0f))))
+          !(def->particleTensileNormalStrength >= 0.0f) || !(def->particlePowderStrength >= 0.0f))))
     {
         // Fluids config is validated loudly: the radius floor is 4x
         // linear slop so the skin laws keep meaning.
@@ -976,6 +977,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->particleDampingStrength = def->particleDampingStrength;
     world->particleViscousStrength = def->particleViscousStrength;
     world->particleTensilePressure = def->particleTensilePressureStrength;
+    world->particlePowderStrength = def->particlePowderStrength;
     world->particleTensileNormal = def->particleTensileNormalStrength;
 
     bool ok = true;

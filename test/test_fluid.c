@@ -255,25 +255,48 @@ static void TestRelaxation(void)
           "the velocity limit clamps to one diameter per step");
     m2DestroyWorld(world);
 
-    // Tangential shear: plain water keeps it, viscosity eats it. The
-    // pair normal is y, the shear is x, so pressure and damping never
-    // touch it; only the viscous pass can.
-    m2WorldDef syrupDef = FluidWorldDef(8);
-    syrupDef.gravity = (m2Vec2){0.0f, 0.0f};
-    m2WorldDef waterDef = syrupDef;
-    syrupDef.particleViscousStrength = 0.5f;
-    m2WorldId water = m2CreateWorld(&waterDef);
-    m2WorldId syrup = m2CreateWorld(&syrupDef);
-    m2ParticleId wSlide = m2World_EmitParticle(water, (m2Pos2){0.0, 0.0}, (m2Vec2){1.0f, 0.0f}, 0);
-    m2World_EmitParticle(water, (m2Pos2){0.0, 0.06}, (m2Vec2){0.0f, 0.0f}, 0);
-    m2ParticleId sSlide = m2World_EmitParticle(syrup, (m2Pos2){0.0, 0.0}, (m2Vec2){1.0f, 0.0f}, 0);
-    m2World_EmitParticle(syrup, (m2Pos2){0.0, 0.06}, (m2Vec2){0.0f, 0.0f}, 0);
-    m2World_Step(water, 1.0f / 60.0f, 4);
-    m2World_Step(syrup, 1.0f / 60.0f, 4);
+    // Tangential shear: plain water keeps it, the viscous FLAG eats
+    // it (the reference's per-particle gate). Same world def, the
+    // flag alone decides. Pair normal is y, shear is x: pressure and
+    // damping never touch it.
+    m2WorldDef shearDef = FluidWorldDef(8);
+    shearDef.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId shearWorld = m2CreateWorld(&shearDef);
+    m2ParticleId wSlide =
+        m2World_EmitParticle(shearWorld, (m2Pos2){0.0, 0.0}, (m2Vec2){1.0f, 0.0f}, 0);
+    m2World_EmitParticle(shearWorld, (m2Pos2){0.0, 0.06}, (m2Vec2){0.0f, 0.0f}, 0);
+    m2ParticleId sSlide = m2World_EmitParticle(shearWorld, (m2Pos2){10.0, 0.0},
+                                               (m2Vec2){1.0f, 0.0f}, m2_viscousParticle);
+    m2World_EmitParticle(shearWorld, (m2Pos2){10.0, 0.06}, (m2Vec2){0.0f, 0.0f},
+                         m2_viscousParticle);
+    for (int32_t s = 0; s < 10; ++s)
+    {
+        m2World_Step(shearWorld, 1.0f / 60.0f, 4);
+    }
     CHECK(m2Particle_GetVelocity(wSlide).x > 0.95f, "plain water keeps tangential shear");
-    CHECK(m2Particle_GetVelocity(sSlide).x < 0.85f, "viscosity eats tangential shear");
-    m2DestroyWorld(water);
-    m2DestroyWorld(syrup);
+    CHECK(m2Particle_GetVelocity(sSlide).x < 0.7f, "the viscous flag eats tangential shear");
+
+    // Powder: grains packed tighter than the rest stride push apart;
+    // water at the same spacing is below rest weight and never moves.
+    m2ParticleId g1 = m2World_EmitParticle(shearWorld, (m2Pos2){20.0, 0.0}, (m2Vec2){0.0f, 0.0f},
+                                           m2_powderParticle);
+    m2ParticleId g2 = m2World_EmitParticle(shearWorld, (m2Pos2){20.05, 0.0}, (m2Vec2){0.0f, 0.0f},
+                                           m2_powderParticle);
+    m2ParticleId w1 =
+        m2World_EmitParticle(shearWorld, (m2Pos2){30.0, 0.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    m2ParticleId w2 =
+        m2World_EmitParticle(shearWorld, (m2Pos2){30.05, 0.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    for (int32_t s = 0; s < 90; ++s)
+    {
+        m2World_Step(shearWorld, 1.0f / 60.0f, 4);
+    }
+    double grainGap = m2Particle_GetPosition(g2).x - m2Particle_GetPosition(g1).x;
+    double waterGap = m2Particle_GetPosition(w2).x - m2Particle_GetPosition(w1).x;
+    CHECK(grainGap > 0.06, "packed powder pushes apart past the stride");
+    CHECK(waterGap > 0.049 && waterGap < 0.051, "sparse water below rest weight never moves");
+    m2Vec2 gv = m2Particle_GetVelocity(g1);
+    CHECK(gv.x == gv.x && gv.y == gv.y, "powder stays finite");
+    m2DestroyWorld(shearWorld);
 }
 
 // White-box: the neighbor structure is canonical and complete.

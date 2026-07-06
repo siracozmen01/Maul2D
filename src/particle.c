@@ -354,16 +354,19 @@ void m2SolveParticles(m2World* world, float dt)
         world->particleWeights[world->particlePairB[k]] += w;
     }
 
-    // Viscosity kills relative velocity across every pair. The
-    // reference gates this on a per-particle flag; Maul's v1 makes
-    // it a system property (zero strength = plain water), the
-    // per-particle flag can arrive with the behavior flags later.
+    // Viscosity drags flagged particles toward their neighbors'
+    // velocities (the reference's per-particle gate, adopted now
+    // that behavior flags exist).
     float viscous = world->particleViscousStrength;
     if (viscous > 0.0f)
     {
         for (int32_t k = 0; k < bodyContactCount; ++k)
         {
             int32_t a = world->particleBodyParticle[k];
+            if ((world->particleFlags[a] & m2_viscousParticle) == 0)
+            {
+                continue;
+            }
             int32_t body = world->particleBodyBody[k];
             float w = world->particleBodyWeight[k];
             float m = world->particleBodyMass[k];
@@ -385,6 +388,10 @@ void m2SolveParticles(m2World* world, float dt)
         }
         for (int32_t k = 0; k < pairCount; ++k)
         {
+            if ((world->particlePairFlags[k] & m2_viscousParticle) == 0)
+            {
+                continue;
+            }
             int32_t a = world->particlePairA[k];
             int32_t b = world->particlePairB[k];
             float w = world->particlePairWeight[k];
@@ -396,6 +403,35 @@ void m2SolveParticles(m2World* world, float dt)
             world->particleVelocities[a].y += fy;
             world->particleVelocities[b].x -= fx;
             world->particleVelocities[b].y -= fy;
+        }
+    }
+
+    // Powder (reference SolvePowder): grains packed tighter than the
+    // rest stride push apart and never cohere; that is the whole law
+    // of sand.
+    if ((world->particleFlagsUnion & m2_powderParticle) != 0)
+    {
+        float powder = world->particlePowderStrength * (diameter * invDt);
+        float minWeight = 1.0f - 0.75f; // one minus the particle stride
+        for (int32_t k = 0; k < pairCount; ++k)
+        {
+            if ((world->particlePairFlags[k] & m2_powderParticle) == 0)
+            {
+                continue;
+            }
+            float w = world->particlePairWeight[k];
+            if (w <= minWeight)
+            {
+                continue;
+            }
+            int32_t a = world->particlePairA[k];
+            int32_t b = world->particlePairB[k];
+            m2Vec2 n = world->particlePairNormal[k];
+            float f = powder * (w - minWeight);
+            world->particleVelocities[a].x -= f * n.x;
+            world->particleVelocities[a].y -= f * n.y;
+            world->particleVelocities[b].x += f * n.x;
+            world->particleVelocities[b].y += f * n.y;
         }
     }
 

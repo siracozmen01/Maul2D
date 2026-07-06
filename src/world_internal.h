@@ -147,6 +147,7 @@ typedef struct m2World
     float particleViscousStrength;
     float particleTensilePressure;
     float particleTensileNormal;
+    float particlePowderStrength;
     // Step-transient fluid scratch: rebuilt from positions every
     // step, never walked, never hashed (the island precedent).
     void* particleProxies; // capacity * 16 bytes (key, index, pad)

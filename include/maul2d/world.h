@@ -41,7 +41,8 @@ extern "C"
         float particleGravityScale;
         float particlePressureStrength; // reference water default 0.05
         float particleDampingStrength;  // reference default 1.0
-        float particleViscousStrength; // 0 = plain water (reference uses 0.25 on flagged particles)
+        float particleViscousStrength;  // strength for viscous-FLAGGED particles (reference 0.25)
+        float particlePowderStrength;   // strength for powder-flagged grains (reference 0.5)
         float particleTensilePressureStrength; // surface tension, reference 0.2
         float particleTensileNormalStrength;   // reference 0.2
         /// Solver worker threads including the caller (clamped to 8).
