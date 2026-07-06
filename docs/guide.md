@@ -121,6 +121,17 @@ the same numbers the break pass compares against
 `m2Joint_SetBreakLimits`, bit for bit, so a threshold tuned against a
 reading behaves exactly as read.
 
+## Frame helpers and live geometry
+
+`m2Body_GetWorldPoint`/`GetLocalPoint` and their vector and
+point-velocity siblings do the pose math for you, f64-safe.
+`m2Body_GetJoints` walks one body's joints the same way the world
+walks everything. Shapes can be reshaped live
+(`m2Shape_SetCircle`/`SetCapsule`/`SetPolygon`/`SetSegment`, type
+changes included): mass recomputes, touching partners wake, and the
+journal replays it. Chains retune with `m2Chain_SetFriction` and
+`m2Chain_SetRestitution`, one op for every link.
+
 ## Dormancy, mass, and blasts
 
 `m2Body_Disable` parks a body outside the simulation without

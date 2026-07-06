@@ -263,6 +263,9 @@ enum
     m2_opSetMassData = 37,
     m2_opMassFromShapes = 38,
     m2_opExplode = 39,
+    m2_opSetGeometry = 40, // shapeId + full geometry union
+    m2_opChainFriction = 41,
+    m2_opChainRestitution = 42,
 };
 
 // Journaled joint parameter channel (op 16).

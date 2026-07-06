@@ -186,11 +186,27 @@ extern "C"
     m2ChainSegment m2Shape_GetChainSegment(m2ShapeId shapeId);
     float m2Shape_GetDensity(m2ShapeId shapeId);
 
+    /// Runtime geometry: replace a shape's geometry in place, type
+    /// changes included. The owner's mass recomputes, touching
+    /// partners wake (a floor shrinking under a sleeper is a
+    /// teleport-class change), and the broadphase refreshes.
+    /// Journaled. Thread class: writer.
+    void m2Shape_SetCircle(m2ShapeId shapeId, const m2Circle* circle);
+    void m2Shape_SetCapsule(m2ShapeId shapeId, const m2Capsule* capsule);
+    void m2Shape_SetPolygon(m2ShapeId shapeId, const m2Polygon* polygon);
+    void m2Shape_SetSegment(m2ShapeId shapeId, const m2Segment* segment);
+
     /// Enumeration walks, ascending slot order, truthful totals
     /// (same contract as m2World_OverlapAABB). Thread class: reader.
     int32_t m2Body_GetShapes(m2BodyId bodyId, m2ShapeId* ids, int32_t capacity);
     int32_t m2World_GetChains(m2WorldId worldId, m2ChainId* ids, int32_t capacity);
     int32_t m2Chain_GetShapes(m2ChainId chainId, m2ShapeId* ids, int32_t capacity);
+
+    /// Runtime chain materials: applied to every link at once, one
+    /// journal op each; takes effect at the next contact prepare,
+    /// like the per-shape material setters. Thread class: writer.
+    void m2Chain_SetFriction(m2ChainId chainId, float friction);
+    void m2Chain_SetRestitution(m2ChainId chainId, float restitution);
     m2BodyId m2Shape_GetBody(m2ShapeId shapeId);
     uint64_t m2Shape_GetUserData(m2ShapeId shapeId);
 

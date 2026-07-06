@@ -260,6 +260,7 @@ extern "C"
     /// total (same contract as m2World_GetBodies). Thread class:
     /// reader.
     int32_t m2World_GetJoints(m2WorldId worldId, m2JointId* ids, int32_t capacity);
+    int32_t m2Body_GetJoints(m2BodyId bodyId, m2JointId* ids, int32_t capacity);
 
     static const m2JointId m2_nullJointId = {0, 0, 0};
 

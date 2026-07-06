@@ -528,6 +528,27 @@ static void DoRandomOp(m2WorldId world)
         }
         return;
     }
+    if (roll == 90)
+    {
+        m2ShapeId shape = RandomShape(world);
+        if (shape.index1 != 0 && m2Shape_GetType(shape) != m2_chainSegmentShape)
+        {
+            if (Pick(2) == 0)
+            {
+                float radius = 0.2f + (float)Pick(25) * 0.01f;
+                m2Circle c = {{0.0f, 0.0f}, radius};
+                m2Shape_SetCircle(shape, &c);
+            }
+            else
+            {
+                float halfW = 0.15f + (float)Pick(30) * 0.01f;
+                float halfH = 0.15f + (float)Pick(30) * 0.01f;
+                m2Polygon box = m2MakeBox(halfW, halfH);
+                m2Shape_SetPolygon(shape, &box);
+            }
+        }
+        return;
+    }
     {
         m2JointId joint = RandomJoint(world);
         if (joint.index1 == 0)

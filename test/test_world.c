@@ -1377,9 +1377,113 @@ static void TestDormancyMassAndExplosions(void)
     m2DestroyWorld(world);
 }
 
+// Small-basket readers and mutators (parity sprint 4b): frame
+// helpers, the per-body joint walk, runtime geometry, and chain
+// materials.
+static void TestSmallBasket(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 32;
+    def.jointCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    // Frame helpers on a rotated, offset body.
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){100.0, 50.0};
+    bd.rotation = (m2Rot){0.0f, 1.0f}; // ninety degrees
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon unit = m2MakeBox(0.4f, 0.4f);
+    m2CreatePolygonShape(body, &sd, &unit);
+    m2Pos2 wp = m2Body_GetWorldPoint(body, (m2Vec2){1.0f, 0.0f});
+    CHECK(wp.x > 99.9 && wp.x < 100.1 && wp.y > 50.9 && wp.y < 51.1,
+          "a local x step becomes a world y step under ninety degrees");
+    m2Vec2 back = m2Body_GetLocalPoint(body, wp);
+    CHECK(back.x > 0.99f && back.x < 1.01f && back.y > -0.01f && back.y < 0.01f,
+          "and comes back local");
+    m2Vec2 wv = m2Body_GetWorldVector(body, (m2Vec2){1.0f, 0.0f});
+    CHECK(wv.y > 0.99f, "vectors rotate the same way");
+    m2Body_SetAngularVelocity(body, 2.0f);
+    m2Vec2 pv =
+        m2Body_GetWorldPointVelocity(body, m2Body_GetWorldPoint(body, (m2Vec2){1.0f, 0.0f}));
+    CHECK(pv.x < -1.9f && pv.x > -2.1f, "point velocity is w cross r");
+
+    // Per-body joint walk.
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){104.0, 50.0};
+    m2BodyId post = m2CreateBody(world, &ad);
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = post;
+    dj.bodyIdB = body;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = post;
+    mj.bodyIdB = body;
+    m2JointId chase = m2CreateMotorJoint(world, &mj);
+    CHECK(m2Body_GetJoints(body, NULL, 0) == 2, "the body names both joints");
+    m2JointId list[4];
+    int32_t n = m2Body_GetJoints(post, list, 4);
+    CHECK(n == 2 && list[0].index1 == rope.index1 && list[1].index1 == chase.index1,
+          "ascending and correct");
+
+    // Runtime geometry: a floor shrinks under a sleeper.
+    m2BodyDef gd = m2DefaultBodyDef();
+    gd.position = (m2Pos2){0.0, -0.5};
+    m2BodyId floor = m2CreateBody(world, &gd);
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(6.0f, 0.5f);
+    m2ShapeId ground = m2CreatePolygonShape(floor, &fs, &slab);
+    m2BodyDef cd = m2DefaultBodyDef();
+    cd.type = m2_dynamicBody;
+    cd.position = (m2Pos2){4.0, 0.45};
+    m2BodyId crate = m2CreateBody(world, &cd);
+    m2CreatePolygonShape(crate, &sd, &unit);
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(crate), "the crate sleeps at the slab's edge");
+    m2Polygon stub = m2MakeBox(1.0f, 0.5f);
+    m2Shape_SetPolygon(ground, &stub);
+    CHECK(m2Shape_GetPolygon(ground).count == 4, "geometry reads back after the swap");
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(crate).y < -1.0, "the sleeper wakes and falls off the stub");
+
+    // Type change: the stub becomes a circle and reports it.
+    m2Circle dome = {{0.0f, 0.0f}, 0.8f};
+    m2Shape_SetCircle(ground, &dome);
+    CHECK(m2Shape_GetType(ground) == m2_circleShape, "runtime type change reads back");
+
+    // Chain materials: every link picks up the new values.
+    m2Vec2 pts[5] = {{22.0f, 0.0f}, {20.0f, 0.0f}, {18.0f, 0.0f}, {16.0f, 0.0f}, {14.0f, 0.0f}};
+    m2ChainDef chain = m2DefaultChainDef();
+    chain.points = pts;
+    chain.count = 5;
+    m2ChainId ledge = m2CreateChain(floor, &chain);
+    m2Chain_SetFriction(ledge, 0.85f);
+    m2Chain_SetRestitution(ledge, 0.35f);
+    m2ShapeId links[4];
+    int32_t linkCount = m2Chain_GetShapes(ledge, links, 4);
+    bool allSet = linkCount == 2;
+    for (int32_t i = 0; i < linkCount; ++i)
+    {
+        allSet = allSet && m2Shape_GetFriction(links[i]) == 0.85f &&
+                 m2Shape_GetRestitution(links[i]) == 0.35f;
+    }
+    CHECK(allSet, "chain materials reach every link");
+
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestRuntimeGravity();
+    TestSmallBasket();
     TestDormancyMassAndExplosions();
     TestBodyDynamicsPack();
     TestMirrorRebuild();

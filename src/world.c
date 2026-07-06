@@ -3262,6 +3262,285 @@ void m2Shape_SetFilter(m2ShapeId shapeId, uint32_t categoryBits, uint32_t maskBi
     PushMoved(world, index); // pair rebuild purges and re-collects (M19)
 }
 
+// One shared road for runtime geometry: validate outside, then swap
+// the union (memset first: deterministic tail bytes), wake whoever
+// was touching it, refresh mass and broadphase.
+static void SetGeometryInternal(m2World* world, m2ShapeId shapeId, int32_t index,
+                                const m2ShapeGeometry* geometry)
+{
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ShapeId shape;
+            m2ShapeGeometry geometry;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.shape = shapeId;
+        record.geometry = *geometry;
+        m2JournalRecord(world, m2_opSetGeometry, &record, (int32_t)sizeof(record));
+    }
+    int32_t body = world->shapeBody[index];
+    for (int32_t i = 0; i < world->pairCount; ++i)
+    {
+        if (world->pairTouching[i] == 0)
+        {
+            continue;
+        }
+        int32_t sa = (int32_t)(world->pairKeys[i] >> 32);
+        int32_t sb = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+        if (sa != index && sb != index)
+        {
+            continue;
+        }
+        int32_t other = world->shapeBody[sa == index ? sb : sa];
+        if (world->types[other] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[other] = 0;
+            world->sleepTimes[other] = 0.0f;
+        }
+    }
+    memset(&world->shapeGeometry[index], 0, sizeof(m2ShapeGeometry));
+    world->shapeGeometry[index] = *geometry;
+    RecomputeMass(world, body);
+    if (world->types[body] == (uint8_t)m2_dynamicBody)
+    {
+        world->asleep[body] = 0;
+        world->sleepTimes[body] = 0.0f;
+    }
+    if (world->proxyIds[index] != M2_NULL_NODE)
+    {
+        PushMoved(world, index);
+    }
+}
+
+void m2Shape_SetCircle(m2ShapeId shapeId, const m2Circle* circle)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0 || circle == NULL || !m2ValidateCircle(circle) ||
+        world->shapeGeometry[index].type == (int32_t)m2_chainSegmentShape)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2ShapeGeometry g;
+    memset(&g, 0, sizeof(g));
+    g.type = m2_circleShape;
+    g.circle = *circle;
+    SetGeometryInternal(world, shapeId, index, &g);
+}
+
+void m2Shape_SetCapsule(m2ShapeId shapeId, const m2Capsule* capsule)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0 || capsule == NULL || !m2ValidateCapsule(capsule) ||
+        world->shapeGeometry[index].type == (int32_t)m2_chainSegmentShape)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2ShapeGeometry g;
+    memset(&g, 0, sizeof(g));
+    g.type = m2_capsuleShape;
+    g.capsule = *capsule;
+    SetGeometryInternal(world, shapeId, index, &g);
+}
+
+void m2Shape_SetPolygon(m2ShapeId shapeId, const m2Polygon* polygon)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0 || polygon == NULL || !m2ValidatePolygon(polygon) ||
+        world->shapeGeometry[index].type == (int32_t)m2_chainSegmentShape)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2ShapeGeometry g;
+    memset(&g, 0, sizeof(g));
+    g.type = m2_polygonShape;
+    g.polygon = *polygon;
+    SetGeometryInternal(world, shapeId, index, &g);
+}
+
+void m2Shape_SetSegment(m2ShapeId shapeId, const m2Segment* segment)
+{
+    m2World* world = NULL;
+    int32_t index = ShapeSlotChecked(shapeId, &world);
+    if (index < 0 || segment == NULL || !m2ValidateSegment(segment) ||
+        world->shapeGeometry[index].type == (int32_t)m2_chainSegmentShape)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    m2ShapeGeometry g;
+    memset(&g, 0, sizeof(g));
+    g.type = m2_segmentShape;
+    g.segment = *segment;
+    SetGeometryInternal(world, shapeId, index, &g);
+}
+
+static void ChainMaterialInternal(m2World* world, m2ChainId chainId, int32_t chainIndex, uint8_t op,
+                                  float value)
+{
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ChainId chain;
+            float value;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.chain = chainId;
+        record.value = value;
+        m2JournalRecord(world, op, &record, (int32_t)sizeof(record));
+    }
+    int32_t body = world->chainBody[chainIndex];
+    for (int32_t s = world->bodyShapeHead[body]; s != -1; s = world->shapeNext[s])
+    {
+        if (world->shapeChain[s] != chainIndex)
+        {
+            continue;
+        }
+        if (op == m2_opChainFriction)
+        {
+            world->shapeFriction[s] = value;
+        }
+        else
+        {
+            world->shapeRestitution[s] = value;
+        }
+    }
+}
+
+void m2Chain_SetFriction(m2ChainId chainId, float friction)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    int32_t index = world != NULL ? ChainSlot(world, chainId) : -1;
+    if (index < 0 || !(friction >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    ChainMaterialInternal(world, chainId, index, m2_opChainFriction, friction);
+}
+
+void m2Chain_SetRestitution(m2ChainId chainId, float restitution)
+{
+    m2World* world = WorldFromIndex(chainId.world0);
+    int32_t index = world != NULL ? ChainSlot(world, chainId) : -1;
+    if (index < 0 || !(restitution >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    ChainMaterialInternal(world, chainId, index, m2_opChainRestitution, restitution);
+}
+
+m2Pos2 m2Body_GetWorldPoint(m2BodyId bodyId, m2Vec2 localPoint)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Pos2){0.0, 0.0};
+    }
+    m2Transform xf = world->transforms[index];
+    m2Vec2 r = {xf.q.c * localPoint.x - xf.q.s * localPoint.y,
+                xf.q.s * localPoint.x + xf.q.c * localPoint.y};
+    return (m2Pos2){xf.p.x + (double)r.x, xf.p.y + (double)r.y};
+}
+
+m2Vec2 m2Body_GetLocalPoint(m2BodyId bodyId, m2Pos2 worldPoint)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Vec2){0.0f, 0.0f};
+    }
+    m2Transform xf = world->transforms[index];
+    m2Vec2 rel = {(float)(worldPoint.x - xf.p.x), (float)(worldPoint.y - xf.p.y)};
+    return (m2Vec2){xf.q.c * rel.x + xf.q.s * rel.y, -xf.q.s * rel.x + xf.q.c * rel.y};
+}
+
+m2Vec2 m2Body_GetWorldVector(m2BodyId bodyId, m2Vec2 localVector)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Vec2){0.0f, 0.0f};
+    }
+    m2Rot q = world->transforms[index].q;
+    return (m2Vec2){q.c * localVector.x - q.s * localVector.y,
+                    q.s * localVector.x + q.c * localVector.y};
+}
+
+m2Vec2 m2Body_GetLocalVector(m2BodyId bodyId, m2Vec2 worldVector)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Vec2){0.0f, 0.0f};
+    }
+    m2Rot q = world->transforms[index].q;
+    return (m2Vec2){q.c * worldVector.x + q.s * worldVector.y,
+                    -q.s * worldVector.x + q.c * worldVector.y};
+}
+
+m2Vec2 m2Body_GetWorldPointVelocity(m2BodyId bodyId, m2Pos2 worldPoint)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return (m2Vec2){0.0f, 0.0f};
+    }
+    // v + w x r, arm from the center of mass (one f64 crossing).
+    m2Transform xf = world->transforms[index];
+    m2Vec2 rlc = {xf.q.c * world->localCenters[index].x - xf.q.s * world->localCenters[index].y,
+                  xf.q.s * world->localCenters[index].x + xf.q.c * world->localCenters[index].y};
+    m2Vec2 r = {(float)(worldPoint.x - xf.p.x) - rlc.x, (float)(worldPoint.y - xf.p.y) - rlc.y};
+    float w = world->angularVelocities[index];
+    m2Vec2 v = world->linearVelocities[index];
+    return (m2Vec2){v.x - w * r.y, v.y + w * r.x};
+}
+
+int32_t m2Body_GetJoints(m2BodyId bodyId, m2JointId* ids, int32_t capacity)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index < 0)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t j = 0; j < world->maxJointIndex; ++j)
+    {
+        if (world->jointAlive[j] == 0 ||
+            (world->jointBodyA[j] != index && world->jointBodyB[j] != index))
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            m2JointId id = {j + 1, world->worldIndex0, world->jointGenerations[j]};
+            ids[total] = id;
+        }
+        total += 1;
+    }
+    return total;
+}
+
 m2Counters m2World_GetCounters(m2WorldId worldId)
 {
     m2Counters counters;

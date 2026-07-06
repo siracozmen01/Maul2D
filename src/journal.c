@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 17u
+#define M2_JOURNAL_VERSION 18u
 
 typedef struct m2JournalHeader
 {
@@ -597,6 +597,52 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
         {
             M2_READ_OP(m2ExplosionDef, boom);
             m2World_Explode(worldId, &boom);
+            break;
+        }
+        case m2_opSetGeometry:
+        {
+            struct m2OpSetGeometry
+            {
+                m2ShapeId shape;
+                m2ShapeGeometry geometry;
+            };
+            M2_READ_OP(struct m2OpSetGeometry, sg);
+            sg.shape.world0 = here;
+            switch (sg.geometry.type)
+            {
+            case m2_circleShape:
+                m2Shape_SetCircle(sg.shape, &sg.geometry.circle);
+                break;
+            case m2_capsuleShape:
+                m2Shape_SetCapsule(sg.shape, &sg.geometry.capsule);
+                break;
+            case m2_polygonShape:
+                m2Shape_SetPolygon(sg.shape, &sg.geometry.polygon);
+                break;
+            default:
+                m2Shape_SetSegment(sg.shape, &sg.geometry.segment);
+                break;
+            }
+            break;
+        }
+        case m2_opChainFriction:
+        case m2_opChainRestitution:
+        {
+            struct m2OpChainMaterial
+            {
+                m2ChainId chain;
+                float value;
+            };
+            M2_READ_OP(struct m2OpChainMaterial, cm);
+            cm.chain.world0 = here;
+            if (op == m2_opChainFriction)
+            {
+                m2Chain_SetFriction(cm.chain, cm.value);
+            }
+            else
+            {
+                m2Chain_SetRestitution(cm.chain, cm.value);
+            }
             break;
         }
         case m2_opApplyTorque:

@@ -103,6 +103,14 @@ extern "C"
     /// reader.
     int32_t m2World_GetBodies(m2WorldId worldId, m2BodyId* ids, int32_t capacity);
 
+    /// Frame helpers (pure math on the body's pose) and the joint
+    /// walk (ascending slot order, truthful total).
+    m2Pos2 m2Body_GetWorldPoint(m2BodyId bodyId, m2Vec2 localPoint);
+    m2Vec2 m2Body_GetLocalPoint(m2BodyId bodyId, m2Pos2 worldPoint);
+    m2Vec2 m2Body_GetWorldVector(m2BodyId bodyId, m2Vec2 localVector);
+    m2Vec2 m2Body_GetLocalVector(m2BodyId bodyId, m2Vec2 worldVector);
+    m2Vec2 m2Body_GetWorldPointVelocity(m2BodyId bodyId, m2Pos2 worldPoint);
+
     /// Setters wake nothing yet (no sleep system in this slice) but are
     /// already journal-shaped: every mutation is a discrete command.
     /// Thread class: writer.
