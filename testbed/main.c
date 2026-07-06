@@ -123,6 +123,7 @@ typedef struct tbScene
 {
     const char* name;
     void (*setup)(m2WorldId world);
+    void (*tick)(m2WorldId world, double simTime); // optional per-step logic
     bool hasCar;
 } tbScene;
 
@@ -381,11 +382,286 @@ static void SceneRagdolls(m2WorldId world)
     }
 }
 
+static void SceneDemolitionTick(m2WorldId world, double simTime)
+{
+    (void)world;
+    if (m2Joint_IsValid(s_driveJointA) && m2Joint_GetType(s_driveJointA) == m2_motorJoint)
+    {
+        float ferry = (float)(2.5 * sin(simTime * 0.7));
+        m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ferry, 0.0f}, 0.0f);
+    }
+}
+
+static void SceneDominoes(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 40.0);
+    // Forty dominoes, a starter ramp, and a ball to set it all off.
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){-24.0 + (double)i * 1.1, 0.9};
+        m2BodyId tile = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        sd.density = 1.0f;
+        sd.friction = 0.5f;
+        m2Polygon slab = m2MakeBox(0.12f, 0.9f);
+        m2CreatePolygonShape(tile, &sd, &slab);
+    }
+    m2BodyDef rd = m2DefaultBodyDef();
+    rd.position = (m2Pos2){-28.5, 2.6};
+    rd.rotation = (m2Rot){0.94f, -0.34f}; // ramp tilts toward the row
+    m2BodyId ramp = m2CreateBody(world, &rd);
+    m2ShapeDef rs = m2DefaultShapeDef();
+    rs.friction = 0.1f;
+    m2Polygon board = m2MakeBox(2.4f, 0.1f);
+    m2CreatePolygonShape(ramp, &rs, &board);
+    m2BodyDef md = m2DefaultBodyDef();
+    md.type = m2_dynamicBody;
+    md.position = (m2Pos2){-30.2, 4.4};
+    m2BodyId marble = m2CreateBody(world, &md);
+    m2ShapeDef ms = m2DefaultShapeDef();
+    ms.density = 3.0f;
+    m2Circle ball = {{0.0f, 0.0f}, 0.45f};
+    m2CreateCircleShape(marble, &ms, &ball);
+}
+
+static void SceneOneWayCourse(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 20.0);
+    // Three one-way shelves at rising heights: drop boxes with B and
+    // toss balls upward through them; they pass rising, land falling.
+    for (int32_t level = 0; level < 3; ++level)
+    {
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.position = (m2Pos2){-4.0 + (double)level * 5.0, 2.2 + (double)level * 2.2};
+        m2BodyId shelf = m2CreateBody(world, &cd);
+        m2Vec2 pts[5] = {{2.5f, 0.0f}, {1.2f, 0.0f}, {0.0f, 0.0f}, {-1.2f, 0.0f}, {-2.5f, 0.0f}};
+        m2ChainDef chain = m2DefaultChainDef();
+        chain.points = pts;
+        chain.count = 5;
+        m2CreateChain(shelf, &chain);
+    }
+    // A bouncy ball ready to be flung around.
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){-4.0, 0.6};
+    m2BodyId bouncy = m2CreateBody(world, &bd);
+    m2ShapeDef bs = m2DefaultShapeDef();
+    bs.density = 0.8f;
+    bs.restitution = 0.85f;
+    m2Circle orb = {{0.0f, 0.0f}, 0.35f};
+    m2CreateCircleShape(bouncy, &bs, &orb);
+}
+
+static void SceneJointZoo(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    // One rig per joint type, left to right: distance pendulum,
+    // motored revolute spinner, prismatic elevator, weld tee, wheel
+    // rig, a motor-joint follower, and a breakable rope.
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.density = 1.0f;
+    m2Polygon unit = m2MakeBox(0.35f, 0.35f);
+    m2Circle disc = {{0.0f, 0.0f}, 0.35f};
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){-12.0, 5.0};
+    m2BodyId hookA = m2CreateBody(world, &ad);
+    m2BodyDef p1 = m2DefaultBodyDef();
+    p1.type = m2_dynamicBody;
+    p1.position = (m2Pos2){-10.5, 5.0};
+    m2BodyId bob = m2CreateBody(world, &p1);
+    m2CreateCircleShape(bob, &sd, &disc);
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hookA;
+    dj.bodyIdB = bob;
+    m2CreateDistanceJoint(world, &dj);
+
+    m2BodyDef sp = m2DefaultBodyDef();
+    sp.position = (m2Pos2){-7.0, 3.0};
+    m2BodyId pivot = m2CreateBody(world, &sp);
+    m2BodyDef bl = m2DefaultBodyDef();
+    bl.type = m2_dynamicBody;
+    bl.position = (m2Pos2){-7.0, 3.0};
+    m2BodyId blade = m2CreateBody(world, &bl);
+    m2ShapeDef bs2 = m2DefaultShapeDef();
+    bs2.density = 0.6f;
+    m2Polygon bar = m2MakeBox(1.4f, 0.08f);
+    m2CreatePolygonShape(blade, &bs2, &bar);
+    m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+    rj.bodyIdA = pivot;
+    rj.bodyIdB = blade;
+    rj.enableMotor = true;
+    rj.motorSpeed = 2.5f;
+    rj.maxMotorTorque = 60.0f;
+    m2CreateRevoluteJoint(world, &rj);
+
+    m2BodyDef ed = m2DefaultBodyDef();
+    ed.position = (m2Pos2){-3.0, 3.0};
+    m2BodyId rail = m2CreateBody(world, &ed);
+    m2BodyDef cd2 = m2DefaultBodyDef();
+    cd2.type = m2_dynamicBody;
+    cd2.position = (m2Pos2){-3.0, 3.0};
+    m2BodyId cab = m2CreateBody(world, &cd2);
+    m2CreatePolygonShape(cab, &sd, &unit);
+    m2PrismaticJointDef pj = m2DefaultPrismaticJointDef();
+    pj.bodyIdA = rail;
+    pj.bodyIdB = cab;
+    pj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    pj.enableLimit = true;
+    pj.lowerTranslation = -2.0f;
+    pj.upperTranslation = 2.0f;
+    pj.enableMotor = true;
+    pj.motorSpeed = 1.5f;
+    pj.maxMotorForce = 80.0f;
+    s_driveJointB = m2CreatePrismaticJoint(world, &pj); // elevator handle
+
+    m2BodyDef wd = m2DefaultBodyDef();
+    wd.type = m2_dynamicBody;
+    wd.position = (m2Pos2){1.0, 2.0};
+    m2BodyId post = m2CreateBody(world, &wd);
+    m2CreatePolygonShape(post, &sd, &unit);
+    m2BodyDef fd2 = m2DefaultBodyDef();
+    fd2.type = m2_dynamicBody;
+    fd2.position = (m2Pos2){1.7, 2.0};
+    m2BodyId flag = m2CreateBody(world, &fd2);
+    m2ShapeDef fs2 = m2DefaultShapeDef();
+    fs2.density = 0.4f;
+    m2Polygon pennant = m2MakeBox(0.35f, 0.08f);
+    m2CreatePolygonShape(flag, &fs2, &pennant);
+    m2WeldJointDef wj = m2DefaultWeldJointDef();
+    wj.bodyIdA = post;
+    wj.bodyIdB = flag;
+    wj.localAnchorA = (m2Vec2){0.35f, 0.2f};
+    wj.localAnchorB = (m2Vec2){-0.35f, 0.0f};
+    wj.linearHertz = 4.0f;
+    wj.linearDampingRatio = 0.4f;
+    wj.angularHertz = 4.0f;
+    wj.angularDampingRatio = 0.4f;
+    m2CreateWeldJoint(world, &wj);
+
+    m2BodyDef sd2 = m2DefaultBodyDef();
+    sd2.position = (m2Pos2){5.5, 3.5};
+    m2BodyId strut = m2CreateBody(world, &sd2);
+    m2BodyDef hd2 = m2DefaultBodyDef();
+    hd2.type = m2_dynamicBody;
+    hd2.position = (m2Pos2){5.5, 2.2};
+    m2BodyId hub = m2CreateBody(world, &hd2);
+    m2CreateCircleShape(hub, &sd, &disc);
+    m2WheelJointDef whj = m2DefaultWheelJointDef();
+    whj.bodyIdA = strut;
+    whj.bodyIdB = hub;
+    whj.localAxisA = (m2Vec2){0.0f, 1.0f};
+    whj.enableSpring = true;
+    whj.hertz = 2.0f;
+    whj.dampingRatio = 0.4f;
+    m2CreateWheelJoint(world, &whj);
+
+    m2BodyDef md2 = m2DefaultBodyDef();
+    md2.position = (m2Pos2){9.5, 3.0};
+    m2BodyId beacon = m2CreateBody(world, &md2);
+    m2BodyDef fd3 = m2DefaultBodyDef();
+    fd3.type = m2_dynamicBody;
+    fd3.position = (m2Pos2){9.5, 3.0};
+    m2BodyId chaser = m2CreateBody(world, &fd3);
+    m2CreatePolygonShape(chaser, &sd, &unit);
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = beacon;
+    mj.bodyIdB = chaser;
+    mj.maxForce = 120.0f;
+    mj.maxTorque = 40.0f;
+    s_driveJointA = m2CreateMotorJoint(world, &mj); // follower handle
+
+    m2BodyDef hd3 = m2DefaultBodyDef();
+    hd3.position = (m2Pos2){13.0, 6.0};
+    m2BodyId gallows = m2CreateBody(world, &hd3);
+    m2BodyDef ld = m2DefaultBodyDef();
+    ld.type = m2_dynamicBody;
+    ld.position = (m2Pos2){13.0, 4.0};
+    m2BodyId weight = m2CreateBody(world, &ld);
+    m2ShapeDef ws2 = m2DefaultShapeDef();
+    ws2.density = 4.0f;
+    m2CreatePolygonShape(weight, &ws2, &unit);
+    m2DistanceJointDef frail = m2DefaultDistanceJointDef();
+    frail.bodyIdA = gallows;
+    frail.bodyIdB = weight;
+    m2JointId thread = m2CreateDistanceJoint(world, &frail);
+    m2Joint_SetBreakLimits(thread, 45.0f, 0.0f); // one extra box snaps it
+}
+
+static void SceneJointZooTick(m2WorldId world, double simTime)
+{
+    (void)world;
+    // The elevator shuttles, the follower orbits its beacon.
+    if (m2Joint_IsValid(s_driveJointB) && m2Joint_GetType(s_driveJointB) == m2_prismaticJoint)
+    {
+        float dir = fmod(simTime, 6.0) < 3.0 ? 1.5f : -1.5f;
+        m2Joint_SetMotorSpeed(s_driveJointB, dir);
+    }
+    if (m2Joint_IsValid(s_driveJointA) && m2Joint_GetType(s_driveJointA) == m2_motorJoint)
+    {
+        float ox = (float)(1.6 * cos(simTime * 0.9));
+        float oy = (float)(1.0 * sin(simTime * 1.7));
+        m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ox, oy}, (float)(0.6 * sin(simTime * 0.5)));
+    }
+}
+
+static void SceneCurtain(m2WorldId world)
+{
+    tbAddFloor(world, 0.0, -0.5, 30.0);
+    // A hanging curtain of small plates tied by breakable ropes; drop
+    // the anvil (or grab and throw things) and watch it tear.
+    m2BodyDef rd = m2DefaultBodyDef();
+    rd.position = (m2Pos2){0.0, 10.0};
+    m2BodyId rail = m2CreateBody(world, &rd);
+    m2ShapeDef ps = m2DefaultShapeDef();
+    ps.density = 0.5f;
+    m2Polygon plate = m2MakeBox(0.28f, 0.28f);
+    m2BodyId prev[9];
+    for (int32_t col = 0; col < 9; ++col)
+    {
+        prev[col] = rail;
+    }
+    for (int32_t row = 0; row < 6; ++row)
+    {
+        for (int32_t col = 0; col < 9; ++col)
+        {
+            m2BodyDef bd = m2DefaultBodyDef();
+            bd.type = m2_dynamicBody;
+            bd.position = (m2Pos2){-3.2 + (double)col * 0.8, 9.2 - (double)row * 0.75};
+            m2BodyId cell = m2CreateBody(world, &bd);
+            m2CreatePolygonShape(cell, &ps, &plate);
+            m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+            dj.bodyIdA = prev[col];
+            dj.bodyIdB = cell;
+            dj.hertz = 8.0f;
+            dj.dampingRatio = 0.6f;
+            m2JointId link = m2CreateDistanceJoint(world, &dj);
+            m2Joint_SetBreakLimits(link, 55.0f, 0.0f);
+            prev[col] = cell;
+        }
+    }
+    // The anvil, waiting above for a nudge.
+    m2BodyDef av = m2DefaultBodyDef();
+    av.type = m2_dynamicBody;
+    av.position = (m2Pos2){-8.0, 13.0};
+    m2BodyId anvil = m2CreateBody(world, &av);
+    m2ShapeDef as2 = m2DefaultShapeDef();
+    as2.density = 8.0f;
+    m2Polygon block = m2MakeBox(0.7f, 0.5f);
+    m2CreatePolygonShape(anvil, &as2, &block);
+}
+
 static const tbScene s_scenes[] = {
-    {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, false},
-    {"car: arrows to drive, terrain is a chain", SceneCar, true},
-    {"demolition: E to blast, motor platform ferries", SceneDemolition, false},
-    {"ragdolls: grab and drag; hold R to rewind time", SceneRagdolls, false},
+    {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, NULL, false},
+    {"car: arrows to drive, terrain is a chain", SceneCar, NULL, true},
+    {"demolition: E to blast, motor platform ferries", SceneDemolition, SceneDemolitionTick, false},
+    {"ragdolls: grab and drag; hold R to rewind time", SceneRagdolls, NULL, false},
+    {"dominoes: one marble, forty tiles", SceneDominoes, NULL, false},
+    {"one-way course: fling the ball up through shelves", SceneOneWayCourse, NULL, false},
+    {"joint zoo: every joint, one rig each", SceneJointZoo, SceneJointZooTick, false},
+    {"curtain: breakable ropes, one anvil", SceneCurtain, NULL, false},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
 
@@ -399,6 +675,7 @@ int main(void)
     m2WorldId world = {0, 0};
     int32_t sceneIndex = 0;
     bool paused = false;
+    bool showHelp = false;
     double simTime = 0.0;
     m2JointId grip = m2_nullJointId;
 
@@ -475,6 +752,18 @@ int main(void)
         if (IsKeyPressed(KEY_SPACE))
         {
             paused = !paused;
+        }
+        if (IsKeyPressed(KEY_C))
+        {
+            draw.drawContacts = !draw.drawContacts;
+        }
+        if (IsKeyPressed(KEY_V))
+        {
+            draw.drawAABBs = !draw.drawAABBs;
+        }
+        if (IsKeyPressed(KEY_H))
+        {
+            showHelp = !showHelp;
         }
         float wheel = GetMouseWheelMove();
         if (wheel != 0.0f)
@@ -567,12 +856,6 @@ int main(void)
             m2Joint_SetMotorSpeed(s_driveJointA, speed);
             m2Joint_SetMotorSpeed(s_driveJointB, speed);
         }
-        if (!s_scenes[sceneIndex].hasCar && m2Joint_IsValid(s_driveJointA) &&
-            m2Joint_GetType(s_driveJointA) == m2_motorJoint)
-        {
-            float ferry = (float)(2.5 * sin(simTime * 0.7));
-            m2MotorJoint_SetOffsets(s_driveJointA, (m2Vec2){ferry, 0.0f}, 0.0f);
-        }
 
         // ---- step or rewind ----
         bool rewinding = IsKeyDown(KEY_R) && ring != NULL && ringCount > 0;
@@ -592,6 +875,10 @@ int main(void)
         {
             m2World_Step(world, 1.0f / 60.0f, 4);
             simTime += 1.0 / 60.0;
+            if (s_scenes[sceneIndex].tick != NULL)
+            {
+                s_scenes[sceneIndex].tick(world, simTime);
+            }
             stepParity = (stepParity + 1) % ringStride;
             if (stepParity == 0 && ring != NULL)
             {
@@ -641,6 +928,28 @@ int main(void)
                             (unsigned long long)m2World_GetStepCount(world),
                             (unsigned long long)m2World_Hash(world)),
                  12, 58, 14, (Color){120, 200, 140, 255});
+        if (showHelp)
+        {
+            DrawRectangle(s_screenWidth / 2 - 260, 90, 520, 300, (Color){10, 12, 16, 235});
+            DrawRectangleLines(s_screenWidth / 2 - 260, 90, 520, 300, GRAY);
+            const char* lines[] = {
+                "Maul2D testbed",
+                "",
+                "left drag      grab bodies (mouse joint)",
+                "right drag     pan            wheel   zoom",
+                "space          pause          s       single step",
+                "tab            next scene     f5      restart",
+                "R (hold)       REWIND TIME    h       this panel",
+                "e              explosion      b       drop a box",
+                "c              contact points v       fat AABBs",
+                "arrows         drive, where there is a car",
+            };
+            for (int32_t i = 0; i < 10; ++i)
+            {
+                DrawText(lines[i], s_screenWidth / 2 - 236, 116 + i * 26, 18,
+                         i == 0 ? RAYWHITE : LIGHTGRAY);
+            }
+        }
         EndDrawing();
     }
 
