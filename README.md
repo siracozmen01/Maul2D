@@ -8,6 +8,10 @@ Written in C17. MIT licensed.
 
 ## Status: 1.2
 
+Baseline: x64 builds target AVX2+FMA (Haswell 2013+); arm64 uses
+NEON. Configure with -DMAUL2D_SIMD=scalar for a portable fmaf
+fallback that produces bit-identical results (CI enforces this).
+
 The core engine is complete and gated:
 
 - **Rigid bodies** - circles, capsules, segments, polygons (rounded too);

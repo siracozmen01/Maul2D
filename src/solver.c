@@ -14,6 +14,7 @@
 // origin). Centered shapes are exact; offset-COM rigs come with the
 // proper COM state in a later slice.
 
+#include "simd.h"
 #include "world_internal.h"
 
 #include "maul2d/base.h"
@@ -740,22 +741,45 @@ static void WarmStartBlock(m2World* world, m2ContactBlock* b)
         vBy[lane] = world->linearVelocities[b->bodyB[lane]].y;
         wB[lane] = world->angularVelocities[b->bodyB[lane]];
     }
+    // Vector body (simd.h bit law): tangent = (-ny, nx), P = nImp*n +
+    // tImp*t, velocities pick up the usual +-invMass * P terms.
+    m2f8 nX = m2F8Load(b->normalX);
+    m2f8 nY = m2F8Load(b->normalY);
+    m2f8 imA = m2F8Load(b->invMassA);
+    m2f8 iiA = m2F8Load(b->invIA);
+    m2f8 imB = m2F8Load(b->invMassB);
+    m2f8 iiB = m2F8Load(b->invIB);
+    m2f8 avAx = m2F8Load(vAx);
+    m2f8 avAy = m2F8Load(vAy);
+    m2f8 awA = m2F8Load(wA);
+    m2f8 avBx = m2F8Load(vBx);
+    m2f8 avBy = m2F8Load(vBy);
+    m2f8 awB = m2F8Load(wB);
     for (int32_t k = 0; k < b->pointCount; ++k)
     {
-        for (int32_t lane = 0; lane < M2_LANES; ++lane)
-        {
-            float tangentX = -b->normalY[lane];
-            float tangentY = b->normalX[lane];
-            float Px = b->normalImp[k][lane] * b->normalX[lane] + b->tangentImp[k][lane] * tangentX;
-            float Py = b->normalImp[k][lane] * b->normalY[lane] + b->tangentImp[k][lane] * tangentY;
-            vAx[lane] -= b->invMassA[lane] * Px;
-            vAy[lane] -= b->invMassA[lane] * Py;
-            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
-            vBx[lane] += b->invMassB[lane] * Px;
-            vBy[lane] += b->invMassB[lane] * Py;
-            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
-        }
+        m2f8 nImp = m2F8Load(b->normalImp[k]);
+        m2f8 tImp = m2F8Load(b->tangentImp[k]);
+        m2f8 rAXk = m2F8Load(b->rAX[k]);
+        m2f8 rAYk = m2F8Load(b->rAY[k]);
+        m2f8 rBXk = m2F8Load(b->rBX[k]);
+        m2f8 rBYk = m2F8Load(b->rBY[k]);
+        m2f8 Px = m2F8NegMulAdd(tImp, nY, m2F8Mul(nImp, nX));
+        m2f8 Py = m2F8MulAdd(tImp, nX, m2F8Mul(nImp, nY));
+        avAx = m2F8NegMulAdd(imA, Px, avAx);
+        avAy = m2F8NegMulAdd(imA, Py, avAy);
+        m2f8 crossA = m2F8NegMulAdd(rAYk, Px, m2F8Mul(rAXk, Py));
+        awA = m2F8NegMulAdd(iiA, crossA, awA);
+        avBx = m2F8MulAdd(imB, Px, avBx);
+        avBy = m2F8MulAdd(imB, Py, avBy);
+        m2f8 crossB = m2F8NegMulAdd(rBYk, Px, m2F8Mul(rBXk, Py));
+        awB = m2F8MulAdd(iiB, crossB, awB);
     }
+    m2F8Store(vAx, avAx);
+    m2F8Store(vAy, avAy);
+    m2F8Store(wA, awA);
+    m2F8Store(vBx, avBx);
+    m2F8Store(vBy, avBy);
+    m2F8Store(wB, awB);
     for (int32_t lane = 0; lane < M2_LANES; ++lane)
     {
         if (world->types[b->bodyA[lane]] == (uint8_t)m2_dynamicBody)
@@ -804,78 +828,115 @@ static void SolveBlock(m2World* world, m2ContactBlock* b, float invH, float minB
         dqBs[lane] = world->deltaRotations[iB].s;
     }
 
+    // Vector body (simd.h bit law). The selects mirror the scalar
+    // ternaries exactly; useBias is uniform per call, so its branch is
+    // resolved once outside the lane math.
+    m2f8 nX = m2F8Load(b->normalX);
+    m2f8 nY = m2F8Load(b->normalY);
+    m2f8 imA = m2F8Load(b->invMassA);
+    m2f8 iiA = m2F8Load(b->invIA);
+    m2f8 imB = m2F8Load(b->invMassB);
+    m2f8 iiB = m2F8Load(b->invIB);
+    m2f8 avAx = m2F8Load(vAx);
+    m2f8 avAy = m2F8Load(vAy);
+    m2f8 awA = m2F8Load(wA);
+    m2f8 avBx = m2F8Load(vBx);
+    m2f8 avBy = m2F8Load(vBy);
+    m2f8 awB = m2F8Load(wB);
+    m2f8 vdpx = m2F8Load(dpx);
+    m2f8 vdpy = m2F8Load(dpy);
+    m2f8 vqAc = m2F8Load(dqAc);
+    m2f8 vqAs = m2F8Load(dqAs);
+    m2f8 vqBc = m2F8Load(dqBc);
+    m2f8 vqBs = m2F8Load(dqBs);
+    m2f8 zero = m2F8Zero();
+    m2f8 one = m2F8Set1(1.0f);
+    m2f8 vInvH = m2F8Set1(invH);
+    m2f8 vMinBias = m2F8Set1(minBiasVel);
+    m2f8 biasRate = m2F8Load(b->biasRate);
+    m2f8 msIn = useBias ? m2F8Load(b->massScale) : one;
+    m2f8 isIn = useBias ? m2F8Load(b->impulseScale) : zero;
+
     for (int32_t k = 0; k < b->pointCount; ++k)
     {
-        for (int32_t lane = 0; lane < M2_LANES; ++lane)
-        {
-            float rsAx = dqAc[lane] * b->rAX[k][lane] - dqAs[lane] * b->rAY[k][lane];
-            float rsAy = dqAs[lane] * b->rAX[k][lane] + dqAc[lane] * b->rAY[k][lane];
-            float rsBx = dqBc[lane] * b->rBX[k][lane] - dqBs[lane] * b->rBY[k][lane];
-            float rsBy = dqBs[lane] * b->rBX[k][lane] + dqBc[lane] * b->rBY[k][lane];
-            float dsx = dpx[lane] + rsBx - rsAx;
-            float dsy = dpy[lane] + rsBy - rsAy;
-            float sep = b->baseSep[k][lane] + dsx * b->normalX[lane] + dsy * b->normalY[lane];
+        m2f8 rAXk = m2F8Load(b->rAX[k]);
+        m2f8 rAYk = m2F8Load(b->rAY[k]);
+        m2f8 rBXk = m2F8Load(b->rBX[k]);
+        m2f8 rBYk = m2F8Load(b->rBY[k]);
+        m2f8 rsAx = m2F8NegMulAdd(vqAs, rAYk, m2F8Mul(vqAc, rAXk));
+        m2f8 rsAy = m2F8MulAdd(vqAs, rAXk, m2F8Mul(vqAc, rAYk));
+        m2f8 rsBx = m2F8NegMulAdd(vqBs, rBYk, m2F8Mul(vqBc, rBXk));
+        m2f8 rsBy = m2F8MulAdd(vqBs, rBXk, m2F8Mul(vqBc, rBYk));
+        m2f8 dsx = m2F8Add(vdpx, m2F8Sub(rsBx, rsAx));
+        m2f8 dsy = m2F8Add(vdpy, m2F8Sub(rsBy, rsAy));
+        m2f8 sep = m2F8MulAdd(dsy, nY, m2F8MulAdd(dsx, nX, m2F8Load(b->baseSep[k])));
 
-            // Value selects instead of branches: both candidates are pure
-            // values, the selection is bit-identical to the branchy
-            // form, and the vectorizer gets a straight-line loop.
-            bool speculative = sep > 0.0f;
-            float softBias = m2MaxF(b->biasRate[lane] * sep, minBiasVel);
-            float bias = speculative ? sep * invH : (useBias ? softBias : 0.0f);
-            float massScale = !speculative && useBias ? b->massScale[lane] : 1.0f;
-            float impulseScale = !speculative && useBias ? b->impulseScale[lane] : 0.0f;
+        m2f8 spec = m2F8GT(sep, zero);
+        m2f8 softBias = m2F8Max(m2F8Mul(biasRate, sep), vMinBias);
+        m2f8 nonSpecBias = useBias ? softBias : zero;
+        m2f8 bias = m2F8Select(spec, m2F8Mul(sep, vInvH), nonSpecBias);
+        m2f8 massScale = m2F8Select(spec, one, msIn);
+        m2f8 impulseScale = m2F8Select(spec, zero, isIn);
 
-            float vrAx = vAx[lane] - wA[lane] * b->rAY[k][lane];
-            float vrAy = vAy[lane] + wA[lane] * b->rAX[k][lane];
-            float vrBx = vBx[lane] - wB[lane] * b->rBY[k][lane];
-            float vrBy = vBy[lane] + wB[lane] * b->rBX[k][lane];
-            float vn = (vrBx - vrAx) * b->normalX[lane] + (vrBy - vrAy) * b->normalY[lane];
+        m2f8 vrAx = m2F8NegMulAdd(awA, rAYk, avAx);
+        m2f8 vrAy = m2F8MulAdd(awA, rAXk, avAy);
+        m2f8 vrBx = m2F8NegMulAdd(awB, rBYk, avBx);
+        m2f8 vrBy = m2F8MulAdd(awB, rBXk, avBy);
+        m2f8 vn = m2F8MulAdd(m2F8Sub(vrBy, vrAy), nY, m2F8Mul(m2F8Sub(vrBx, vrAx), nX));
 
-            float impulse = -b->normalMass[k][lane] * massScale * (vn + bias) -
-                            impulseScale * b->normalImp[k][lane];
-            float newImpulse = m2MaxF(b->normalImp[k][lane] + impulse, 0.0f);
-            impulse = newImpulse - b->normalImp[k][lane];
-            b->normalImp[k][lane] = newImpulse;
+        m2f8 nImp = m2F8Load(b->normalImp[k]);
+        m2f8 scaledMass = m2F8Mul(m2F8Load(b->normalMass[k]), massScale);
+        m2f8 drag = m2F8Mul(impulseScale, nImp);
+        m2f8 impulse = m2F8NegMulAdd(scaledMass, m2F8Add(vn, bias), m2F8Neg(drag));
+        m2f8 newImpulse = m2F8Max(m2F8Add(nImp, impulse), zero);
+        impulse = m2F8Sub(newImpulse, nImp);
+        m2F8Store(b->normalImp[k], newImpulse);
 
-            float Px = impulse * b->normalX[lane];
-            float Py = impulse * b->normalY[lane];
-            vAx[lane] -= b->invMassA[lane] * Px;
-            vAy[lane] -= b->invMassA[lane] * Py;
-            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
-            vBx[lane] += b->invMassB[lane] * Px;
-            vBy[lane] += b->invMassB[lane] * Py;
-            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
-        }
+        m2f8 Px = m2F8Mul(impulse, nX);
+        m2f8 Py = m2F8Mul(impulse, nY);
+        avAx = m2F8NegMulAdd(imA, Px, avAx);
+        avAy = m2F8NegMulAdd(imA, Py, avAy);
+        awA = m2F8NegMulAdd(iiA, m2F8NegMulAdd(rAYk, Px, m2F8Mul(rAXk, Py)), awA);
+        avBx = m2F8MulAdd(imB, Px, avBx);
+        avBy = m2F8MulAdd(imB, Py, avBy);
+        awB = m2F8MulAdd(iiB, m2F8NegMulAdd(rBYk, Px, m2F8Mul(rBXk, Py)), awB);
     }
 
     for (int32_t k = 0; k < b->pointCount; ++k)
     {
-        for (int32_t lane = 0; lane < M2_LANES; ++lane)
-        {
-            float tangentX = -b->normalY[lane];
-            float tangentY = b->normalX[lane];
-            float vrAx = vAx[lane] - wA[lane] * b->rAY[k][lane];
-            float vrAy = vAy[lane] + wA[lane] * b->rAX[k][lane];
-            float vrBx = vBx[lane] - wB[lane] * b->rBY[k][lane];
-            float vrBy = vBy[lane] + wB[lane] * b->rBX[k][lane];
-            float vt = (vrBx - vrAx) * tangentX + (vrBy - vrAy) * tangentY;
-            float impulse = -b->tangentMass[k][lane] * vt;
-            float maxFriction = b->friction[lane] * b->normalImp[k][lane];
-            float newImpulse =
-                m2ClampF(b->tangentImp[k][lane] + impulse, -maxFriction, maxFriction);
-            impulse = newImpulse - b->tangentImp[k][lane];
-            b->tangentImp[k][lane] = newImpulse;
+        m2f8 rAXk = m2F8Load(b->rAX[k]);
+        m2f8 rAYk = m2F8Load(b->rAY[k]);
+        m2f8 rBXk = m2F8Load(b->rBX[k]);
+        m2f8 rBYk = m2F8Load(b->rBY[k]);
+        // tangent = (-nY, nX)
+        m2f8 vrAx = m2F8NegMulAdd(awA, rAYk, avAx);
+        m2f8 vrAy = m2F8MulAdd(awA, rAXk, avAy);
+        m2f8 vrBx = m2F8NegMulAdd(awB, rBYk, avBx);
+        m2f8 vrBy = m2F8MulAdd(awB, rBXk, avBy);
+        m2f8 vt = m2F8MulAdd(m2F8Sub(vrBy, vrAy), nX, m2F8Mul(m2F8Sub(vrBx, vrAx), m2F8Neg(nY)));
+        m2f8 tImp = m2F8Load(b->tangentImp[k]);
+        m2f8 impulse = m2F8Neg(m2F8Mul(m2F8Load(b->tangentMass[k]), vt));
+        m2f8 maxFriction = m2F8Mul(m2F8Load(b->friction), m2F8Load(b->normalImp[k]));
+        m2f8 newImpulse =
+            m2F8Min(m2F8Max(m2F8Add(tImp, impulse), m2F8Neg(maxFriction)), maxFriction);
+        impulse = m2F8Sub(newImpulse, tImp);
+        m2F8Store(b->tangentImp[k], newImpulse);
 
-            float Px = impulse * tangentX;
-            float Py = impulse * tangentY;
-            vAx[lane] -= b->invMassA[lane] * Px;
-            vAy[lane] -= b->invMassA[lane] * Py;
-            wA[lane] -= b->invIA[lane] * (b->rAX[k][lane] * Py - b->rAY[k][lane] * Px);
-            vBx[lane] += b->invMassB[lane] * Px;
-            vBy[lane] += b->invMassB[lane] * Py;
-            wB[lane] += b->invIB[lane] * (b->rBX[k][lane] * Py - b->rBY[k][lane] * Px);
-        }
+        m2f8 Px = m2F8Mul(impulse, m2F8Neg(nY));
+        m2f8 Py = m2F8Mul(impulse, nX);
+        avAx = m2F8NegMulAdd(imA, Px, avAx);
+        avAy = m2F8NegMulAdd(imA, Py, avAy);
+        awA = m2F8NegMulAdd(iiA, m2F8NegMulAdd(rAYk, Px, m2F8Mul(rAXk, Py)), awA);
+        avBx = m2F8MulAdd(imB, Px, avBx);
+        avBy = m2F8MulAdd(imB, Py, avBy);
+        awB = m2F8MulAdd(iiB, m2F8NegMulAdd(rBYk, Px, m2F8Mul(rBXk, Py)), awB);
     }
+    m2F8Store(vAx, avAx);
+    m2F8Store(vAy, avAy);
+    m2F8Store(wA, awA);
+    m2F8Store(vBx, avBx);
+    m2F8Store(vBy, avBy);
+    m2F8Store(wB, awB);
 
     for (int32_t lane = 0; lane < M2_LANES; ++lane)
     {

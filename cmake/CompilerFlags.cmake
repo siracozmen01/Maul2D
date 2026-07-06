@@ -2,6 +2,13 @@
 # simulation code must call maul2d_apply_flags(). The FMA canary in the
 # test suite verifies at runtime what these flags promise at build time.
 
+# SIMD backend policy (slice 60, user decision 2026-07-06): x64
+# baseline is AVX2+FMA (Haswell 2013+); arm64 uses NEON, which is
+# architectural. MAUL2D_SIMD=scalar forces the fmaf fallback, and CI
+# runs one scalar cell whose hashes must match the vector cells bit
+# for bit: the backends are interchangeable or the build is red.
+set(MAUL2D_SIMD "auto" CACHE STRING "SIMD backend: auto or scalar")
+
 function(maul2d_apply_flags target)
     # A host injecting fast-math through global flags would silently void
     # the determinism contract; refuse to configure at all.
@@ -21,10 +28,20 @@ function(maul2d_apply_flags target)
             message(FATAL_ERROR "MSVC >= VS2022 17.0 (1930) required: older versions cannot disable FP contraction")
         endif()
         target_compile_options(${target} PRIVATE /W4 /WX /fp:precise /fp:contract-)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT MAUL2D_SIMD STREQUAL "scalar")
+            target_compile_options(${target} PRIVATE /arch:AVX2)
+        endif()
     else()
         target_compile_options(${target} PRIVATE
             -ffp-contract=off -fno-trapping-math -fno-fast-math -fno-unsafe-math-optimizations
             -Wall -Wextra -Werror -Wshadow -Wdouble-promotion)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64" AND NOT MAUL2D_SIMD STREQUAL "scalar")
+            target_compile_options(${target} PRIVATE -mavx2 -mfma)
+        endif()
+    endif()
+
+    if(MAUL2D_SIMD STREQUAL "scalar")
+        target_compile_definitions(${target} PRIVATE MAUL2D_SIMD_FORCE_SCALAR=1)
     endif()
 
     if(MAUL2D_SANITIZE)

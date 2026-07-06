@@ -75,7 +75,7 @@ jobs:
 
   compare-hashes:
     name: cross-platform hash equality
-    needs: build-test
+    needs: [build-test, sanitize]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ)_HASH=' hashes/*.txt | tee all-hashes.txt
-          CELLS=8
+          CELLS=9
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
@@ -104,26 +104,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_SANITIZE=ON -DCMAKE_C_COMPILER=clang
+        # Also the scalar-SIMD cell: its hashes join the cross-platform
+        # gate, so the fmaf fallback must match the vector backends bit
+        # for bit or this build is red.
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_SANITIZE=ON -DMAUL2D_SIMD=scalar -DCMAKE_C_COMPILER=clang
       - name: Build
         run: cmake --build build
       - name: Run
         run: |
-          ./build/test_core
-          ./build/test_world
-          ./build/test_broadphase
-          ./build/test_shapes
-          ./build/test_contacts
-          ./build/test_solver
-          ./build/test_islands
-          ./build/test_ccd
-          ./build/test_events
-          ./build/test_joints
-          ./build/test_journal
-          ./build/test_queries
-          ./build/test_redteam
-          ./build/test_fuzz
-          ./build/test_threads
+          ./build/test_core | tee out.txt
+          ./build/test_world | tee -a out.txt
+          ./build/test_broadphase | tee -a out.txt
+          ./build/test_shapes | tee -a out.txt
+          ./build/test_contacts | tee -a out.txt
+          ./build/test_solver | tee -a out.txt
+          ./build/test_islands | tee -a out.txt
+          ./build/test_ccd | tee -a out.txt
+          ./build/test_events | tee -a out.txt
+          ./build/test_joints | tee -a out.txt
+          ./build/test_journal | tee -a out.txt
+          ./build/test_queries | tee -a out.txt
+          ./build/test_redteam | tee -a out.txt
+          ./build/test_fuzz | tee -a out.txt
+          ./build/test_threads | tee -a out.txt
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ)_HASH=' out.txt | tr -d '\r' > hash-sanitize-scalar.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hash-sanitize-scalar
+          path: hash-sanitize-scalar.txt
 
   format:
     name: clang-format
