@@ -80,9 +80,50 @@ jobs:
           name: hash-${{ matrix.name }}
           path: hash-${{ matrix.name }}.txt
 
+  wasm:
+    name: wasm-node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          # Pinned like every other toolchain: compiler updates must
+          # announce themselves through a red gate, not drift in.
+          version: 6.0.2
+      - name: Configure
+        # 4MB stack: the engine is fine on emscripten's 64KB default
+        # but the deep red-team scenarios are not; wasm turns a stack
+        # overflow into a raw out-of-bounds trap.
+        run: emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-pthread" -DCMAKE_EXE_LINKER_FLAGS="-pthread -sPTHREAD_POOL_SIZE=8 -sINITIAL_MEMORY=536870912 -sSTACK_SIZE=4194304 -sENVIRONMENT=node -sEXIT_RUNTIME=1"
+      - name: Build
+        run: cmake --build build -j 4
+      - name: Run determinism gate
+        run: |
+          node build/test_core.js | tee out.txt
+          node build/test_world.js | tee -a out.txt
+          node build/test_broadphase.js | tee -a out.txt
+          node build/test_shapes.js | tee -a out.txt
+          node build/test_contacts.js | tee -a out.txt
+          node build/test_solver.js | tee -a out.txt
+          node build/test_islands.js | tee -a out.txt
+          node build/test_ccd.js | tee -a out.txt
+          node build/test_events.js | tee -a out.txt
+          node build/test_joints.js | tee -a out.txt
+          node build/test_journal.js | tee -a out.txt
+          node build/test_queries.js | tee -a out.txt
+          node build/test_redteam.js | tee -a out.txt
+          node build/test_fuzz.js | tee -a out.txt
+          node build/test_fluid.js | tee -a out.txt
+          node build/test_threads.js | tee -a out.txt
+          grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > hash-wasm-node.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hash-wasm-node
+          path: hash-wasm-node.txt
+
   compare-hashes:
     name: cross-platform hash equality
-    needs: [build-test, sanitize]
+    needs: [build-test, sanitize, wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -94,7 +135,7 @@ jobs:
         shell: bash
         run: |
           grep -hE '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' hashes/*.txt | tee all-hashes.txt
-          CELLS=9
+          CELLS=10
           # Every distinct hash line must appear exactly once per cell:
           # a divergent cell or a silently missing line both fail.
           BAD=$(sort all-hashes.txt | uniq -c | awk -v n="$CELLS" '$1 != n' | wc -l)
