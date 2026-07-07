@@ -15,8 +15,8 @@ inputs produce the same bits on every supported platform, and the
 engine is built around that promise end to end. Snapshots restore
 worlds bit-exactly, a command journal records sessions and replays
 them byte for byte, and CI fails on a single differing bit across
-sixteen gated hash lines, nine platform cells and three instruction
-sets (x64 AVX2, arm64 NEON, portable scalar). Rollback netcode,
+sixteen gated hash lines and ten platform cells spanning x64 AVX2,
+arm64 NEON, portable scalar and WebAssembly. Rollback netcode,
 deterministic lockstep, kill-cam replays and server-verified
 simulation stop being research projects and become four lines of
 code.
