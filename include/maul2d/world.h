@@ -196,6 +196,22 @@ extern "C"
     /// Thread class: reader.
     uint64_t m2World_Hash(m2WorldId worldId);
 
+    /// Per-subsystem hashes for hunting a divergence: run your twin
+    /// simulations, compare parts each step, and the first field
+    /// that splits names the subsystem while the step count names
+    /// the moment. Diagnostic values: they are not portable across
+    /// engine versions and the total hash is not a function of the
+    /// parts. Thread class: reader.
+    typedef struct m2WorldHashParts
+    {
+        uint64_t world;     // step counter and gravity
+        uint64_t bodies;    // transforms, velocities, mass and sleep state
+        uint64_t contacts;  // pair keys and manifolds
+        uint64_t joints;    // constraint accumulator memory
+        uint64_t particles; // fluid state including the jelly nets
+    } m2WorldHashParts;
+    m2WorldHashParts m2World_HashParts(m2WorldId worldId);
+
     /// Command journal (the replay primitive). StartJournal embeds a
     /// full snapshot into the caller's buffer, then records every
     /// mutating call and step marker with raw IEEE-754 bit encoding.

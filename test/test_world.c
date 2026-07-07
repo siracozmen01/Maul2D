@@ -1657,6 +1657,73 @@ static void TestLeftoverBasket(void)
 // Dominance (slice 77, a rival lesson): the higher body cannot be
 // pushed by the lower one in contacts, statics outrank everyone,
 // joints stay symmetric.
+// Subsystem hashes: twins agree part by part, and a nudge to one
+// subsystem splits exactly that part.
+static void TestHashParts(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 4;
+    def.particleCapacity = 32;
+    m2WorldId a = m2CreateWorld(&def);
+    m2WorldId b = m2CreateWorld(&def);
+    for (int32_t w = 0; w < 2; ++w)
+    {
+        m2WorldId world = w == 0 ? a : b;
+        m2BodyDef fd = m2DefaultBodyDef();
+        fd.position = (m2Pos2){0.0, -0.5};
+        m2ShapeDef fs = m2DefaultShapeDef();
+        m2Polygon slab = m2MakeBox(5.0f, 0.5f);
+        m2CreatePolygonShape(m2CreateBody(world, &fd), &fs, &slab);
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = (m2Pos2){0.0, 1.0};
+        m2BodyId box = m2CreateBody(world, &bd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon crate = m2MakeBox(0.4f, 0.4f);
+        m2CreatePolygonShape(box, &sd, &crate);
+        m2World_EmitParticle(world, (m2Pos2){50.0, 1.0}, (m2Vec2){0.0f, 0.0f}, 0);
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+    }
+    m2WorldHashParts pa = m2World_HashParts(a);
+    m2WorldHashParts pb = m2World_HashParts(b);
+    CHECK(pa.world == pb.world && pa.bodies == pb.bodies && pa.contacts == pb.contacts &&
+              pa.joints == pb.joints && pa.particles == pb.particles,
+          "twin worlds agree part by part");
+
+    // Nudge one subsystem in one twin: only its part splits (before
+    // any step folds the change into the rest).
+    m2BodyId bodies[4];
+    m2World_GetBodies(b, bodies, 4);
+    m2Body_SetLinearVelocity(bodies[1], (m2Vec2){0.5f, 0.0f});
+    pb = m2World_HashParts(b);
+    CHECK(pa.bodies != pb.bodies, "a body nudge splits the bodies part");
+    CHECK(pa.contacts == pb.contacts, "the contacts part holds");
+    CHECK(pa.particles == pb.particles, "the particles part holds");
+    CHECK(pa.world == pb.world, "the world part holds");
+
+    m2ParticleId drops[4];
+    m2World_GetParticles(a, drops, 4);
+    m2Particle_SetVelocity(drops[0], (m2Vec2){0.0f, 1.0f});
+    m2WorldHashParts pa2 = m2World_HashParts(a);
+    CHECK(pa2.particles != pa.particles, "a particle nudge splits the particles part");
+    CHECK(pa2.bodies == pa.bodies, "the bodies part holds against a particle nudge");
+
+    // The read-only law: a parts storm moves nothing.
+    uint64_t before = m2World_Hash(b);
+    for (int32_t i = 0; i < 50; ++i)
+    {
+        m2World_HashParts(b);
+    }
+    CHECK(m2World_Hash(b) == before, "the parts storm leaves the world untouched");
+    m2DestroyWorld(a);
+    m2DestroyWorld(b);
+}
+
 // The destruction road: a spinning crate shatters into four
 // triangles that carry its rigid velocity field, the wreck rolls
 // back out of existence, and the whole thing replays from tape.
@@ -1854,6 +1921,7 @@ int main(void)
     TestRuntimeGravity();
     TestDominance();
     TestShatterBody();
+    TestHashParts();
     TestLeftoverBasket();
     TestSmallBasket();
     TestDormancyMassAndExplosions();

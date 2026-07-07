@@ -6754,3 +6754,97 @@ int32_t m2World_ShatterBody(m2BodyId bodyId, const m2Polygon* pieces, int32_t pi
     m2JournalRecordShatter(world, bodyId, pieces, pieceCount, firstIndex1);
     return pieceCount;
 }
+
+// Subsystem hashes: independent seeds on purpose (the total is not
+// a function of the parts), each loop mirroring the gated hash's
+// coverage for its slice of the world.
+m2WorldHashParts m2World_HashParts(m2WorldId worldId)
+{
+    m2WorldHashParts parts;
+    memset(&parts, 0, sizeof(parts));
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return parts;
+    }
+
+    uint64_t h = M2_HASH_INIT;
+    h = m2Hash64(h, &world->stepCount, (int32_t)sizeof(world->stepCount));
+    h = m2Hash64(h, &world->gravity, (int32_t)sizeof(world->gravity));
+    parts.world = h;
+
+    h = M2_HASH_INIT;
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0)
+        {
+            continue;
+        }
+        h = m2Hash64(h, &world->transforms[i], (int32_t)sizeof(m2Transform));
+        h = m2Hash64(h, &world->linearVelocities[i], (int32_t)sizeof(m2Vec2));
+        h = m2Hash64(h, &world->angularVelocities[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->invMass[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->invInertia[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->localCenters[i], (int32_t)sizeof(m2Vec2));
+        h = m2Hash64(h, &world->types[i], (int32_t)sizeof(uint8_t));
+        h = m2Hash64(h, &world->asleep[i], (int32_t)sizeof(uint8_t));
+        h = m2Hash64(h, &world->sleepTimes[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->sleepStreak[i], 1);
+        h = m2Hash64(h, &world->bullets[i], (int32_t)sizeof(uint8_t));
+    }
+    parts.bodies = h;
+
+    h = M2_HASH_INIT;
+    h = m2Hash64(h, world->pairKeys, world->pairCount * (int32_t)sizeof(uint64_t));
+    h = m2Hash64(h, world->manifolds, world->pairCount * (int32_t)sizeof(m2Manifold));
+    parts.contacts = h;
+
+    h = M2_HASH_INIT;
+    for (int32_t i = 0; i < world->maxJointIndex; ++i)
+    {
+        if (world->jointAlive[i] == 0)
+        {
+            continue;
+        }
+        h = m2Hash64(h, &world->jointImpulse[i], (int32_t)sizeof(m2Vec2));
+        h = m2Hash64(h, &world->jointMotorImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointLowerImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointUpperImpulse[i], (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->jointSpringImpulse[i], (int32_t)sizeof(float));
+    }
+    parts.joints = h;
+
+    h = M2_HASH_INIT;
+    if (world->particleCapacity > 0)
+    {
+        h = m2Hash64(h, &world->particleCount, (int32_t)sizeof(int32_t));
+        for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+        {
+            h = m2Hash64(h, &world->particleAlive[i], 1);
+            if (world->particleAlive[i] == 0)
+            {
+                continue;
+            }
+            h = m2Hash64(h, &world->particlePositions[i], (int32_t)sizeof(m2Pos2));
+            h = m2Hash64(h, &world->particleVelocities[i], (int32_t)sizeof(m2Vec2));
+            h = m2Hash64(h, &world->particleFlags[i], (int32_t)sizeof(uint32_t));
+        }
+        h = m2Hash64(h, &world->particleSpringCount, (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringA,
+                     world->particleSpringCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringB,
+                     world->particleSpringCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleSpringRest,
+                     world->particleSpringCount * (int32_t)sizeof(float));
+        h = m2Hash64(h, &world->particleTriadCount, (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadA,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadB,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
+        h = m2Hash64(h, world->particleTriadC,
+                     world->particleTriadCount * (int32_t)sizeof(int32_t));
+    }
+    parts.particles = h;
+
+    return parts;
+}
