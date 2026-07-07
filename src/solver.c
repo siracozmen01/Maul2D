@@ -1997,6 +1997,27 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             float iB = world->invInertia[c->bodyB];
             float translation = c->baseC + c->axis.x * ds.x + c->axis.y * ds.y;
 
+            // Fresh effective mass per substep (reference b2 #981): the axial
+            // and perpendicular torque arms a1/s1 track the current
+            // separation, so recompute them and the effective masses here
+            // instead of leaving them frozen at prepare. A stressed slider
+            // whose geometry rotates within the step no longer solves against
+            // a stale mass and diverges. cross is linear, so the fresh arm is
+            // a1_prepare + cross(ds, axis); a2/s2 and the angle row do not
+            // depend on the separation. The prepare-time values are swapped
+            // back in at the end so the next substep recomputes from them.
+            float a1Frozen = c->a1;
+            float s1Frozen = c->s1;
+            float axialMassFrozen = c->axialMass;
+            float k11Frozen = c->k11;
+            float k12Frozen = c->k12;
+            c->a1 = a1Frozen + Cross(ds, c->axis);
+            c->s1 = s1Frozen + Cross(ds, c->perp);
+            float kaFresh = mA + mB + iA * c->a1 * c->a1 + iB * c->a2 * c->a2;
+            c->axialMass = kaFresh > 0.0f ? 1.0f / kaFresh : 0.0f;
+            c->k11 = mA + mB + iA * c->s1 * c->s1 + iB * c->s2 * c->s2;
+            c->k12 = iA * c->s1 + iB * c->s2;
+
             if ((c->flags & 1u) != 0 && c->axialMass > 0.0f)
             {
                 float cdot =
@@ -2019,7 +2040,10 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                     float impulseScale = 0.0f;
                     if (C > 0.0f)
                     {
-                        bias = C * invH;
+                        // Clamp the speculative distance to a safe span (b2
+                        // #981): a slider far inside its range cannot inject
+                        // a huge corrective velocity toward the limit.
+                        bias = m2MinF(C, 1.0f) * invH;
                     }
                     else if (useBias)
                     {
@@ -2045,7 +2069,8 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                     float impulseScale = 0.0f;
                     if (C > 0.0f)
                     {
-                        bias = C * invH;
+                        // Speculative distance clamped to a safe span (b2 #981).
+                        bias = m2MinF(C, 1.0f) * invH;
                     }
                     else if (useBias)
                     {
@@ -2105,6 +2130,13 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
                     wB += iB * LB;
                 }
             }
+            // Swap the prepare-time arms and masses back so the next substep
+            // rebuilds the fresh values from them, not from this substep's.
+            c->a1 = a1Frozen;
+            c->s1 = s1Frozen;
+            c->axialMass = axialMassFrozen;
+            c->k11 = k11Frozen;
+            c->k12 = k12Frozen;
             world->linearVelocities[c->bodyA] = vA;
             world->angularVelocities[c->bodyA] = wA;
             world->linearVelocities[c->bodyB] = vB;

@@ -11,6 +11,7 @@
 
 #include "maul2d/base.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1760,6 +1761,85 @@ static uint64_t JointSweepHash(void)
     return h;
 }
 
+static void TestPrismaticStressStability(void)
+{
+    // An over-constrained slider on a spinning base: two prismatic joints
+    // pull a dynamic body along fighting axes while the kinematic base
+    // rotates. With the effective mass frozen at prepare the slider builds
+    // up speed (peaked near 20 in this scene); the fresh per-substep mass
+    // (reference b2 #981) keeps it far lower. The peak stays well below the
+    // velocity cap, so this is the solver's own stability, not the cap. It
+    // must stay bounded, finite, and bit-identical across worker counts and
+    // a rollback.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.workerCount = wc == 0 ? 1 : 4;
+        def.bodyCapacity = 8;
+        def.jointCapacity = 8;
+        m2WorldId world = m2CreateWorld(&def);
+        m2BodyDef kd = m2DefaultBodyDef();
+        kd.type = m2_kinematicBody;
+        kd.angularVelocity = 8.0f;
+        m2BodyId base = m2CreateBody(world, &kd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Polygon bx = m2MakeBox(0.3f, 0.3f);
+        m2CreatePolygonShape(base, &sd, &bx);
+        m2BodyDef dd = m2DefaultBodyDef();
+        dd.type = m2_dynamicBody;
+        dd.position = (m2Pos2){1.5, 0.0};
+        m2BodyId body = m2CreateBody(world, &dd);
+        m2CreatePolygonShape(body, &sd, &bx);
+        m2PrismaticJointDef pj = m2DefaultPrismaticJointDef();
+        pj.bodyIdA = base;
+        pj.bodyIdB = body;
+        pj.localAxisA = (m2Vec2){1.0f, 0.0f};
+        pj.enableLimit = true;
+        pj.lowerTranslation = -5.0f;
+        pj.upperTranslation = 5.0f;
+        m2CreatePrismaticJoint(world, &pj);
+        m2PrismaticJointDef pj2 = pj;
+        pj2.localAxisA = (m2Vec2){0.0f, 1.0f};
+        m2CreatePrismaticJoint(world, &pj2);
+
+        float peak = 0.0f;
+        const int32_t snapAt = 150;
+        int32_t size = 0;
+        void* snap = NULL;
+        for (int32_t i = 0; i < 300; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+            m2Vec2 v = m2Body_GetLinearVelocity(body);
+            float av = m2Body_GetAngularVelocity(body);
+            float s = sqrtf(v.x * v.x + v.y * v.y) + fabsf(av);
+            if (s > peak)
+            {
+                peak = s;
+            }
+            CHECK(v.x == v.x && v.y == v.y && av == av, "the stressed slider stays finite");
+            if (i == snapAt)
+            {
+                size = m2World_SnapshotSize(world);
+                snap = malloc((size_t)size);
+                m2World_Snapshot(world, snap, size);
+            }
+        }
+        CHECK(peak < 15.0f, "the fresh effective mass keeps the stressed slider bounded");
+        uint64_t endHash = m2World_Hash(world);
+        CHECK(m2World_Restore(world, snap, size), "the stressed slider restores");
+        for (int32_t i = snapAt + 1; i < 300; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(world) == endHash, "the stressed slider replays bit for bit");
+        hashes[wc] = endHash;
+        free(snap);
+        m2DestroyWorld(world);
+    }
+    CHECK(hashes[0] == hashes[1], "the stressed slider is worker-count deterministic");
+}
+
 int main(void)
 {
     TestDistancePendulum();
@@ -1770,6 +1850,7 @@ int main(void)
     TestRevoluteLimit();
     TestPrismaticSlider();
     TestPrismaticMotor();
+    TestPrismaticStressStability();
     TestMotorRollback();
     TestWeldRigid();
     TestWheelSuspension();
