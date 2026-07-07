@@ -473,6 +473,51 @@ static void TestContactsAndAABBs(void)
     m2DestroyWorld(world);
 }
 
+static void TestContactForces(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    m2ShapeDef sd = m2DefaultShapeDef();
+
+    m2BodyId floor = AddBody(world, m2_staticBody, 0.0, 0.0);
+    m2Polygon slab = m2MakeBox(10.0f, 0.5f);
+    m2CreatePolygonShape(floor, &sd, &slab);
+    m2BodyId box = AddBody(world, m2_dynamicBody, 0.0, 0.9);
+    m2Polygon b = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(box, &sd, &b);
+    for (int i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    // Only the force arrows: a resting box pushes on the floor, so each
+    // contact point draws a normal-impulse arrow (plus a friction arrow,
+    // near zero here). Two segments per point.
+    Rec r = {0};
+    m2DebugDraw d = FullDraw(&r);
+    d.drawShapes = false;
+    d.drawJoints = false;
+    d.drawContacts = false;
+    d.drawAABBs = false;
+    d.drawContactForces = true;
+    d.forceScale = 5.0f;
+    m2World_Draw(world, &d);
+    CHECK(r.segments >= 2, "a resting box draws force arrows at its contact");
+    CHECK(r.nonFinite == 0, "every force arrow is finite");
+
+    // Off unless asked: FullDraw leaves drawContactForces false.
+    Rec r2 = {0};
+    m2DebugDraw d2 = FullDraw(&r2);
+    d2.drawShapes = false;
+    d2.drawJoints = false;
+    d2.drawContacts = false;
+    d2.drawAABBs = false;
+    m2World_Draw(world, &d2);
+    CHECK(r2.segments == 0, "force arrows are off unless asked");
+
+    m2DestroyWorld(world);
+}
+
 static void TestReadOnlyAndRepeatable(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -559,6 +604,7 @@ int main(void)
     TestJointDrawing();
     TestChainDrawing();
     TestContactsAndAABBs();
+    TestContactForces();
     TestReadOnlyAndRepeatable();
     TestNullAndEmpty();
 

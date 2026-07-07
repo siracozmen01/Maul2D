@@ -150,7 +150,11 @@ extern "C"
         bool drawShapes;
         bool drawJoints;
         bool drawContacts;
+        bool drawContactForces; // per-point normal and friction impulse arrows (b2 #988)
         bool drawAABBs;
+        /// Length in world units per unit of impulse for the force arrows;
+        /// <= 0 draws them at the raw impulse magnitude (scale 1).
+        float forceScale;
         void* context;
     } m2DebugDraw;
 

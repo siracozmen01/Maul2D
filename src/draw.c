@@ -21,6 +21,7 @@ enum
     m2_colorBullet = 0xd8755f,
     m2_colorJoint = 0x9f5fd8,
     m2_colorContact = 0xd85f5f,
+    m2_colorFriction = 0x5fd8d8,
     m2_colorAABB = 0x3f4f3f,
 };
 
@@ -194,6 +195,42 @@ void m2World_Draw(m2WorldId worldId, const m2DebugDraw* draw)
             {
                 draw->drawPoint(LocalToWorld(xfA, manifold->points[k].anchorA), 5.0f,
                                 m2_colorContact, draw->context);
+            }
+        }
+    }
+
+    if (draw->drawContactForces && draw->drawSegment != NULL)
+    {
+        // An arrow per contact point: the normal impulse along the world
+        // normal, the friction impulse along the tangent. The stored
+        // impulses are the warm-start payload the last solve settled on.
+        float scale = draw->forceScale > 0.0f ? draw->forceScale : 1.0f;
+        for (int32_t i = 0; i < world->pairCount; ++i)
+        {
+            if (world->pairTouching[i] == 0)
+            {
+                continue;
+            }
+            int32_t shapeA = (int32_t)(world->pairKeys[i] >> 32);
+            int32_t shapeB = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            if (world->shapeSensor[shapeA] != 0 || world->shapeSensor[shapeB] != 0)
+            {
+                continue;
+            }
+            const m2Manifold* manifold = &world->manifolds[i];
+            m2Transform xfA = world->transforms[world->shapeBody[shapeA]];
+            m2Vec2 n = {xfA.q.c * manifold->normal.x - xfA.q.s * manifold->normal.y,
+                        xfA.q.s * manifold->normal.x + xfA.q.c * manifold->normal.y};
+            m2Vec2 t = {-n.y, n.x};
+            for (int32_t k = 0; k < manifold->pointCount; ++k)
+            {
+                m2Pos2 p = LocalToWorld(xfA, manifold->points[k].anchorA);
+                float ni = manifold->points[k].normalImpulse * scale;
+                m2Pos2 nEnd = {p.x + (double)(n.x * ni), p.y + (double)(n.y * ni)};
+                draw->drawSegment(p, nEnd, m2_colorContact, draw->context);
+                float ti = manifold->points[k].tangentImpulse * scale;
+                m2Pos2 tEnd = {p.x + (double)(t.x * ti), p.y + (double)(t.y * ti)};
+                draw->drawSegment(p, tEnd, m2_colorFriction, draw->context);
             }
         }
     }
