@@ -43,8 +43,8 @@ static void ScenePyramid30(void)
         {
             m2BodyDef bd = m2DefaultBodyDef();
             bd.type = m2_dynamicBody;
-            bd.position = (m2Pos2){(double)col * 0.52 - (double)row * 0.26,
-                                   15.2 - (double)row * 0.5};
+            bd.position =
+                (m2Pos2){(double)col * 0.52 - (double)row * 0.26, 15.2 - (double)row * 0.5};
             m2ShapeDef sd = m2DefaultShapeDef();
             m2CreatePolygonShape(m2CreateBody(world, &bd), &sd, &crate);
         }
@@ -69,8 +69,8 @@ static void SceneSleepingCity(void)
         {
             m2BodyDef bd = m2DefaultBodyDef();
             bd.type = m2_dynamicBody;
-            bd.position = (m2Pos2){(double)col * 0.52 - (double)row * 0.26,
-                                   7.7 - (double)row * 0.5};
+            bd.position =
+                (m2Pos2){(double)col * 0.52 - (double)row * 0.26, 7.7 - (double)row * 0.5};
             m2ShapeDef sd = m2DefaultShapeDef();
             m2CreatePolygonShape(m2CreateBody(world, &bd), &sd, &crate);
         }
