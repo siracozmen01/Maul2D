@@ -1263,6 +1263,13 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
                 // solve; the linear budget rides lower.
                 c->motorSpeed = world->jointDamping[j];
                 c->lower = h * world->jointLength[j];
+                if (world->jointHertz2[j] > 0.0f)
+                {
+                    // Spring drive: a soft softness replaces the hard
+                    // correctionFactor bias in both rows (flag bit 32).
+                    c->flags |= 32u;
+                    c->softness = MakeSoft(world->jointHertz2[j], world->jointDamping2[j], h);
+                }
             }
             float k = iA + iB;
             c->axialMass = k > 0.0f ? 1.0f / k : 0.0f;
@@ -1799,12 +1806,25 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             float iA = world->invInertia[c->bodyA];
             float mB = world->invMass[c->bodyB];
             float iB = world->invInertia[c->bodyB];
+            bool motorSpring = (c->flags & 32u) != 0;
             {
                 float angC =
                     m2UnwindAngle(c->baseAngle + RelativeRotAngle(world->deltaRotations[c->bodyA],
                                                                   world->deltaRotations[c->bodyB]));
-                float angBias = invH * c->motorSpeed * angC;
-                float impulse = -c->axialMass * ((wB - wA) + angBias);
+                float impulse;
+                if (motorSpring)
+                {
+                    // Soft drive: the spring biasRate replaces the hard
+                    // correctionFactor, with its mass and impulse scales.
+                    float angBias = c->softness.biasRate * angC;
+                    impulse = -c->softness.massScale * c->axialMass * ((wB - wA) + angBias) -
+                              c->softness.impulseScale * c->motorImpulse;
+                }
+                else
+                {
+                    float angBias = invH * c->motorSpeed * angC;
+                    impulse = -c->axialMass * ((wB - wA) + angBias);
+                }
                 float old = c->motorImpulse;
                 c->motorImpulse = m2ClampF(old + impulse, -c->maxMotorImpulse, c->maxMotorImpulse);
                 impulse = c->motorImpulse - old;
@@ -1813,15 +1833,28 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
             }
             {
                 m2Vec2 sep = {c->baseCVec.x + ds.x, c->baseCVec.y + ds.y};
-                m2Vec2 bias = {invH * c->motorSpeed * sep.x, invH * c->motorSpeed * sep.y};
+                float biasMul = motorSpring ? c->softness.biasRate : invH * c->motorSpeed;
+                m2Vec2 bias = {biasMul * sep.x, biasMul * sep.y};
                 m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
                 m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
                 m2Vec2 cdot = {vrB.x - vrA.x + bias.x, vrB.y - vrA.y + bias.y};
                 // Solve K impulse = -cdot with the 2x2 from prepare.
                 float det = c->k11 * c->k22 - c->k12 * c->k12;
                 float invDet = det != 0.0f ? 1.0f / det : 0.0f;
-                m2Vec2 impulse = {-invDet * (c->k22 * cdot.x - c->k12 * cdot.y),
-                                  -invDet * (c->k11 * cdot.y - c->k12 * cdot.x)};
+                m2Vec2 raw = {-invDet * (c->k22 * cdot.x - c->k12 * cdot.y),
+                              -invDet * (c->k11 * cdot.y - c->k12 * cdot.x)};
+                m2Vec2 impulse;
+                if (motorSpring)
+                {
+                    impulse.x =
+                        c->softness.massScale * raw.x - c->softness.impulseScale * c->impulse.x;
+                    impulse.y =
+                        c->softness.massScale * raw.y - c->softness.impulseScale * c->impulse.y;
+                }
+                else
+                {
+                    impulse = raw;
+                }
                 m2Vec2 old = c->impulse;
                 c->impulse.x += impulse.x;
                 c->impulse.y += impulse.y;

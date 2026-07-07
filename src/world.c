@@ -5987,6 +5987,11 @@ m2JointId m2CreateMotorJoint(m2WorldId worldId, const m2MotorJointDef* def)
     world->jointMaxMotor[index] = def->maxTorque;
     world->jointLength[index] = def->maxForce;
     world->jointDamping[index] = def->correctionFactor;
+    // Spring drive rides the otherwise-idle secondary spring slots
+    // (jointHertz2/jointDamping2 are only read for the angular spring of
+    // the revolute and weld, which type 6 is not).
+    world->jointHertz2[index] = def->hertz;
+    world->jointDamping2[index] = def->dampingRatio;
     world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)

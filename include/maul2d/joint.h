@@ -166,6 +166,14 @@ extern "C"
         float maxForce;         // newtons
         float maxTorque;        // newton meters
         float correctionFactor; // [0,1] position correction per step
+        /// Spring drive toward the offsets. hertz 0 (the default) keeps
+        /// the classic hard servo at correctionFactor per step. hertz > 0
+        /// makes the drive a soft spring at that frequency and damping
+        /// ratio (correctionFactor is then ignored), still capped by
+        /// maxForce and maxTorque, for a smooth follow instead of a stiff
+        /// pull. One stiffness serves both the linear and the angular row.
+        float hertz;
+        float dampingRatio;
         uint64_t userData;
         bool collideConnected;
         int32_t internalValue;

@@ -179,6 +179,102 @@ static void TestDistanceRope(void)
     CHECK(hashes[0] == hashes[1], "rope is worker-count deterministic");
 }
 
+static void TestMotorSpring(void)
+{
+    // A spring-driven motor (hertz > 0): the platform eases to the
+    // offset instead of snapping, and still holds it against gravity.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 4.0};
+    m2BodyId anchor = m2CreateBody(world, &ad);
+    m2BodyDef pd = m2DefaultBodyDef();
+    pd.type = m2_dynamicBody;
+    pd.position = (m2Pos2){0.0, 4.0};
+    m2BodyId platform = m2CreateBody(world, &pd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon deck = m2MakeBox(0.5f, 0.1f);
+    m2CreatePolygonShape(platform, &sd, &deck);
+
+    m2MotorJointDef mj = m2DefaultMotorJointDef();
+    mj.bodyIdA = anchor;
+    mj.bodyIdB = platform;
+    mj.linearOffset = (m2Vec2){2.0f, 1.0f};
+    mj.maxForce = 500.0f;
+    mj.maxTorque = 50.0f;
+    mj.hertz = 3.0f; // soft spring drive
+    mj.dampingRatio = 1.0f;
+    m2CreateMotorJoint(world, &mj);
+
+    // Early: the soft drive is still easing in, not snapped to target.
+    for (int32_t i = 0; i < 6; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(platform).x < 1.5, "the soft spring eases in, not snaps");
+
+    for (int32_t i = 0; i < 240; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 at = m2Body_GetPosition(platform);
+    CHECK(at.x > 1.8 && at.x < 2.2, "the spring motor settles at the x offset");
+    CHECK(at.y > 4.7 && at.y < 5.2, "and holds y against gravity");
+    m2DestroyWorld(world);
+
+    // Determinism: snapshot round-trip and a worker-count twin, bit-exact.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef dw = m2DefaultWorldDef();
+        dw.bodyCapacity = 8;
+        dw.shapeCapacity = 8;
+        dw.jointCapacity = 4;
+        dw.workerCount = wc == 0 ? 1 : 4;
+        m2WorldId w = m2CreateWorld(&dw);
+        m2BodyId a = m2CreateBody(w, &ad);
+        m2BodyId p = m2CreateBody(w, &pd);
+        m2ShapeDef s2 = m2DefaultShapeDef();
+        m2Polygon d2 = m2MakeBox(0.5f, 0.1f);
+        m2CreatePolygonShape(p, &s2, &d2);
+        m2MotorJointDef mj2 = m2DefaultMotorJointDef();
+        mj2.bodyIdA = a;
+        mj2.bodyIdB = p;
+        mj2.linearOffset = (m2Vec2){2.0f, 1.0f};
+        mj2.maxForce = 500.0f;
+        mj2.maxTorque = 50.0f;
+        mj2.hertz = 3.0f;
+        mj2.dampingRatio = 1.0f;
+        m2CreateMotorJoint(w, &mj2);
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        int32_t size = m2World_SnapshotSize(w);
+        void* snap = malloc((size_t)size);
+        CHECK(m2World_Snapshot(w, snap, size) == size, "spring motor snapshot fits");
+        for (int32_t i = 0; i < 60; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        uint64_t after = m2World_Hash(w);
+        CHECK(m2World_Restore(w, snap, size), "spring motor snapshot restores");
+        for (int32_t i = 0; i < 60; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(w) == after, "spring motor replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(w);
+    }
+    CHECK(hashes[0] == hashes[1], "spring motor is worker-count deterministic");
+}
+
 static void TestRevoluteChain(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -1960,6 +2056,7 @@ int main(void)
     TestReactionGetters();
     TestCollideConnectedAndFilterJoint();
     TestMotorAndMouseJoints();
+    TestMotorSpring();
     TestDistanceRange();
     TestGearJoint();
     TestRatchetJoint();
