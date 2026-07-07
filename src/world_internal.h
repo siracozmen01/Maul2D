@@ -313,6 +313,10 @@ typedef struct m2World
 void* m2AllocZeroed(size_t bytes);
 void m2Free(void* memory);
 
+// One-time SIMD backend capability guard (src/core.c): aborts loudly if
+// an AVX2 binary is run on a CPU without AVX2.
+void m2VerifyCpuBackend(void);
+
 void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t bytes);
 void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size);
 typedef struct m2OpShatterHeader

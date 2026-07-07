@@ -20,16 +20,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-x64, os: ubuntu-latest, archive: tar }
-          - { name: windows-x64, os: windows-latest, archive: zip }
-          - { name: macos-arm64, os: macos-latest, archive: tar }
+          - { name: linux-x64, os: ubuntu-latest, archive: tar, simd: auto }
+          - { name: windows-x64, os: windows-latest, archive: zip, simd: auto }
+          - { name: macos-arm64, os: macos-latest, archive: tar, simd: auto }
+          # Portable x64 variants: the scalar backend is bit-identical to
+          # AVX2 (the scalar CI cell proves it) but runs on any x64,
+          # including pre-Haswell, at the cost of some speed. The default
+          # x64 packages above require AVX2 (Haswell 2013+).
+          - { name: linux-x64-portable, os: ubuntu-latest, archive: tar, simd: scalar }
+          - { name: windows-x64-portable, os: windows-latest, archive: zip, simd: scalar }
     env:
       TAG: ${{ github.ref_name }}
       PLATFORM: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
       - name: configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMAUL2D_SIMD=${{ matrix.simd }}
       - name: build
         run: cmake --build build --config Release -j 4
       - name: install

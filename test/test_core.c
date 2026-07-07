@@ -281,14 +281,34 @@ static void TestAllocatorHooks(void)
     m2SetAllocator(NULL, NULL); // back to defaults for the other tests
 }
 
+static void TestSimdBackend(void)
+{
+    // The backend name is one of the three known strings, and this test
+    // process is running, so the guard did not abort: the CPU supports
+    // whatever backend the binary carries.
+    const char* backend = m2GetSimdBackend();
+    CHECK(backend != NULL, "m2GetSimdBackend must not return NULL");
+    int known = strcmp(backend, "avx2") == 0 || strcmp(backend, "neon") == 0 ||
+                strcmp(backend, "scalar") == 0;
+    CHECK(known, "m2GetSimdBackend must name a known backend");
+    CHECK(m2CpuSupportsBackend() == 1, "this CPU must support the backend it is running");
+    // A world was creatable in the other suites, which means the create-time
+    // guard passed; confirm it is idempotent and does not disturb creation.
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    CHECK(m2CpuSupportsBackend() == 1, "the backend check is stable across calls");
+    m2DestroyWorld(world);
+}
+
 int main(void)
 {
     TestAllocatorHooks();
-    printf("maul2d version %d\n", m2GetVersion());
+    printf("maul2d version %d (%s backend)\n", m2GetVersion(), m2GetSimdBackend());
 
     TestAccuracy();
     TestFmaCanary();
     TestMinMaxSemantics();
+    TestSimdBackend();
 
     uint64_t hash = HashSweep();
     // CI extracts this line from every platform cell and requires equality.

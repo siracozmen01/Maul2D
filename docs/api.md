@@ -12,6 +12,16 @@ int32_t m2GetVersion(void);
 Library version, encoded as major * 10000 + minor * 100 + patch. Thread class: reader (callable from any thread, no world required).
 
 ```c
+const char* m2GetSimdBackend(void);
+```
+The SIMD backend this library was COMPILED against: "avx2", "neon" or "scalar". It is a compile-time choice, and every backend produces bit-identical results by contract; this only reports which kernels the binary carries. Thread class: reader.
+
+```c
+int32_t m2CpuSupportsBackend(void);
+```
+Whether the CPU running this call actually supports the compiled backend: 1 if it can run, 0 if not. An "avx2" binary needs AVX2 and FMA3 with OS wide-register support; "neon" is architectural on arm64 and "scalar" runs anywhere, so both return 1. Creating a world on a CPU that returns 0 aborts loudly rather than trapping on an illegal instruction; check this first for a graceful path, or build with -DMAUL2D_SIMD=scalar for a portable binary. Thread class: reader.
+
+```c
 void m2SetAllocator(m2AllocZeroedFn* allocZeroed, m2FreeFn* freeFn);
 ```
 
@@ -1178,4 +1188,4 @@ Fill ids with live particles in ascending slot order; returns the truthful total
 
 ---
 
-267 functions across 8 headers.
+269 functions across 8 headers.
