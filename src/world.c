@@ -33,7 +33,7 @@
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 34u
+#define M2_SNAPSHOT_VERSION 35u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -991,6 +991,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     int32_t shapeCap = def->shapeCapacity;
     int32_t jointCap = def->jointCapacity;
     world->gravity = def->gravity;
+    world->windVelocity = (m2Vec2){0.0f, 0.0f};
+    world->windLinearDrag = 0.0f; // wind is opt-in via m2World_SetWind
     world->bodyCapacity = cap;
     world->shapeCapacity = shapeCap;
     world->jointCapacity = jointCap;
@@ -1618,6 +1620,13 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         // it integrates alongside gravity and dies with the step.
         m2ApplyFluidVolumes(world, dt);
     }
+    if (world->windLinearDrag > 0.0f)
+    {
+        // Global wind, after buoyancy and before the solve (canonical
+        // fluid-then-wind order): an area-weighted linear drag toward
+        // the wind velocity into the same force accumulators.
+        m2ApplyWind(world, dt);
+    }
     m2UpdateIslandsAndWake(world);
     uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);
@@ -1674,6 +1683,9 @@ typedef struct m2SnapshotHeader
     int32_t maxBodyIndex;
     uint64_t stepCount;
     m2Vec2 gravity;
+    m2Vec2 windVelocity;
+    float windLinearDrag;
+    int32_t windReserved; // keeps the header 8-aligned and padding-free
     int32_t freeHead;
     int32_t freeTail;
     int32_t freeCount;
@@ -1688,7 +1700,7 @@ typedef struct m2SnapshotHeader
     int32_t shapeRetiredCount;
 } m2SnapshotHeader;
 
-_Static_assert(sizeof(m2SnapshotHeader) == 80, "snapshot header must be padding-free");
+_Static_assert(sizeof(m2SnapshotHeader) == 96, "snapshot header must be padding-free");
 
 static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int direction);
 
@@ -1896,6 +1908,9 @@ int32_t m2World_Snapshot(m2WorldId worldId, void* buffer, int32_t capacity)
     header.maxBodyIndex = world->maxBodyIndex;
     header.stepCount = world->stepCount;
     header.gravity = world->gravity;
+    header.windVelocity = world->windVelocity;
+    header.windLinearDrag = world->windLinearDrag;
+    header.windReserved = 0;
     header.freeHead = world->freeHead;
     header.freeTail = world->freeTail;
     header.freeCount = world->freeCount;
@@ -1936,6 +1951,8 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     world->maxBodyIndex = header.maxBodyIndex;
     world->stepCount = header.stepCount;
     world->gravity = header.gravity;
+    world->windVelocity = header.windVelocity;
+    world->windLinearDrag = header.windLinearDrag;
     world->freeHead = header.freeHead;
     world->freeTail = header.freeTail;
     world->freeCount = header.freeCount;
@@ -3516,6 +3533,54 @@ m2Vec2 m2World_GetGravity(m2WorldId worldId)
 {
     m2World* world = GetWorld(worldId);
     return world != NULL ? world->gravity : (m2Vec2){0.0f, 0.0f};
+}
+
+void m2World_SetWind(m2WorldId worldId, m2Vec2 velocity, float linearDrag)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL || !(linearDrag >= 0.0f) || !(velocity.x == velocity.x) ||
+        !(velocity.y == velocity.y))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->windVelocity.x == velocity.x && world->windVelocity.y == velocity.y &&
+        world->windLinearDrag == linearDrag)
+    {
+        return; // no-op, not journaled
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2Vec2 velocity;
+            float linearDrag;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.velocity = velocity;
+        record.linearDrag = linearDrag;
+        m2JournalRecord(world, m2_opSetWind, &record, (int32_t)sizeof(record));
+    }
+    world->windVelocity = velocity;
+    world->windLinearDrag = linearDrag;
+    // Deliberate deviation from SetGravity, which wakes every sleeper:
+    // wind is expected to change often (gusts), so waking all sleepers
+    // on each change would defeat sleeping. Asleep bodies are frozen and
+    // deterministically skip the wind pass, exactly as they skip gravity
+    // integration; a settled pile stays settled until roused otherwise.
+}
+
+void m2World_GetWind(m2WorldId worldId, m2Vec2* velocity, float* linearDrag)
+{
+    m2World* world = GetWorld(worldId);
+    if (velocity != NULL)
+    {
+        *velocity = world != NULL ? world->windVelocity : (m2Vec2){0.0f, 0.0f};
+    }
+    if (linearDrag != NULL)
+    {
+        *linearDrag = world != NULL ? world->windLinearDrag : 0.0f;
+    }
 }
 
 static int32_t ShapeSlotChecked(m2ShapeId shapeId, m2World** outWorld)

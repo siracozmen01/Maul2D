@@ -28,6 +28,8 @@ typedef struct m2World
 {
     // World-global mutable block (snapshot state).
     m2Vec2 gravity;
+    m2Vec2 windVelocity;  // ambient wind (b2 #980); snapshot state
+    float windLinearDrag; // 0 = wind off (opt-in); snapshot state
     uint64_t stepCount;
     uint8_t sleepEnabled; // world-wide sleep master switch (snapshot state)
     float lastInvH;       // inverse substep dt of the last solve (snapshot state)
@@ -401,6 +403,7 @@ enum
     m2_opCreateFluidVolume = 61,
     m2_opDestroyFluidVolume = 62,
     m2_opSetFluidSurface = 63,
+    m2_opSetWind = 64,
 };
 
 // Journaled joint parameter channel (op 16).
@@ -480,6 +483,7 @@ m2World* m2World_GetInternal(m2WorldId worldId);
 void m2UpdateParticlePairs(m2World* world);
 void m2SolveParticles(m2World* world, float dt);
 void m2ApplyFluidVolumes(m2World* world, float dt);
+void m2ApplyWind(m2World* world, float dt);
 #define M2_FVOLUME_COOKIE (M2_COOKIE ^ ((int32_t)sizeof(m2FluidVolumeDef) << 8) ^ 17)
 float m2ShapeArea(const struct m2ShapeGeometry* g);
 struct m2CastHitInternal

@@ -124,6 +124,15 @@ m2Vec2 m2World_GetGravity(m2WorldId worldId);
 ```
 
 ```c
+void m2World_SetWind(m2WorldId worldId, m2Vec2 velocity, float linearDrag);
+```
+Global wind: an ambient air velocity and a linear drag coefficient (>= 0). Each step every dynamic awake body feels a force equal to -linearDrag * shapeArea * (bodyVelocity - windVelocity), into the same accumulators as gravity, so bigger bodies catch more wind and everything drifts toward the wind. linearDrag 0 (the default) is off and costs nothing. Unlike gravity this does NOT wake sleepers: wind is meant to gust, and waking every sleeper each change would defeat sleeping. Regional wind is a density-0 fluid volume; this is the global case. Journaled and snapshot state. Thread class: writer / reader. Any out pointer may be NULL.
+
+```c
+void m2World_GetWind(m2WorldId worldId, m2Vec2* velocity, float* linearDrag);
+```
+
+```c
 m2ExplosionDef m2DefaultExplosionDef(void);
 ```
 
@@ -1197,4 +1206,4 @@ Fill ids with live particles in ascending slot order; returns the truthful total
 
 ---
 
-271 functions across 8 headers.
+273 functions across 8 headers.

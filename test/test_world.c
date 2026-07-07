@@ -2161,6 +2161,94 @@ static void TestMotionLocks(void)
     CHECK(hashes[0] == hashes[1], "motion locks are worker-count deterministic");
 }
 
+static m2BodyId WindBody(m2WorldId world, m2Pos2 pos)
+{
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = pos;
+    bd.gravityScale = 0.0f; // isolate wind from gravity in the test
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(body, &sd, &box);
+    return body;
+}
+
+static void TestWind(void)
+{
+    // With gravity off, a still body in a +x wind drifts downwind and its
+    // speed approaches the wind speed without passing it. Wind set before
+    // the first step, so the body stays awake and feels it (asleep bodies
+    // skip wind by design).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyId body = WindBody(world, (m2Pos2){0.0, 0.0});
+    m2World_SetWind(world, (m2Vec2){10.0f, 0.0f}, 2.0f);
+    m2Vec2 gv;
+    float gd;
+    m2World_GetWind(world, &gv, &gd);
+    CHECK(gv.x == 10.0f && gv.y == 0.0f && gd == 2.0f, "wind reads back as set");
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Vec2 vel = m2Body_GetLinearVelocity(body);
+    CHECK(m2Body_GetPosition(body).x > 0.5, "the body drifts downwind");
+    CHECK(vel.x > 0.0f && vel.x < 10.0f, "it accelerates toward but not past the wind speed");
+    CHECK(vel.y > -1.0e-4f && vel.y < 1.0e-4f, "a pure +x wind adds no y motion");
+    m2DestroyWorld(world);
+
+    // Wind off (the default) is a true no-op: a still body never drifts.
+    world = m2CreateWorld(&def);
+    m2BodyId calm = WindBody(world, (m2Pos2){3.0, 0.0});
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(calm).x == 3.0, "no wind, no drift");
+    m2DestroyWorld(world);
+
+    // Snapshot v35 round-trip carries the wind, worker-count twin bit-exact.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef d2 = m2DefaultWorldDef();
+        d2.gravity = (m2Vec2){0.0f, 0.0f};
+        d2.workerCount = wc == 0 ? 1 : 4;
+        m2WorldId w = m2CreateWorld(&d2);
+        m2BodyId b = WindBody(w, (m2Pos2){0.0, 0.0});
+        (void)b;
+        m2World_SetWind(w, (m2Vec2){0.0f, -8.0f}, 1.5f);
+        for (int32_t i = 0; i < 20; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        int32_t size = m2World_SnapshotSize(w);
+        void* snap = malloc((size_t)size);
+        CHECK(m2World_Snapshot(w, snap, size) == size, "the v35 snapshot fits");
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        uint64_t after = m2World_Hash(w);
+        CHECK(m2World_Restore(w, snap, size), "the v35 snapshot restores");
+        m2Vec2 rv;
+        float rd;
+        m2World_GetWind(w, &rv, &rd);
+        CHECK(rv.y == -8.0f && rd == 1.5f, "the restored world keeps its wind");
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(w) == after, "a windy timeline replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(w);
+    }
+    CHECK(hashes[0] == hashes[1], "wind is worker-count deterministic");
+}
+
 int main(void)
 {
     TestRuntimeGravity();
@@ -2185,6 +2273,7 @@ int main(void)
     TestRollbackIdentity();
     TestIdSemantics();
     TestMotionLocks();
+    TestWind();
 
     uint64_t hash = DeterminismSweep();
     printf("M2_WORLD_HASH=%016llx\n", (unsigned long long)hash);

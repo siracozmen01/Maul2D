@@ -1046,6 +1046,17 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             m2World_SetGravity(worldId, g.gravity);
             break;
         }
+        case m2_opSetWind:
+        {
+            struct WindOp
+            {
+                m2Vec2 velocity;
+                float linearDrag;
+            };
+            M2_READ_OP(struct WindOp, w);
+            m2World_SetWind(worldId, w.velocity, w.linearDrag);
+            break;
+        }
         case m2_opShapeParam:
         {
             struct ShapeParamOp

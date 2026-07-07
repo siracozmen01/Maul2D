@@ -401,3 +401,42 @@ void m2ApplyFluidVolumes(m2World* world, float dt)
         }
     }
 }
+
+// Global wind: an area-weighted linear drag toward the world wind
+// velocity, into the same force accumulators as gravity and buoyancy,
+// in canonical body order. Runs on the FULL shape area (wind acts in
+// air, not on a submerged part) and only on dynamic awake enabled
+// bodies; frozen bodies skip it exactly as they skip gravity. Uniform
+// wind is applied at the center of mass, so it adds no spurious torque.
+// The world gates on a positive drag before calling this (opt-in).
+void m2ApplyWind(m2World* world, float dt)
+{
+    if (dt <= 0.0f || !(world->windLinearDrag > 0.0f))
+    {
+        return;
+    }
+    float drag = world->windLinearDrag;
+    m2Vec2 wind = world->windVelocity;
+    for (int32_t b = 0; b < world->maxBodyIndex; ++b)
+    {
+        if (world->alive[b] == 0 || world->types[b] != (uint8_t)m2_dynamicBody ||
+            world->asleep[b] != 0 || world->disabled[b] != 0)
+        {
+            continue;
+        }
+        // Full shape area is rotation invariant; mass at unit density
+        // reuses the tested area math (circles, rounded polygons, caps).
+        float area = 0.0f;
+        for (int32_t s = world->bodyShapeHead[b]; s != -1; s = world->shapeNext[s])
+        {
+            area += m2ComputeShapeMass(&world->shapeGeometry[s], 1.0f).mass;
+        }
+        if (!(area > 0.0f))
+        {
+            continue;
+        }
+        m2Vec2 v = world->linearVelocities[b];
+        world->forces[b].x += -drag * area * (v.x - wind.x);
+        world->forces[b].y += -drag * area * (v.y - wind.y);
+    }
+}

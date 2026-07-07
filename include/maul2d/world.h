@@ -95,6 +95,19 @@ extern "C"
     void m2World_SetGravity(m2WorldId worldId, m2Vec2 gravity);
     m2Vec2 m2World_GetGravity(m2WorldId worldId);
 
+    /// Global wind: an ambient air velocity and a linear drag coefficient
+    /// (>= 0). Each step every dynamic awake body feels a force equal to
+    /// -linearDrag * shapeArea * (bodyVelocity - windVelocity), into the
+    /// same accumulators as gravity, so bigger bodies catch more wind and
+    /// everything drifts toward the wind. linearDrag 0 (the default) is
+    /// off and costs nothing. Unlike gravity this does NOT wake sleepers:
+    /// wind is meant to gust, and waking every sleeper each change would
+    /// defeat sleeping. Regional wind is a density-0 fluid volume; this is
+    /// the global case. Journaled and snapshot state. Thread class:
+    /// writer / reader. Any out pointer may be NULL.
+    void m2World_SetWind(m2WorldId worldId, m2Vec2 velocity, float linearDrag);
+    void m2World_GetWind(m2WorldId worldId, m2Vec2* velocity, float* linearDrag);
+
     /// World-wide sleep master switch, journaled. Disabling wakes
     /// every sleeping dynamic body (a sleeper must not outlive the
     /// rule that let it sleep). Thread class: writer / reader.
