@@ -2077,6 +2077,90 @@ static void TestDominance(void)
     m2DestroyWorld(world);
 }
 
+static m2BodyId LockedBody(m2WorldId world, m2MotionLocks locks)
+{
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){5.0, 10.0};
+    bd.linearVelocity = (m2Vec2){20.0f, 0.0f}; // free y falls under gravity
+    bd.angularVelocity = 8.0f;
+    bd.motionLocks = locks;
+    m2BodyId body = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(body, &sd, &box);
+    return body;
+}
+
+static void TestMotionLocks(void)
+{
+    // A locked axis holds still: the velocity is zeroed each substep so
+    // gravity, contacts and the initial shove cannot move the body along
+    // it, while the free axes behave normally.
+    m2WorldDef def = m2DefaultWorldDef();
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyId xLock = LockedBody(world, (m2MotionLocks){true, false, false});
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2Pos2 p = m2Body_GetPosition(xLock);
+    CHECK(p.x == 5.0, "a linear-X lock holds the x position exactly");
+    CHECK(p.y < 8.0, "the free y axis still falls under gravity");
+    CHECK(m2Body_GetLinearVelocity(xLock).x == 0.0f, "the locked-x velocity is zero");
+    m2MotionLocks got = m2Body_GetMotionLocks(xLock);
+    CHECK(got.linearX && !got.linearY && !got.angularZ, "the locks read back as set");
+    m2DestroyWorld(world);
+
+    // angularZ is the fixed-rotation lock: it aliases m2Body_IsFixedRotation.
+    world = m2CreateWorld(&def);
+    m2BodyId aLock = LockedBody(world, (m2MotionLocks){false, false, true});
+    CHECK(m2Body_IsFixedRotation(aLock), "angularZ lock reads as fixed rotation");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetAngularVelocity(aLock) == 0.0f, "the angular lock stops the spin");
+    m2DestroyWorld(world);
+
+    // Runtime setter through the journal, plus a snapshot round-trip on the
+    // v34 format and a worker-count twin: bit-exact.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef d2 = m2DefaultWorldDef();
+        d2.workerCount = wc == 0 ? 1 : 4;
+        m2WorldId w = m2CreateWorld(&d2);
+        m2BodyId b = LockedBody(w, (m2MotionLocks){false, false, false});
+        for (int32_t i = 0; i < 20; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        m2Body_SetMotionLocks(b, (m2MotionLocks){true, true, false}); // lock both linear axes now
+        int32_t size = m2World_SnapshotSize(w);
+        void* snap = malloc((size_t)size);
+        CHECK(m2World_Snapshot(w, snap, size) == size, "the v34 snapshot fits");
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        uint64_t after = m2World_Hash(w);
+        CHECK(m2World_Restore(w, snap, size), "the v34 snapshot restores");
+        // The locks survive the round-trip, so the frozen body stays frozen.
+        CHECK(m2Body_GetMotionLocks(b).linearX && m2Body_GetMotionLocks(b).linearY,
+              "the restored body keeps its locks");
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(w) == after, "a locked-body timeline replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(w);
+    }
+    CHECK(hashes[0] == hashes[1], "motion locks are worker-count deterministic");
+}
+
 int main(void)
 {
     TestRuntimeGravity();
@@ -2100,6 +2184,7 @@ int main(void)
     TestDefCookies();
     TestRollbackIdentity();
     TestIdSemantics();
+    TestMotionLocks();
 
     uint64_t hash = DeterminismSweep();
     printf("M2_WORLD_HASH=%016llx\n", (unsigned long long)hash);

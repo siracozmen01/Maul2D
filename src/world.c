@@ -33,7 +33,7 @@
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 33u
+#define M2_SNAPSHOT_VERSION 34u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1137,6 +1137,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(linearDampings, cap, float);
     M2_ALLOC(angularDampings, cap, float);
     M2_ALLOC(fixedRotations, cap, uint8_t);
+    M2_ALLOC(motionLocks, cap, uint8_t);
     M2_ALLOC(sleepEnables, cap, uint8_t);
     M2_ALLOC(forces, cap, m2Vec2);
     M2_ALLOC(torques, cap, float);
@@ -1388,6 +1389,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->linearDampings);
     m2Free(world->angularDampings);
     m2Free(world->fixedRotations);
+    m2Free(world->motionLocks);
     m2Free(world->sleepEnables);
     m2Free(world->forces);
     m2Free(world->torques);
@@ -1809,6 +1811,7 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
     M2_BLOCK(world->linearDampings, (size_t)world->bodyCapacity * sizeof(float));
     M2_BLOCK(world->angularDampings, (size_t)world->bodyCapacity * sizeof(float));
     M2_BLOCK(world->fixedRotations, (size_t)world->bodyCapacity * sizeof(uint8_t));
+    M2_BLOCK(world->motionLocks, (size_t)world->bodyCapacity * sizeof(uint8_t));
     M2_BLOCK(world->sleepEnables, (size_t)world->bodyCapacity * sizeof(uint8_t));
     M2_BLOCK(world->forces, (size_t)world->bodyCapacity * sizeof(m2Vec2));
     M2_BLOCK(world->torques, (size_t)world->bodyCapacity * sizeof(float));
@@ -2090,11 +2093,17 @@ m2BodyId m2CreateBody(m2WorldId worldId, const m2BodyDef* def)
     world->transforms[index].p = def->position;
     world->transforms[index].q = m2NormalizeRot(def->rotation);
     world->linearVelocities[index] = def->linearVelocity;
-    world->angularVelocities[index] = def->angularVelocity;
+    // A rotation-locked body never spins, so a fixed-rotation (or
+    // angularZ-locked) body drops any initial angular velocity at birth,
+    // the same as the runtime setter does.
+    world->angularVelocities[index] =
+        (def->fixedRotation || def->motionLocks.angularZ) ? 0.0f : def->angularVelocity;
     world->gravityScales[index] = def->gravityScale;
     world->linearDampings[index] = def->linearDamping;
     world->angularDampings[index] = def->angularDamping;
-    world->fixedRotations[index] = def->fixedRotation ? 1 : 0;
+    world->fixedRotations[index] = (def->fixedRotation || def->motionLocks.angularZ) ? 1 : 0;
+    world->motionLocks[index] =
+        (uint8_t)((def->motionLocks.linearX ? 1u : 0u) | (def->motionLocks.linearY ? 2u : 0u));
     world->sleepEnables[index] = def->enableSleep ? 1 : 0;
     world->forces[index] = (m2Vec2){0.0f, 0.0f};
     world->torques[index] = 0.0f;
@@ -2598,13 +2607,40 @@ void m2SetBodyParamInternal(m2World* world, m2BodyId bodyId, uint8_t param, floa
             world->sleepTimes[index] = 0.0f;
         }
         break;
-    default:
+    case 4:
         world->sleepEnables[index] = value != 0.0f ? 1 : 0;
         if (value == 0.0f && world->types[index] == (uint8_t)m2_dynamicBody)
         {
             world->asleep[index] = 0; // must not stay asleep illegally
             world->sleepTimes[index] = 0.0f;
         }
+        break;
+    case 5:
+        // Lock linear X: a locked axis holds still, so stop it now and
+        // wake the body (a frozen axis with leftover velocity is a lie,
+        // same discipline as fixed rotation).
+        world->motionLocks[index] = value != 0.0f ? (uint8_t)(world->motionLocks[index] | 1u)
+                                                  : (uint8_t)(world->motionLocks[index] & ~1u);
+        world->linearVelocities[index].x = value != 0.0f ? 0.0f : world->linearVelocities[index].x;
+        if (world->types[index] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[index] = 0;
+            world->sleepTimes[index] = 0.0f;
+        }
+        break;
+    case 6:
+        // Lock linear Y.
+        world->motionLocks[index] = value != 0.0f ? (uint8_t)(world->motionLocks[index] | 2u)
+                                                  : (uint8_t)(world->motionLocks[index] & ~2u);
+        world->linearVelocities[index].y = value != 0.0f ? 0.0f : world->linearVelocities[index].y;
+        if (world->types[index] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[index] = 0;
+            world->sleepTimes[index] = 0.0f;
+        }
+        break;
+    default:
+        M2_ASSERT(false); // unknown body param
         break;
     }
 }
@@ -2664,6 +2700,33 @@ bool m2Body_IsFixedRotation(m2BodyId bodyId)
     m2World* world = GetBodyWorld(bodyId);
     int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
     return index >= 0 && world->fixedRotations[index] != 0;
+}
+
+void m2Body_SetMotionLocks(m2BodyId bodyId, m2MotionLocks locks)
+{
+    m2World* world = GetBodyWorld(bodyId);
+    if (world != NULL)
+    {
+        // Each axis rides the journaled body-param channel so a replay
+        // reproduces the locks. angularZ is the fixed-rotation lock.
+        m2SetBodyParamInternal(world, bodyId, 5, locks.linearX ? 1.0f : 0.0f);
+        m2SetBodyParamInternal(world, bodyId, 6, locks.linearY ? 1.0f : 0.0f);
+        m2SetBodyParamInternal(world, bodyId, 3, locks.angularZ ? 1.0f : 0.0f);
+    }
+}
+
+m2MotionLocks m2Body_GetMotionLocks(m2BodyId bodyId)
+{
+    m2MotionLocks locks = {false, false, false};
+    m2World* world = GetBodyWorld(bodyId);
+    int32_t index = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (index >= 0)
+    {
+        locks.linearX = (world->motionLocks[index] & 1u) != 0;
+        locks.linearY = (world->motionLocks[index] & 2u) != 0;
+        locks.angularZ = world->fixedRotations[index] != 0;
+    }
+    return locks;
 }
 
 void m2Body_EnableSleep(m2BodyId bodyId, bool flag)

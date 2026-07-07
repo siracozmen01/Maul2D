@@ -32,6 +32,18 @@ extern "C"
         uint16_t generation;
     } m2BodyId;
 
+    /// Per-axis motion locks. A locked axis holds still: its velocity is
+    /// zeroed each substep, so contacts, joints, gravity and impulses
+    /// cannot move the body along it. linearX and linearY lock world-frame
+    /// translation; angularZ locks rotation and is the same lock as
+    /// fixedRotation (setting either locks the spin). All default false.
+    typedef struct m2MotionLocks
+    {
+        bool linearX;
+        bool linearY;
+        bool angularZ;
+    } m2MotionLocks;
+
     typedef struct m2BodyDef
     {
         m2BodyType type;
@@ -42,12 +54,13 @@ extern "C"
         float gravityScale;
         float linearDamping; // 1/(1+h*d) per substep, reference form
         float angularDamping;
-        bool fixedRotation; // never rotates: infinite rotational inertia
-        bool enableSleep;   // false = this body never sleeps
-        bool isEnabled;     // false = created dormant, outside simulation
-        int8_t dominance;   // higher wins contacts: it cannot be pushed by lower
-        bool isBullet;      // continuous collision vs non-bullets (topic-07)
-        uint64_t userData;  // opaque, copied verbatim through snapshots
+        m2MotionLocks motionLocks; // per-axis motion locks (angularZ aliases fixedRotation)
+        bool fixedRotation;        // never rotates: infinite rotational inertia
+        bool enableSleep;          // false = this body never sleeps
+        bool isEnabled;            // false = created dormant, outside simulation
+        int8_t dominance;          // higher wins contacts: it cannot be pushed by lower
+        bool isBullet;             // continuous collision vs non-bullets (topic-07)
+        uint64_t userData;         // opaque, copied verbatim through snapshots
         int32_t internalValue;
     } m2BodyDef;
 
@@ -190,6 +203,14 @@ extern "C"
     void m2Body_SetGravityScale(m2BodyId bodyId, float scale);
     void m2Body_SetFixedRotation(m2BodyId bodyId, bool flag);
     bool m2Body_IsFixedRotation(m2BodyId bodyId);
+
+    /// Set or read the per-axis motion locks. angularZ is the same lock as
+    /// fixedRotation, so setting it here also fixes the rotation (and
+    /// m2Body_IsFixedRotation reflects it). Changing a lock wakes the body
+    /// and, for angularZ, recomputes the inertia. Journaled and snapshot
+    /// state. Thread class: writer / reader.
+    void m2Body_SetMotionLocks(m2BodyId bodyId, m2MotionLocks locks);
+    m2MotionLocks m2Body_GetMotionLocks(m2BodyId bodyId);
     void m2Body_EnableSleep(m2BodyId bodyId, bool flag);
     bool m2Body_IsSleepEnabled(m2BodyId bodyId);
     void m2Body_ApplyAngularImpulse(m2BodyId bodyId, float impulse);

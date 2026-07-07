@@ -2401,6 +2401,19 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             world->linearVelocities[i].y = lvdy + linDamp * world->linearVelocities[i].y;
             world->angularVelocities[i] = h * world->invInertia[i] * world->torques[i] +
                                           angDamp * world->angularVelocities[i];
+            // Motion locks (reference b2 #950): a locked axis holds still,
+            // so its velocity is zeroed here, before the constraint solve,
+            // and again at integrate-positions below (angular is locked via
+            // the mass, invInertia = 0). Off the locked axes are untouched.
+            uint8_t locks = world->motionLocks[i];
+            if (locks & 1u)
+            {
+                world->linearVelocities[i].x = 0.0f;
+            }
+            if (locks & 2u)
+            {
+                world->linearVelocities[i].y = 0.0f;
+            }
         }
 
         WarmStartJoints(world, joints, jointCount);
@@ -2457,6 +2470,18 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
                     float ratio = maxW / m2AbsF(wv);
                     world->angularVelocities[i] = wv * ratio;
                 }
+            }
+            // Motion locks again at the point the position consumes the
+            // velocity (reference b2 #950): whatever the solve pushed along
+            // a locked axis, the body does not move along it.
+            uint8_t plocks = world->motionLocks[i];
+            if (plocks & 1u)
+            {
+                world->linearVelocities[i].x = 0.0f;
+            }
+            if (plocks & 2u)
+            {
+                world->linearVelocities[i].y = 0.0f;
             }
             // The center of mass is what the velocity moves; the origin
             // swings around it. With the COM on the origin both extra

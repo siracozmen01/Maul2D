@@ -465,6 +465,15 @@ bool m2Body_IsFixedRotation(m2BodyId bodyId);
 ```
 
 ```c
+void m2Body_SetMotionLocks(m2BodyId bodyId, m2MotionLocks locks);
+```
+Set or read the per-axis motion locks. angularZ is the same lock as fixedRotation, so setting it here also fixes the rotation (and m2Body_IsFixedRotation reflects it). Changing a lock wakes the body and, for angularZ, recomputes the inertia. Journaled and snapshot state. Thread class: writer / reader.
+
+```c
+m2MotionLocks m2Body_GetMotionLocks(m2BodyId bodyId);
+```
+
+```c
 void m2Body_EnableSleep(m2BodyId bodyId, bool flag);
 ```
 
@@ -1188,4 +1197,4 @@ Fill ids with live particles in ascending slot order; returns the truthful total
 
 ---
 
-269 functions across 8 headers.
+271 functions across 8 headers.
