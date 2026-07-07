@@ -256,10 +256,15 @@ blobs want higher strengths and big soft masses want the defaults.
 Water obeys the house laws: sensors are invisible to it, one-way
 chain platforms hold it only on their solid side, bodies push it and
 it pushes back (light things float, dense things sink), and anything
-it touches wakes up. The fluid pass is serial by design: its
-relaxation sweeps are order-dependent the way the reference's are,
-and a fifteen-hundred particle pool steps in well under a
-millisecond. Two speed facts are part of the contract: no particle
+it touches wakes up. The neighbor and body-contact builds thread
+deterministically (workers own static particle ranges and write
+disjoint staging slots, so any worker count reaches the same bits,
+which the fuzzer's threaded twin proves on random fluid worlds); the
+relaxation sweeps themselves stay serial because they are
+order-dependent the way the reference's are. Threading the build
+only pays above a few thousand particles, so small pools stay serial
+and skip the fork-join tax, and a fifteen-hundred particle pool
+steps in well under a millisecond either way. Two speed facts are part of the contract: no particle
 ever moves more than one diameter per step (the stability law; the
 reference raises its iteration count for fast flows, Maul pins one
 iteration and keeps the law explicit), and a world with live

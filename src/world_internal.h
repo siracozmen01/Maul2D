@@ -186,9 +186,18 @@ typedef struct m2World
     int32_t* particleBodyParticle;
     int32_t* particleBodyBody;
     float* particleBodyWeight;
-    m2Vec2* particleBodyNormal;   // outward, shape toward particle, world frame
-    float* particleBodyMass;      // pair-effective mass (reference formula)
-    int32_t particleBodyCapacity; // 4 per particle of capacity
+    m2Vec2* particleBodyNormal; // outward, shape toward particle, world frame
+    float* particleBodyMass;    // pair-effective mass (reference formula)
+    // Per-particle staging slabs for the parallel contact build:
+    // 4 candidate slots per particle, compacted serially in index
+    // order, so any worker count produces the same flat list.
+    int32_t* particleBodyStageBody;  // 4 * capacity, -1 = empty
+    float* particleBodyStageWeight;  // 4 * capacity
+    m2Vec2* particleBodyStageNormal; // 4 * capacity
+    float* particleBodyStageMass;    // 4 * capacity
+    int32_t* particlePairWorkCount;  // per-proxy pair counts (two-pass build)
+    int32_t* particleBodyStageDrops; // per-particle candidates beyond 4
+    int32_t particleBodyCapacity;    // 4 per particle of capacity
     int32_t particleBodyCount;
     int32_t particleBodyOverflow;
     uint64_t particlePoolFullCount; // cumulative quiet-full refusals

@@ -811,6 +811,48 @@ static void TestOverlapParticles(void)
     m2DestroyWorld(world);
 }
 
+// Threaded fluids: a pool past the threading threshold reaches the
+// same bits at one worker and at four. The build passes thread; the
+// choice is scheduling, never physics.
+static void TestFluidThreadingParity(void)
+{
+    uint64_t hashes[2];
+    int32_t workers[2] = {1, 4};
+    for (int32_t run = 0; run < 2; ++run)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.bodyCapacity = 16;
+        def.shapeCapacity = 16;
+        def.jointCapacity = 4;
+        def.particleCapacity = 6000;
+        def.workerCount = workers[run];
+        m2WorldId world = m2CreateWorld(&def);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2BodyDef fd = m2DefaultBodyDef();
+        fd.position = (m2Pos2){0.0, -0.2};
+        m2Polygon slab = m2MakeBox(6.0f, 0.2f);
+        m2CreatePolygonShape(m2CreateBody(world, &fd), &sd, &slab);
+        m2Polygon wall = m2MakeBox(0.2f, 4.0f);
+        m2BodyDef ld = m2DefaultBodyDef();
+        ld.position = (m2Pos2){-6.0, 3.8};
+        m2CreatePolygonShape(m2CreateBody(world, &ld), &sd, &wall);
+        m2BodyDef rd = m2DefaultBodyDef();
+        rd.position = (m2Pos2){6.0, 3.8};
+        m2CreatePolygonShape(m2CreateBody(world, &rd), &sd, &wall);
+        m2Polygon pool = m2MakeBox(5.6f, 2.0f);
+        int32_t made = m2World_FillPolygonWithParticles(world, &pool, (m2Pos2){0.0, 2.2},
+                                                        (m2Vec2){0.0f, 0.0f}, 0);
+        CHECK(made >= 4096, "the pool clears the threading threshold");
+        for (int32_t i = 0; i < 90; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        hashes[run] = m2World_Hash(world);
+        m2DestroyWorld(world);
+    }
+    CHECK(hashes[0] == hashes[1], "one worker and four reach the same fluid bits");
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -872,6 +914,7 @@ int main(void)
     TestParticleFill();
     TestJelly();
     TestOverlapParticles();
+    TestFluidThreadingParity();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

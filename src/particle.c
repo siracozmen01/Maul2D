@@ -31,6 +31,8 @@
 
 #include "maul2d/base.h"
 
+#include "platform_thread.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -211,17 +213,21 @@ void m2UpdateParticlePairs(m2World* world)
 #define M2_PARTICLE_CANDIDATES 32
 #define M2_FILL_COLUMNS        256
 
-static void UpdateParticleBodyContacts(m2World* world)
+static void StageBodyContactsRange(int32_t begin, int32_t end, void* ctx)
 {
-    world->particleBodyCount = 0;
-    world->particleBodyOverflow = 0;
+    m2World* world = (m2World*)ctx;
     float diameter = 2.0f * world->particleRadius;
     float stride = 0.75f * diameter;
     float particleMass = world->particleDensity * stride * stride;
     float invAm = 1.0f / particleMass;
 
-    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    for (int32_t i = begin; i < end; ++i)
     {
+        world->particleBodyStageDrops[i] = 0;
+        for (int32_t k = 0; k < 4; ++k)
+        {
+            world->particleBodyStageBody[i * 4 + k] = -1;
+        }
         if (world->particleAlive[i] == 0)
         {
             continue;
@@ -246,12 +252,11 @@ static void UpdateParticleBodyContacts(m2World* world)
                 int32_t shape = results[h];
                 if (world->shapeSensor[shape] != 0)
                 {
-                    continue; // sensors never touch water
+                    continue;
                 }
                 candidates[candidateCount++] = shape;
             }
         }
-        // Canonical order regardless of tree traversal.
         for (int32_t a = 1; a < candidateCount; ++a)
         {
             int32_t key = candidates[a];
@@ -264,6 +269,7 @@ static void UpdateParticleBodyContacts(m2World* world)
             candidates[j + 1] = key;
         }
 
+        int32_t kept = 0;
         for (int32_t c = 0; c < candidateCount; ++c)
         {
             int32_t shape = candidates[c];
@@ -276,8 +282,6 @@ static void UpdateParticleBodyContacts(m2World* world)
             const m2ShapeGeometry* g = &world->shapeGeometry[shape];
             if (g->type == m2_chainSegmentShape)
             {
-                // Ghost side: the sign law shared with contacts, rays
-                // and CCD; water on the pass-through side ignores it.
                 const m2ChainSegment* link = &g->chainSegment;
                 m2Vec2 e = {link->segment.point2.x - link->segment.point1.x,
                             link->segment.point2.y - link->segment.point1.y};
@@ -301,22 +305,20 @@ static void UpdateParticleBodyContacts(m2World* world)
             {
                 continue;
             }
+            if (kept >= 4)
+            {
+                world->particleBodyStageDrops[i] += 1;
+                continue;
+            }
             m2Vec2 n;
             if (dist.normal.x != 0.0f || dist.normal.y != 0.0f)
             {
-                n = Rotate(xf.q, dist.normal); // shape toward particle
+                n = Rotate(xf.q, dist.normal);
             }
             else
             {
-                // Deep overlap: push from the body origin, the mover
-                // kit's fallback; coincident falls back canonically.
                 float len = sqrtf(dx * dx + dy * dy);
                 n = len > 1.0e-6f ? (m2Vec2){dx / len, dy / len} : (m2Vec2){0.0f, 1.0f};
-            }
-            if (world->particleBodyCount >= world->particleBodyCapacity)
-            {
-                world->particleBodyOverflow += 1;
-                continue;
             }
             m2Vec2 lc = world->localCenters[body];
             m2Vec2 comArm = Rotate(xf.q, lc);
@@ -324,21 +326,55 @@ static void UpdateParticleBodyContacts(m2World* world)
             float rpy = dy - comArm.y;
             float rpn = rpx * n.y - rpy * n.x;
             float invM = invAm + world->invMass[body] + world->invInertia[body] * rpn * rpn;
+            int32_t slot = i * 4 + kept;
+            world->particleBodyStageBody[slot] = body;
+            world->particleBodyStageWeight[slot] = 1.0f - separation / diameter;
+            world->particleBodyStageNormal[slot] = n;
+            world->particleBodyStageMass[slot] = invM > 0.0f ? 1.0f / invM : 0.0f;
+            kept += 1;
+        }
+    }
+}
+
+// The barrier only pays above a few thousand particles (measured
+// crossover between 2048 and 8192); below it the pool stays home so
+// small pools never eat the fork-join tax. Either path writes the
+// same bytes, so the choice is pure performance, never physics.
+#define M2_FLUID_THREAD_MIN 4096
+
+static void UpdateParticleBodyContacts(m2World* world)
+{
+    world->particleBodyCount = 0;
+    world->particleBodyOverflow = 0;
+    m2ThreadPool* pool = world->particleCount >= M2_FLUID_THREAD_MIN ? world->pool : NULL;
+    m2ThreadPoolRun(pool, StageBodyContactsRange, world, world->maxParticleIndex);
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        world->particleBodyOverflow += world->particleBodyStageDrops[i];
+        for (int32_t k = 0; k < 4; ++k)
+        {
+            int32_t body = world->particleBodyStageBody[i * 4 + k];
+            if (body < 0)
+            {
+                break;
+            }
+            if (world->particleBodyCount >= world->particleBodyCapacity)
+            {
+                world->particleBodyOverflow += 1;
+                continue;
+            }
+            int32_t out = world->particleBodyCount;
+            world->particleBodyParticle[out] = i;
+            world->particleBodyBody[out] = body;
+            world->particleBodyWeight[out] = world->particleBodyStageWeight[i * 4 + k];
+            world->particleBodyNormal[out] = world->particleBodyStageNormal[i * 4 + k];
+            world->particleBodyMass[out] = world->particleBodyStageMass[i * 4 + k];
+            world->particleBodyCount = out + 1;
             if (world->types[body] == (uint8_t)m2_dynamicBody)
             {
-                // Water touching a body wakes it (reference semantics:
-                // every body impulse wakes); the pass runs before the
-                // island update so the wake spreads island-wide.
                 world->asleep[body] = 0;
                 world->sleepTimes[body] = 0.0f;
             }
-            int32_t k = world->particleBodyCount;
-            world->particleBodyParticle[k] = i;
-            world->particleBodyBody[k] = body;
-            world->particleBodyWeight[k] = 1.0f - separation / diameter;
-            world->particleBodyNormal[k] = n;
-            world->particleBodyMass[k] = invM > 0.0f ? 1.0f / invM : 0.0f;
-            world->particleBodyCount = k + 1;
         }
     }
 }
