@@ -1731,6 +1731,242 @@ static void TestReactionAllTypes(void)
     m2DestroyWorld(world);
 }
 
+// ---- Round 9: the newest surfaces. The velocity cap and belt-wake fix
+// (slice 117), the SIMD guard (119), the centroid inertia (121) and the
+// fresh prismatic mass (122) each get an adversary. Pass/fail attacks;
+// they do not feed the gated chaos hash. ----
+
+static void TestVelocityCapUnderRollback(void)
+{
+    // The reference velocity cap bounds an absurd speed, and does it
+    // bit-for-bit under rollback and across worker counts.
+    uint64_t caps[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.workerCount = wc == 0 ? 1 : 4;
+        m2WorldId world = m2CreateWorld(&def);
+        m2BodyId body = AddBox(world, 0.0, 100.0);
+        m2Body_SetLinearVelocity(body, (m2Vec2){70000.0f, 4000.0f});
+        m2Body_SetAngularVelocity(body, 9000.0f);
+        int32_t size = m2World_SnapshotSize(world);
+        void* snap = malloc((size_t)size);
+        m2World_Snapshot(world, snap, size);
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        m2Vec2 v = m2Body_GetLinearVelocity(body);
+        float av = m2Body_GetAngularVelocity(body);
+        CHECK(v.x * v.x + v.y * v.y < 460.0f * 460.0f, "the cap bounds an absurd linear speed");
+        CHECK(av < 200.0f && av > -200.0f, "the cap bounds an absurd spin");
+        CHECK(v.x == v.x && v.y == v.y && av == av, "the capped step leaves no NaN");
+        uint64_t after = m2World_Hash(world);
+        CHECK(m2World_Restore(world, snap, size), "the capped world restores");
+        m2World_Step(world, 1.0f / 60.0f, 4);
+        CHECK(m2World_Hash(world) == after, "the capped step replays bit for bit");
+        caps[wc] = after;
+        free(snap);
+        m2DestroyWorld(world);
+    }
+    CHECK(caps[0] == caps[1], "the cap is worker-count deterministic");
+}
+
+static void TestBeltWakeReplayStorm(void)
+{
+    // A tangent-speed change wakes riders, and that wake now rides the
+    // journaled channel so a replay reproduces it. A rider left asleep on
+    // replay would diverge (the exact bug slice 117 fixed).
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, 0.0};
+    m2BodyId belt = m2CreateBody(world, &fd);
+    m2ShapeDef bsd = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(4.0f, 0.25f);
+    m2ShapeId beltShape = m2CreatePolygonShape(belt, &bsd, &slab);
+    m2Shape_SetTangentSpeed(beltShape, 0.0f);
+    m2BodyId rider = AddBox(world, 0.0, 0.65);
+    for (int32_t i = 0; i < 400 && m2Body_IsAwake(rider); ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(!m2Body_IsAwake(rider), "the rider sleeps on the stopped belt");
+    int32_t cap = 1 << 18;
+    void* tape = malloc((size_t)cap);
+    CHECK(m2World_StartJournal(world, tape, cap), "the belt tape starts");
+    m2Shape_SetTangentSpeed(beltShape, 3.0f);
+    CHECK(m2Body_IsAwake(rider), "starting the belt wakes the sleeping rider");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t used = m2World_StopJournal(world);
+    CHECK(used > 0, "the belt tape closed");
+    uint64_t recorded = m2World_Hash(world);
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, tape, used), "the belt tape replays");
+    CHECK(m2World_Hash(fresh) == recorded, "the belt-wake side effect replays onto the same bits");
+    m2DestroyWorld(fresh);
+    m2DestroyWorld(world);
+    free(tape);
+}
+
+static void TestNewFeatureStorm(void)
+{
+    // The newest features colliding: a buoyancy pool, a jelly blob and a
+    // crate shattered into the mix, bit-exact from a mid-storm snapshot
+    // and identical across worker counts.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.workerCount = wc == 0 ? 1 : 4;
+        def.bodyCapacity = 32;
+        def.shapeCapacity = 32;
+        def.jointCapacity = 4;
+        def.particleCapacity = 128;
+        def.fluidVolumeCapacity = 2;
+        m2WorldId world = m2CreateWorld(&def);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2BodyDef fd = m2DefaultBodyDef();
+        fd.position = (m2Pos2){0.0, -3.0};
+        m2Polygon slab = m2MakeBox(8.0f, 0.5f);
+        m2CreatePolygonShape(m2CreateBody(world, &fd), &sd, &slab);
+        m2FluidVolumeDef pool = m2DefaultFluidVolumeDef();
+        pool.regionLower = (m2Pos2){-8.0, -3.0};
+        pool.regionUpper = (m2Pos2){8.0, 0.0};
+        pool.surface = 0.0;
+        pool.density = 1.2f;
+        m2World_CreateFluidVolume(world, &pool);
+        m2Polygon blob = m2MakeBox(0.3f, 0.3f);
+        m2World_FillPolygonWithParticles(world, &blob, (m2Pos2){-2.0, 1.0}, (m2Vec2){0.0f, 0.0f},
+                                         m2_springParticle | m2_elasticParticle);
+        m2BodyDef cd = m2DefaultBodyDef();
+        cd.type = m2_dynamicBody;
+        cd.position = (m2Pos2){2.0, 3.0};
+        m2BodyId crate = m2CreateBody(world, &cd);
+        m2Polygon cbox = m2MakeBox(0.5f, 0.5f);
+        m2CreatePolygonShape(crate, &sd, &cbox);
+        for (int32_t i = 0; i < 20; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        m2Vec2 tA[3] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}};
+        m2Vec2 tB[3] = {{-0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+        m2Polygon pieces[2] = {m2MakePolygon(tA, 3, 0.0f), m2MakePolygon(tB, 3, 0.0f)};
+        m2BodyId out[2];
+        m2World_ShatterBody(crate, pieces, 2, out, 2);
+        for (int32_t i = 0; i < 10; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        int32_t size = m2World_SnapshotSize(world);
+        void* snap = malloc((size_t)size);
+        m2World_Snapshot(world, snap, size);
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        uint64_t after = m2World_Hash(world);
+        CHECK(m2World_Restore(world, snap, size), "the newest-feature storm restores");
+        for (int32_t i = 0; i < 30; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(world) == after, "the newest-feature storm replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(world);
+    }
+    CHECK(hashes[0] == hashes[1], "the newest-feature storm is worker-count deterministic");
+}
+
+static void TestOffCenterInertiaPrismatic(void)
+{
+    // An off-center-COM body (its shape sits well off the body origin, so
+    // the centroid inertia of slice 121 is what governs its spin) driven
+    // on a stressed prismatic (the fresh per-substep mass of slice 122):
+    // finite, rollback bit-exact, and worker-count deterministic.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.workerCount = wc == 0 ? 1 : 4;
+        def.bodyCapacity = 8;
+        def.jointCapacity = 4;
+        m2WorldId world = m2CreateWorld(&def);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2BodyDef kd = m2DefaultBodyDef();
+        kd.type = m2_kinematicBody;
+        kd.angularVelocity = 6.0f;
+        m2BodyId base = m2CreateBody(world, &kd);
+        m2Polygon bx = m2MakeBox(0.3f, 0.3f);
+        m2CreatePolygonShape(base, &sd, &bx);
+        m2BodyDef dd = m2DefaultBodyDef();
+        dd.type = m2_dynamicBody;
+        dd.position = (m2Pos2){1.5, 0.0};
+        m2BodyId body = m2CreateBody(world, &dd);
+        m2Circle off = {{3.0f, 0.0f}, 0.4f};
+        m2CreateCircleShape(body, &sd, &off);
+        m2PrismaticJointDef pj = m2DefaultPrismaticJointDef();
+        pj.bodyIdA = base;
+        pj.bodyIdB = body;
+        pj.localAxisA = (m2Vec2){1.0f, 0.0f};
+        pj.enableLimit = true;
+        pj.lowerTranslation = -4.0f;
+        pj.upperTranslation = 4.0f;
+        m2CreatePrismaticJoint(world, &pj);
+        m2PrismaticJointDef pj2 = pj;
+        pj2.localAxisA = (m2Vec2){0.0f, 1.0f};
+        m2CreatePrismaticJoint(world, &pj2);
+        int32_t size = 0;
+        void* snap = NULL;
+        for (int32_t i = 0; i < 120; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+            m2Vec2 v = m2Body_GetLinearVelocity(body);
+            float av = m2Body_GetAngularVelocity(body);
+            CHECK(v.x == v.x && v.y == v.y && av == av,
+                  "the off-center stressed body stays finite");
+            if (i == 60)
+            {
+                size = m2World_SnapshotSize(world);
+                snap = malloc((size_t)size);
+                m2World_Snapshot(world, snap, size);
+            }
+        }
+        uint64_t after = m2World_Hash(world);
+        CHECK(m2World_Restore(world, snap, size), "the off-center stressed body restores");
+        for (int32_t i = 61; i < 120; ++i)
+        {
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(world) == after, "the off-center stressed body replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(world);
+    }
+    CHECK(hashes[0] == hashes[1], "the off-center stressed body is worker-count deterministic");
+}
+
+static void TestSimdBackendStable(void)
+{
+    // The SIMD diagnostics (slice 119) are stable and the create-time
+    // guard is idempotent: many worlds, the same answers, no drift.
+    const char* backend = m2GetSimdBackend();
+    CHECK(backend != NULL, "the backend name is never NULL");
+    int32_t sup = m2CpuSupportsBackend();
+    CHECK(sup == 1, "the running CPU supports its own backend");
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        m2WorldId world = m2CreateWorld(&def);
+        CHECK(strcmp(m2GetSimdBackend(), backend) == 0, "the backend name never drifts");
+        CHECK(m2CpuSupportsBackend() == sup, "the support answer never drifts");
+        m2DestroyWorld(world);
+    }
+}
+
 int main(void)
 {
     TestStaleIds();
@@ -1764,6 +2000,13 @@ int main(void)
     TestMachineryResurrection();
     TestRatchetMotorWar();
     TestDecomposeAdversaries();
+
+    // Round 9: the newest surfaces.
+    TestVelocityCapUnderRollback();
+    TestBeltWakeReplayStorm();
+    TestNewFeatureStorm();
+    TestOffCenterInertiaPrismatic();
+    TestSimdBackendStable();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
