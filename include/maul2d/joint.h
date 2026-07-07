@@ -48,6 +48,14 @@ extern "C"
         float maxLength; // <= 0 means unbounded
         float hertz;     // 0 = stiff default
         float dampingRatio;
+        /// Spring toggle for the rope and rod cases. Default false keeps
+        /// the classic joint: rigid at length when hertz is 0, a soft
+        /// spring toward length when hertz > 0, with the range clamping
+        /// either way. Set true with hertz 0 and a maxLength to get a
+        /// slack rope (free until taut, no pull when closer), or with a
+        /// minLength to get a strut (free until squeezed). With hertz > 0
+        /// it behaves the same as false (a soft spring plus the range).
+        bool enableSpring;
         uint64_t userData;     // opaque, journaled through snapshots
         bool collideConnected; // default false: jointed bodies pass through
         int32_t internalValue;

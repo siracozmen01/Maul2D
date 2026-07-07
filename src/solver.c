@@ -1229,6 +1229,14 @@ static int32_t PrepareJoints(m2World* world, m2JointConstraint* joints, float h)
                 // rows run on the stiff default, reference-style.
                 c->springSoftness = MakeSoft(60.0f, 2.0f, h);
             }
+            if ((c->flags & 16u) != 0 && world->jointHertz[j] == 0.0f)
+            {
+                // enableSpring with zero stiffness is a free rope or rod:
+                // skip the rest-length row so only the limits act, and
+                // drop any rest impulse so warm start carries nothing.
+                c->flags |= 32u;
+                c->impulse.x = 0.0f;
+            }
             float crA = Cross(c->rA, c->axis);
             float crB = Cross(c->rB, c->axis);
             float k = mA + mB + iA * crA * crA + iB * crB * crB;
@@ -1560,22 +1568,27 @@ static void SolveJoints(m2World* world, m2JointConstraint* joints, int32_t count
 
         if (c->type == 0)
         {
-            float bias = 0.0f;
-            float massScale = 1.0f;
-            float impulseScale = 0.0f;
-            if (useBias)
+            if ((c->flags & 32u) == 0)
             {
-                float C = c->baseC + ds.x * c->axis.x + ds.y * c->axis.y;
-                bias = c->softness.massScale * c->softness.biasRate * C;
-                massScale = c->softness.massScale;
-                impulseScale = c->softness.impulseScale;
+                // Rest-length row (skipped for a free rope or rod).
+                float bias = 0.0f;
+                float massScale = 1.0f;
+                float impulseScale = 0.0f;
+                if (useBias)
+                {
+                    float C = c->baseC + ds.x * c->axis.x + ds.y * c->axis.y;
+                    bias = c->softness.massScale * c->softness.biasRate * C;
+                    massScale = c->softness.massScale;
+                    impulseScale = c->softness.impulseScale;
+                }
+                m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
+                m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
+                float cdot = (vrB.x - vrA.x) * c->axis.x + (vrB.y - vrA.y) * c->axis.y;
+                float impulse =
+                    -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
+                c->impulse.x += impulse;
+                ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
             }
-            m2Vec2 vrA = {vA.x - wA * c->rA.y, vA.y + wA * c->rA.x};
-            m2Vec2 vrB = {vB.x - wB * c->rB.y, vB.y + wB * c->rB.x};
-            float cdot = (vrB.x - vrA.x) * c->axis.x + (vrB.y - vrA.y) * c->axis.y;
-            float impulse = -c->axialMass * (massScale * cdot + bias) - impulseScale * c->impulse.x;
-            c->impulse.x += impulse;
-            ApplyJointImpulse(world, c, (m2Vec2){impulse * c->axis.x, impulse * c->axis.y});
 
             if ((c->flags & 8) != 0)
             {

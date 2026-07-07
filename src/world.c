@@ -4744,6 +4744,10 @@ m2JointId m2CreateDistanceJoint(m2WorldId worldId, const m2DistanceJointDef* def
     // means unbounded, mirroring "length <= 0 derives".
     world->jointLower[index] = def->minLength > 0.0f ? def->minLength : 0.0f;
     world->jointUpper[index] = def->maxLength > 0.0f ? def->maxLength : 3.4e38f;
+    if (def->enableSpring)
+    {
+        world->jointFlags[index] |= 16u; // rope/rod: gate the rest-length row
+    }
     world->jointUserData[index] = def->userData;
     world->jointCollide[index] = def->collideConnected ? 1 : 0;
     if (def->collideConnected == false)

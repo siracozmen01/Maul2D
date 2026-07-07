@@ -80,6 +80,105 @@ static void TestDistancePendulum(void)
     m2DestroyWorld(world);
 }
 
+static void TestDistanceRope(void)
+{
+    // enableSpring with zero stiffness and a maxLength is a slack rope:
+    // the ball falls freely until the rope goes taut at maxLength, then
+    // hangs there. A rigid joint (the default) would pin it at length.
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+
+    m2BodyDef ad = m2DefaultBodyDef();
+    ad.position = (m2Pos2){0.0, 10.0};
+    m2BodyId anchor = m2CreateBody(world, &ad);
+    m2BodyId ball = AddBall(world, 0.0, 9.0, 0.2f); // one below the anchor
+
+    m2DistanceJointDef jd = m2DefaultDistanceJointDef();
+    jd.bodyIdA = anchor;
+    jd.bodyIdB = ball;
+    jd.enableSpring = true; // rope: free until a limit bites
+    jd.hertz = 0.0f;
+    jd.maxLength = 3.0f;
+    m2JointId rope = m2CreateDistanceJoint(world, &jd);
+    CHECK(m2Joint_IsValid(rope), "rope joint created");
+
+    // Early: still falling, so it has dropped below its start. A rigid
+    // joint would have pinned it at the spawn length of one.
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(ball).y < 8.5, "the slack rope lets the ball fall freely");
+
+    for (int32_t i = 0; i < 300; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double d = sqrt(Distance(m2Body_GetPosition(anchor), m2Body_GetPosition(ball)));
+    CHECK(d > 2.9 && d < 3.05, "the taut rope hangs at maxLength, not past it");
+    m2DestroyWorld(world);
+
+    // Contrast: the default joint is a rigid rod that holds the spawn length.
+    world = m2CreateWorld(&def);
+    anchor = m2CreateBody(world, &ad);
+    ball = AddBall(world, 0.0, 9.0, 0.2f);
+    m2DistanceJointDef rd = m2DefaultDistanceJointDef();
+    rd.bodyIdA = anchor;
+    rd.bodyIdB = ball; // default: rigid at the spawn length of one
+    m2CreateDistanceJoint(world, &rd);
+    for (int32_t i = 0; i < 100; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    double rigid = sqrt(Distance(m2Body_GetPosition(anchor), m2Body_GetPosition(ball)));
+    CHECK(rigid < 1.1, "the rigid joint holds the spawn length");
+    m2DestroyWorld(world);
+
+    // Determinism: snapshot round-trip and a worker-count twin, bit-exact.
+    uint64_t hashes[2];
+    for (int32_t wc = 0; wc < 2; ++wc)
+    {
+        m2WorldDef dw = m2DefaultWorldDef();
+        dw.bodyCapacity = 8;
+        dw.shapeCapacity = 8;
+        dw.workerCount = wc == 0 ? 1 : 4;
+        m2WorldId w = m2CreateWorld(&dw);
+        m2BodyId a = m2CreateBody(w, &ad);
+        m2BodyId b = AddBall(w, 0.0, 9.0, 0.2f);
+        m2DistanceJointDef j2 = m2DefaultDistanceJointDef();
+        j2.bodyIdA = a;
+        j2.bodyIdB = b;
+        j2.enableSpring = true;
+        j2.hertz = 0.0f;
+        j2.maxLength = 3.0f;
+        m2CreateDistanceJoint(w, &j2);
+        for (int32_t i = 0; i < 40; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        int32_t size = m2World_SnapshotSize(w);
+        void* snap = malloc((size_t)size);
+        CHECK(m2World_Snapshot(w, snap, size) == size, "rope snapshot fits");
+        for (int32_t i = 0; i < 60; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        uint64_t after = m2World_Hash(w);
+        CHECK(m2World_Restore(w, snap, size), "rope snapshot restores");
+        for (int32_t i = 0; i < 60; ++i)
+        {
+            m2World_Step(w, 1.0f / 60.0f, 4);
+        }
+        CHECK(m2World_Hash(w) == after, "rope timeline replays bit for bit");
+        hashes[wc] = after;
+        free(snap);
+        m2DestroyWorld(w);
+    }
+    CHECK(hashes[0] == hashes[1], "rope is worker-count deterministic");
+}
+
 static void TestRevoluteChain(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -1843,6 +1942,7 @@ static void TestPrismaticStressStability(void)
 int main(void)
 {
     TestDistancePendulum();
+    TestDistanceRope();
     TestRevoluteChain();
     TestJointsCoupleIslands();
     TestJointRollback();
