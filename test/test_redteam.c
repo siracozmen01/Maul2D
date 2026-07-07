@@ -42,6 +42,422 @@ static m2BodyId AddBox(m2WorldId world, double x, double y)
     return body;
 }
 
+// ---- Round 8: fluids, machinery, jelly, decompose -----------------------
+
+// Stale particle ids across slot rebirth: the generation discipline
+// holds for water exactly as it does for bodies.
+static void TestParticleStaleIds(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.particleCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2ParticleId ids[8];
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        ids[i] = m2World_EmitParticle(world, (m2Pos2){(double)i, 0.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    }
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        m2World_DestroyParticle(ids[i]);
+    }
+    // Drain the FIFO so every original slot is reborn once.
+    m2ParticleId reborn[8];
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        reborn[i] = m2World_EmitParticle(world, (m2Pos2){0.0, (double)i}, (m2Vec2){0.0f, 0.0f}, 0);
+        CHECK(m2Particle_IsValid(reborn[i]), "reborn slots are live");
+    }
+    for (int32_t i = 0; i < 8; ++i)
+    {
+        CHECK(!m2Particle_IsValid(ids[i]), "dead ids stay dead after rebirth");
+        m2Pos2 p = m2Particle_GetPosition(ids[i]);
+        CHECK(p.x == 0.0 && p.y == 0.0, "stale reads return zero, never the tenant's data");
+        CHECK(m2Particle_GetFlags(ids[i]) == 0, "stale flags read zero");
+    }
+    m2DestroyWorld(world);
+}
+
+// A jelly blob under a rollback storm: snapshot mid-flight, mutilate
+// the future (kill net particles, shove the rest), restore, and the
+// timeline replays bit for bit including the nets.
+static void TestJellyRollbackStorm(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.particleCapacity = 128;
+    m2WorldId world = m2CreateWorld(&def);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.2};
+    m2Polygon slab = m2MakeBox(6.0f, 0.2f);
+    m2CreatePolygonShape(m2CreateBody(world, &fd), &sd, &slab);
+    m2Polygon blob = m2MakeBox(0.25f, 0.25f);
+    m2World_FillPolygonWithParticles(world, &blob, (m2Pos2){0.0, 0.8}, (m2Vec2){0.0f, 0.0f},
+                                     m2_springParticle | m2_elasticParticle);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    m2World_Snapshot(world, snap, size);
+
+    // The doomed future: tear holes in the net and shove survivors.
+    m2ParticleId ids[128];
+    int32_t n = m2World_GetParticles(world, ids, 128);
+    for (int32_t i = 0; i < n; i += 5)
+    {
+        m2World_DestroyParticle(ids[i]);
+    }
+    n = m2World_GetParticles(world, ids, 128);
+    for (int32_t i = 0; i < n; i += 3)
+    {
+        m2Particle_SetVelocity(ids[i], (m2Vec2){4.0f, 4.0f});
+    }
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+
+    // Roll back and run the canonical future twice: identical bits.
+    CHECK(m2World_Restore(world, snap, size), "the storm snapshot restores");
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    uint64_t first = m2World_Hash(world);
+    CHECK(m2World_Restore(world, snap, size), "the second restore lands too");
+    for (int32_t i = 0; i < 40; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Hash(world) == first, "the jelly timeline replays bit for bit");
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+// The same storm through the tape: fills, tears and shoves recorded,
+// then replayed onto a fresh world, landing on the recorded hash.
+static void TestJellyJournalStorm(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.particleCapacity = 128;
+    m2WorldId world = m2CreateWorld(&def);
+    int32_t cap = 1 << 20;
+    void* tape = malloc((size_t)cap);
+    CHECK(m2World_StartJournal(world, tape, cap), "the storm tape starts");
+    m2Polygon blob = m2MakeBox(0.2f, 0.2f);
+    m2World_FillPolygonWithParticles(world, &blob, (m2Pos2){0.0, 1.0}, (m2Vec2){0.0f, 0.0f},
+                                     m2_springParticle);
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2ParticleId ids[128];
+    int32_t n = m2World_GetParticles(world, ids, 128);
+    for (int32_t i = 0; i < n; i += 4)
+    {
+        m2World_DestroyParticle(ids[i]);
+    }
+    m2World_FillPolygonWithParticles(world, &blob, (m2Pos2){1.0, 1.0}, (m2Vec2){0.0f, -1.0f},
+                                     m2_elasticParticle);
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t used = m2World_StopJournal(world);
+    CHECK(used > 0, "the storm tape closed");
+    uint64_t recorded = m2World_Hash(world);
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, tape, used), "the storm tape replays");
+    CHECK(m2World_Hash(fresh) == recorded, "torn nets replay onto the same bits");
+    m2DestroyWorld(fresh);
+    m2DestroyWorld(world);
+    free(tape);
+}
+
+// Hostile fills: polygons smaller than a stride, pools that fill
+// mid-lattice, and double fills that must never cross-link.
+static void TestHostileFills(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.particleCapacity = 32;
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2World* w = m2World_GetInternal(world);
+
+    // Smaller than one stride: zero particles, zero nets, no crash.
+    m2Polygon speck = m2MakeBox(0.02f, 0.02f);
+    int32_t speckMade = m2World_FillPolygonWithParticles(world, &speck, (m2Pos2){0.0, 0.0},
+                                                         (m2Vec2){0.0f, 0.0f}, m2_springParticle);
+    CHECK(speckMade <= 1, "a speck holds at most one droplet");
+    CHECK(w->particleSpringCount == 0, "one droplet, no springs");
+
+    // A pool that fills mid-lattice: nets only reference what exists.
+    m2Polygon big = m2MakeBox(0.5f, 0.5f);
+    int32_t made =
+        m2World_FillPolygonWithParticles(world, &big, (m2Pos2){5.0, 0.0}, (m2Vec2){0.0f, 0.0f},
+                                         m2_springParticle | m2_elasticParticle);
+    CHECK(made == 32 - speckMade, "the pool grants exactly its remaining capacity");
+    CHECK(m2World_GetParticleCount(world) == 32, "the pool is exactly full");
+    for (int32_t k = 0; k < w->particleSpringCount; ++k)
+    {
+        CHECK(w->particleAlive[w->particleSpringA[k]] == 1 &&
+                  w->particleAlive[w->particleSpringB[k]] == 1,
+              "every spring end is a live particle");
+    }
+    for (int32_t k = 0; k < w->particleTriadCount; ++k)
+    {
+        CHECK(w->particleAlive[w->particleTriadA[k]] == 1 &&
+                  w->particleAlive[w->particleTriadB[k]] == 1 &&
+                  w->particleAlive[w->particleTriadC[k]] == 1,
+              "every triad corner is a live particle");
+    }
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    m2ParticleId ids[32];
+    int32_t n = m2World_GetParticles(world, ids, 32);
+    for (int32_t i = 0; i < n; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(ids[i]);
+        CHECK(p.x == p.x && p.y == p.y, "a truncated lattice stays finite");
+    }
+    m2DestroyWorld(world);
+
+    // Two separate fills never cross-link their nets.
+    m2WorldDef def2 = def;
+    def2.particleCapacity = 64;
+    m2WorldId twin = m2CreateWorld(&def2);
+    m2World* tw = m2World_GetInternal(twin);
+    m2Polygon small = m2MakeBox(0.15f, 0.15f);
+    int32_t a = m2World_FillPolygonWithParticles(twin, &small, (m2Pos2){0.0, 0.0},
+                                                 (m2Vec2){0.0f, 0.0f}, m2_springParticle);
+    int32_t b = m2World_FillPolygonWithParticles(twin, &small, (m2Pos2){0.14, 0.0},
+                                                 (m2Vec2){0.0f, 0.0f}, m2_springParticle);
+    CHECK(a > 0 && b > 0, "both overlapping fills land");
+    for (int32_t k = 0; k < tw->particleSpringCount; ++k)
+    {
+        bool aInFirst = tw->particleSpringA[k] < a;
+        bool bInFirst = tw->particleSpringB[k] < a;
+        CHECK(aInFirst == bInFirst, "springs never bridge two fills");
+    }
+    m2DestroyWorld(twin);
+}
+
+// Machinery under the knife: destroy gears, pulleys and ratchets
+// mid-sim, kill a shared body, and resurrect the whole workshop
+// through a snapshot.
+static void TestMachineryResurrection(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 16;
+    m2WorldId world = m2CreateWorld(&def);
+    m2Circle disc = {{0.0f, 0.0f}, 0.4f};
+    m2BodyId wheels[3];
+    m2JointId pins[3];
+    for (int32_t i = 0; i < 3; ++i)
+    {
+        m2BodyDef pd = m2DefaultBodyDef();
+        pd.position = (m2Pos2){(double)i * 2.0, 2.0};
+        m2BodyId post = m2CreateBody(world, &pd);
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){(double)i * 2.0, 2.0};
+        wheels[i] = m2CreateBody(world, &wd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2CreateCircleShape(wheels[i], &sd, &disc);
+        m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+        rj.bodyIdA = post;
+        rj.bodyIdB = wheels[i];
+        if (i == 0)
+        {
+            rj.enableMotor = true;
+            rj.motorSpeed = 2.0f;
+            rj.maxMotorTorque = 50.0f;
+        }
+        pins[i] = m2CreateRevoluteJoint(world, &rj);
+    }
+    (void)pins;
+    m2GearJointDef gd = m2DefaultGearJointDef();
+    gd.bodyIdA = wheels[0];
+    gd.bodyIdB = wheels[1];
+    gd.ratio = 1.5f;
+    m2JointId gear = m2CreateGearJoint(world, &gd);
+    m2RatchetJointDef rd = m2DefaultRatchetJointDef();
+    rd.bodyIdA = wheels[1];
+    rd.bodyIdB = wheels[2];
+    rd.ratchet = 0.4f;
+    m2JointId pawl = m2CreateRatchetJoint(world, &rd);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    m2World_Snapshot(world, snap, size);
+
+    // The knife: cut the gear, kill the ratchet's far wheel (its
+    // joints must die with it), keep stepping.
+    m2DestroyJoint(gear);
+    m2DestroyBody(wheels[2]);
+    CHECK(!m2Joint_IsValid(pawl), "the ratchet dies with its wheel");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_GetParticleCount(world) == 0, "no stowaways");
+
+    // Resurrection: the workshop returns, gear ratio, ratchet tooth
+    // and all, and the future is deterministic twice over.
+    CHECK(m2World_Restore(world, snap, size), "the workshop restores");
+    CHECK(m2Joint_IsValid(gear) && m2Joint_IsValid(pawl), "the machines came back");
+    CHECK(m2GearJoint_GetRatio(gear) == 1.5f, "the gear remembers its ratio");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    uint64_t first = m2World_Hash(world);
+    m2World_Restore(world, snap, size);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Hash(world) == first, "the resurrected workshop is deterministic");
+    free(snap);
+    m2DestroyWorld(world);
+}
+
+// A ratchet fighting a reversing motor: twins agree forever.
+static void TestRatchetMotorWar(void)
+{
+    uint64_t hashes[2];
+    for (int32_t run = 0; run < 2; ++run)
+    {
+        m2WorldDef def = m2DefaultWorldDef();
+        def.bodyCapacity = 8;
+        def.shapeCapacity = 8;
+        def.jointCapacity = 8;
+        def.gravity = (m2Vec2){0.0f, 0.0f};
+        m2WorldId world = m2CreateWorld(&def);
+        m2BodyDef pd = m2DefaultBodyDef();
+        pd.position = (m2Pos2){0.0, 2.0};
+        m2BodyId post = m2CreateBody(world, &pd);
+        m2BodyDef wd = m2DefaultBodyDef();
+        wd.type = m2_dynamicBody;
+        wd.position = (m2Pos2){0.0, 2.0};
+        m2BodyId wheel = m2CreateBody(world, &wd);
+        m2ShapeDef sd = m2DefaultShapeDef();
+        m2Circle disc = {{0.0f, 0.0f}, 0.4f};
+        m2CreateCircleShape(wheel, &sd, &disc);
+        m2RevoluteJointDef rj = m2DefaultRevoluteJointDef();
+        rj.bodyIdA = post;
+        rj.bodyIdB = wheel;
+        rj.enableMotor = true;
+        rj.motorSpeed = 3.0f;
+        rj.maxMotorTorque = 40.0f;
+        m2JointId pin = m2CreateRevoluteJoint(world, &rj);
+        m2RatchetJointDef rd = m2DefaultRatchetJointDef();
+        rd.bodyIdA = post;
+        rd.bodyIdB = wheel;
+        rd.ratchet = 0.3f;
+        m2CreateRatchetJoint(world, &rd);
+        for (int32_t i = 0; i < 240; ++i)
+        {
+            if (i % 30 == 0)
+            {
+                m2Joint_SetMotorSpeed(pin, i % 60 == 0 ? 3.0f : -3.0f);
+            }
+            m2World_Step(world, 1.0f / 60.0f, 4);
+        }
+        m2Vec2 v = {m2Body_GetAngularVelocity(wheel), 0.0f};
+        CHECK(v.x == v.x, "the war stays finite");
+        hashes[run] = m2World_Hash(world);
+        m2DestroyWorld(world);
+    }
+    CHECK(hashes[0] == hashes[1], "the ratchet-motor war is twin deterministic");
+}
+
+// Decompose under adversarial outlines: collinear runs, needle-thin
+// notches, and the full 64-point budget all keep the area or bounce.
+static void TestDecomposeAdversaries(void)
+{
+    // A comb: deep thin notches, many reflex corners.
+    m2Vec2 comb[12] = {{0.0f, 0.0f}, {3.0f, 0.0f}, {3.0f, 2.0f}, {2.4f, 2.0f},
+                       {2.4f, 0.5f}, {1.8f, 0.5f}, {1.8f, 2.0f}, {1.2f, 2.0f},
+                       {1.2f, 0.5f}, {0.6f, 0.5f}, {0.6f, 2.0f}, {0.0f, 2.0f}};
+    m2Polygon pieces[24];
+    int32_t n = m2DecomposeOutline(comb, 12, pieces, 24);
+    CHECK(n >= 3, "the comb splits");
+    float area = 0.0f;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        float a2 = 0.0f;
+        for (int32_t k = 0; k < pieces[i].count; ++k)
+        {
+            m2Vec2 p = pieces[i].vertices[k];
+            m2Vec2 q = pieces[i].vertices[(k + 1) % pieces[i].count];
+            a2 += p.x * q.y - q.x * p.y;
+        }
+        area += 0.5f * a2;
+    }
+    // Comb area: 3x2 minus two 0.6x1.5 notches = 6 - 1.8 = 4.2.
+    CHECK(area > 4.19f && area < 4.21f, "the comb keeps its area");
+
+    // Collinear runs on the hull: straight vertices clip for free.
+    m2Vec2 ruler[8] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {2.0f, 0.0f}, {3.0f, 0.0f},
+                       {3.0f, 1.0f}, {2.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+    n = m2DecomposeOutline(ruler, 8, pieces, 24);
+    CHECK(n >= 1, "the ruler decomposes");
+    area = 0.0f;
+    for (int32_t i = 0; i < n; ++i)
+    {
+        float a2 = 0.0f;
+        for (int32_t k = 0; k < pieces[i].count; ++k)
+        {
+            m2Vec2 p = pieces[i].vertices[k];
+            m2Vec2 q = pieces[i].vertices[(k + 1) % pieces[i].count];
+            a2 += p.x * q.y - q.x * p.y;
+        }
+        area += 0.5f * a2;
+    }
+    CHECK(area > 2.99f && area < 3.01f, "collinear runs keep the area");
+
+    // The full budget: a 64-point saw blade.
+    m2Vec2 saw[64];
+    for (int32_t i = 0; i < 32; ++i)
+    {
+        saw[2 * i] = (m2Vec2){(float)i * 0.2f, 0.0f};
+        saw[2 * i + 1] = (m2Vec2){(float)i * 0.2f + 0.1f, i == 31 ? 1.0f : 0.3f};
+    }
+    // Close the top edge by walking back: rebuild as a proper ring.
+    m2Vec2 blade[64];
+    for (int32_t i = 0; i < 62; ++i)
+    {
+        blade[i] = saw[i];
+    }
+    blade[62] = (m2Vec2){6.3f, 1.2f};
+    blade[63] = (m2Vec2){0.0f, 1.2f};
+    n = m2DecomposeOutline(blade, 64, pieces, 24);
+    CHECK(n > 0, "the full 64-point budget decomposes");
+    int32_t total = m2DecomposeOutline(blade, 64, NULL, 0);
+    CHECK(total == n || total > 24, "count queries agree with fills");
+}
+
 static void TestStaleIds(void)
 {
     // The O(1) id discipline: destroyed ids stay dead forever, even
@@ -1340,6 +1756,14 @@ int main(void)
     TestChainLifecycleJournal();
     TestReactionRollbackReading();
     TestReactionAllTypes();
+
+    TestParticleStaleIds();
+    TestJellyRollbackStorm();
+    TestJellyJournalStorm();
+    TestHostileFills();
+    TestMachineryResurrection();
+    TestRatchetMotorWar();
+    TestDecomposeAdversaries();
 
     uint64_t hash = ChaosHash();
     printf("M2_CHAOS_HASH=%016llx\n", (unsigned long long)hash);
