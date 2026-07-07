@@ -318,7 +318,14 @@ extern "C"
     m2Vec2 m2Joint_GetLocalAnchorB(m2JointId jointId);
     m2Vec2 m2Joint_GetLocalAxisA(m2JointId jointId); // prismatic, wheel
     float m2Joint_GetLength(m2JointId jointId);      // distance
-    float m2Joint_GetHertz(m2JointId jointId);       // weld: linear row
+    /// Spring-named getter aliases, symmetric with the setters; the
+    /// short names remain and read the same registry slots.
+    float m2Joint_GetSpringHertz(m2JointId jointId);
+    float m2Joint_GetSpringDampingRatio(m2JointId jointId);
+    float m2Joint_GetAngularSpringHertz(m2JointId jointId);
+    float m2Joint_GetAngularSpringDampingRatio(m2JointId jointId);
+
+    float m2Joint_GetHertz(m2JointId jointId); // weld: linear row
     float m2Joint_GetDampingRatio(m2JointId jointId);
     float m2Joint_GetAngularHertz(m2JointId jointId); // weld, revolute spring
     float m2Joint_GetAngularDampingRatio(m2JointId jointId);

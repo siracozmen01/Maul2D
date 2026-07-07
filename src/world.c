@@ -6636,3 +6636,25 @@ int32_t m2World_GetParticles(m2WorldId worldId, m2ParticleId* ids, int32_t capac
     }
     return total;
 }
+
+// Spring-named getter aliases: the setters say Spring, the readers
+// now can too. Same slots, same validation.
+float m2Joint_GetSpringHertz(m2JointId jointId)
+{
+    return m2Joint_GetHertz(jointId);
+}
+
+float m2Joint_GetSpringDampingRatio(m2JointId jointId)
+{
+    return m2Joint_GetDampingRatio(jointId);
+}
+
+float m2Joint_GetAngularSpringHertz(m2JointId jointId)
+{
+    return m2Joint_GetAngularHertz(jointId);
+}
+
+float m2Joint_GetAngularSpringDampingRatio(m2JointId jointId)
+{
+    return m2Joint_GetAngularDampingRatio(jointId);
+}

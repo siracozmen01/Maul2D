@@ -1171,6 +1171,9 @@ static void TestRevoluteSpring(void)
         pins[i] = m2CreateRevoluteJoint(world, &rj);
     }
     CHECK(m2Joint_GetAngularHertz(pins[1]) == 12.0f, "the spring hertz reads back");
+    CHECK(m2Joint_GetAngularSpringHertz(pins[1]) == 12.0f &&
+              m2Joint_GetAngularSpringDampingRatio(pins[1]) == 1.0f,
+          "the spring-named aliases agree with the short names");
 
     for (int32_t i = 0; i < 300; ++i)
     {

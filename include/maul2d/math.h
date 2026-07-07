@@ -11,6 +11,9 @@ extern "C"
 {
 #endif
 
+    // Everything in this header is pure math: no world, no state, no
+    // side effects. Thread class: reader (pure), all of it.
+
 #define M2_PI 3.14159265359f
 
     /// Local-space / velocity-space vector. World positions use m2Pos2.

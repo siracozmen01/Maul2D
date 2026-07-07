@@ -8,6 +8,15 @@ Written in C17. MIT licensed.
 
 ## Status: 1.7
 
+## API stability
+
+The 1.x surface is frozen: functions and defs may be ADDED in
+minor releases, but existing signatures, semantics and id layouts
+do not change until a 2.0. Defs are cookie-guarded, so a stale
+compiled caller fails loudly instead of subtly. Snapshot and
+journal bytes are versioned artifacts of a single library version:
+see "Versions and formats" in the guide.
+
 Water is in: an opt-in deterministic particle fluid (LiquidFun
 lineage) living inside the same snapshot, journal and hash contract
 as everything else. See the Water chapter in the guide.

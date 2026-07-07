@@ -4,6 +4,19 @@ This is the ten - minute tour : what the engine promises, how to hold it right,
     and where the sharp edges are.The headers are the reference;
 this document is the map.
 
+## Versions and formats
+
+Snapshots and journal tapes are exact-byte artifacts of one library
+version. Every snapshot carries a version stamp and every tape
+carries one plus an echo of the world def that recorded it; a
+mismatch of either is rejected loudly before a single byte lands.
+They are rollback and replay tools, not archival formats: when an
+engine release bumps the snapshot or wire version (any new state
+array, any grown def), old bytes refuse to load by design, because
+a silently reinterpreted byte is a corrupted world. Persist game
+state you care about at your own layer; persist Maul bytes only
+next to the exact engine build that wrote them.
+
 ## The contract
 
 Maul2D promises three things no mainstream 2D engine promises together:
