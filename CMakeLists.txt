@@ -120,6 +120,11 @@ target_link_libraries(test_fuzz PRIVATE maul2d)
 maul2d_apply_flags(test_fuzz)
 add_test(NAME fuzz COMMAND test_fuzz)
 
+add_executable(test_perf test/test_perf.c)
+target_link_libraries(test_perf PRIVATE maul2d)
+maul2d_apply_flags(test_perf)
+# Not in ctest: the weekly trend job times it against a rolling baseline.
+
 add_executable(test_soak test/test_soak.c)
 target_link_libraries(test_soak PRIVATE maul2d)
 maul2d_apply_flags(test_soak)

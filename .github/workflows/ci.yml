@@ -255,3 +255,72 @@ jobs:
         run: cmake --build build -j 4
       - name: soak 300k steps
         run: ./build/test_soak 300000
+
+  perf-trend:
+    name: perf trend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build --target test_perf -j 4
+      - name: run three times, keep the per-scene minimum
+        run: |
+          ./build/test_perf | grep M2_PERF > run1.txt
+          ./build/test_perf | grep M2_PERF > run2.txt
+          ./build/test_perf | grep M2_PERF > run3.txt
+          python3 - << 'PY'
+          best = {}
+          for f in ['run1.txt', 'run2.txt', 'run3.txt']:
+              for line in open(f):
+                  _, name, ms = line.split()
+                  ms = float(ms)
+                  if name not in best or ms < best[name]:
+                      best[name] = ms
+          with open('perf-fresh.txt', 'w') as out:
+              for name in sorted(best):
+                  out.write(f"{name} {best[name]:.4f}\n")
+          print(open('perf-fresh.txt').read())
+          PY
+      - name: restore the rolling baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: perf-baseline
+          key: perf-baseline-${{ github.run_id }}
+          restore-keys: perf-baseline-
+      - name: compare against the baseline (3x disaster threshold)
+        run: |
+          python3 - << 'PY'
+          import os, sys
+          if not os.path.exists('perf-baseline/perf.txt'):
+              print('no baseline yet: this run becomes it')
+              sys.exit(0)
+          base = dict((l.split()[0], float(l.split()[1]))
+                      for l in open('perf-baseline/perf.txt'))
+          fresh = dict((l.split()[0], float(l.split()[1]))
+                       for l in open('perf-fresh.txt'))
+          bad = []
+          for name, ms in fresh.items():
+              if name in base and base[name] > 0 and ms > 3.0 * base[name]:
+                  bad.append(f"{name}: {ms:.4f} vs baseline {base[name]:.4f}")
+          for name, ms in fresh.items():
+              b = base.get(name)
+              print(f"{name}: {ms:.4f}" + (f" (baseline {b:.4f})" if b else " (new)"))
+          if bad:
+              print('PERF DISASTER: ' + '; '.join(bad))
+              sys.exit(1)
+          PY
+      - name: roll the baseline forward
+        run: |
+          mkdir -p perf-baseline
+          cp perf-fresh.txt perf-baseline/perf.txt
+      - uses: actions/cache/save@v4
+        with:
+          path: perf-baseline
+          key: perf-baseline-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-trend
+          path: perf-fresh.txt
