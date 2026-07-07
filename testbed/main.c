@@ -1053,6 +1053,43 @@ static void SceneMachinery(m2WorldId world)
     }
 }
 
+static void SceneGoo(m2WorldId world)
+{
+    // A basin, a jelly cube dropped in, a powder heap poured beside
+    // it, sticky spray above, and a crate to throw at all of them.
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2BodyDef floorDef = m2DefaultBodyDef();
+    floorDef.position = (m2Pos2){0.0, -0.2};
+    m2Polygon slab = m2MakeBox(6.0f, 0.2f);
+    m2CreatePolygonShape(m2CreateBody(world, &floorDef), &sd, &slab);
+    m2Polygon wallBox = m2MakeBox(0.2f, 2.0f);
+    m2BodyDef leftDef = m2DefaultBodyDef();
+    leftDef.position = (m2Pos2){-6.0, 1.8};
+    m2CreatePolygonShape(m2CreateBody(world, &leftDef), &sd, &wallBox);
+    m2BodyDef rightDef = m2DefaultBodyDef();
+    rightDef.position = (m2Pos2){6.0, 1.8};
+    m2CreatePolygonShape(m2CreateBody(world, &rightDef), &sd, &wallBox);
+
+    m2Polygon jellyBox = m2MakeBox(0.45f, 0.45f);
+    m2World_FillPolygonWithParticles(world, &jellyBox, (m2Pos2){-3.0, 1.8}, (m2Vec2){0.0f, 0.0f},
+                                     m2_springParticle | m2_elasticParticle);
+    m2Polygon heap = m2MakeBox(0.7f, 0.5f);
+    m2World_FillPolygonWithParticles(world, &heap, (m2Pos2){0.5, 1.2}, (m2Vec2){0.0f, 0.0f},
+                                     m2_powderParticle);
+    m2Polygon spray = m2MakeBox(0.5f, 0.2f);
+    m2World_FillPolygonWithParticles(world, &spray, (m2Pos2){3.5, 3.2}, (m2Vec2){0.0f, 0.0f},
+                                     m2_tensileParticle);
+
+    m2BodyDef crateDef = m2DefaultBodyDef();
+    crateDef.type = m2_dynamicBody;
+    crateDef.position = (m2Pos2){4.5, 0.4};
+    m2BodyId crate = m2CreateBody(world, &crateDef);
+    m2ShapeDef cs = m2DefaultShapeDef();
+    cs.density = 0.4f;
+    m2Polygon crateBox = m2MakeBox(0.25f, 0.25f);
+    m2CreatePolygonShape(crate, &cs, &crateBox);
+}
+
 static const tbScene s_scenes[] = {
     {"welcome: pyramid, one-way shelf, wrecking ball", SceneWelcome, NULL, false, false},
     {"car: arrows to drive, terrain is a chain", SceneCar, NULL, true, false},
@@ -1069,6 +1106,7 @@ static const tbScene s_scenes[] = {
      false, false},
     {"machinery: gears, pulley elevator, sprung paddle, shrapnel twins", SceneMachinery, NULL,
      false, false},
+    {"goo: jelly cube, powder heap, sticky spray; grab and wreck", SceneGoo, NULL, false, false},
 };
 #define TB_SCENE_COUNT ((int32_t)(sizeof(s_scenes) / sizeof(s_scenes[0])))
 
@@ -1343,7 +1381,25 @@ int main(void)
             for (int32_t i = 0; i < drops; ++i)
             {
                 Vector2 at = tbToScreen(m2Particle_GetPosition(s_drops[i]));
-                DrawCircleV(at, dotRadius, (Color){96, 156, 245, 200});
+                uint32_t flags = m2Particle_GetFlags(s_drops[i]);
+                Color tint = (Color){96, 156, 245, 200}; // water blue
+                if ((flags & m2_powderParticle) != 0)
+                {
+                    tint = (Color){214, 181, 110, 220}; // sand
+                }
+                else if ((flags & (m2_springParticle | m2_elasticParticle)) != 0)
+                {
+                    tint = (Color){120, 220, 130, 220}; // jelly green
+                }
+                else if ((flags & m2_tensileParticle) != 0)
+                {
+                    tint = (Color){110, 220, 235, 210}; // sticky cyan
+                }
+                else if ((flags & m2_viscousParticle) != 0)
+                {
+                    tint = (Color){230, 170, 90, 210}; // syrup amber
+                }
+                DrawCircleV(at, dotRadius, tint);
             }
         }
         if (s_scenes[sceneIndex].hasCharacter)

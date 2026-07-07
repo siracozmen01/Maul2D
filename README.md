@@ -74,6 +74,7 @@ m2World_Restore(world, buffer, size); // bit-exact resimulation from here
 Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Learn more
+- samples/minimal: ten minutes to a rollback (find_package consumer)
 
 The [guide](docs/guide.md) is the ten-minute tour: the determinism
 contract, rollback netcode, events, filters, chains and threading.
