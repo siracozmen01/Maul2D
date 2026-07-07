@@ -12,7 +12,6 @@
 
 #include "maul2d/base.h"
 #include "maul2d/math.h"
-#include "simd.h"
 
 static m2Vec2 RotateVec(m2Rot q, m2Vec2 v)
 {
@@ -240,7 +239,7 @@ static m2SegmentDistanceResult SegmentDistance(m2Vec2 p1, m2Vec2 q1, m2Vec2 p2, 
     return result;
 }
 
-float m2FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Polygon* poly2)
+static float FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Polygon* poly2)
 {
     int32_t bestIndex = 0;
     float maxSeparation = -3.4e38f;
@@ -262,142 +261,6 @@ float m2FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Po
     }
     *edgeIndex = bestIndex;
     return maxSeparation;
-}
-
-// A lane-valid bit mask (all-ones or all-zeros per lane) for m2F8Select,
-// built by a plain integer store so it stays backend-agnostic.
-static m2f8 LaneMask(const int32_t* valid)
-{
-    float bits[8];
-    for (int32_t k = 0; k < 8; ++k)
-    {
-        uint32_t m = valid[k] ? 0xFFFFFFFFu : 0u;
-        memcpy(&bits[k], &m, sizeof(m));
-    }
-    return m2F8Load(bits);
-}
-
-// Eight-lane SAT (queue #2, phase 5 groundwork). Runs m2FindMaxSeparation
-// for `count` (1..8) independent (poly1, poly2) pairs at once, lane k =
-// pair k. The result is BIT-IDENTICAL to calling m2FindMaxSeparation on
-// each pair, by construction:
-//   - sij uses the same sub, mul, sub, mul, add order (no fused multiply
-//     add), so each product and sum rounds exactly as the scalar path;
-//   - the per-edge min is m2F8Min, which is compare-and-select, the same
-//     a<b?a:b as m2MinF;
-//   - the argmax is a strict m2F8GT walked in the same edge order 0..n,
-//     so the first edge to reach a new max wins, exactly as scalar;
-//   - mixed vertex counts are handled by masking: a poly2 vertex past a
-//     lane's count is padded to +big so the min ignores it, and a poly1
-//     edge past a lane's count is padded to -big so the argmax ignores
-//     it. The gather clamps such lanes to vertex 0 (a valid slot) so no
-//     stale or out-of-count vertex is ever read.
-// This kernel is not yet on the hot path; the fuzz gate proves the bit
-// law before it is wired into the narrowphase loop.
-void m2FindMaxSeparationBatch8(const m2Polygon* const* polys1, const m2Polygon* const* polys2,
-                               int32_t count, float* outSep, int32_t* outEdge)
-{
-    int32_t count1[8];
-    int32_t count2[8];
-    int32_t maxC1 = 0;
-    int32_t maxC2 = 0;
-    for (int32_t k = 0; k < 8; ++k)
-    {
-        int32_t c1 = k < count ? polys1[k]->count : 0;
-        int32_t c2 = k < count ? polys2[k]->count : 0;
-        count1[k] = c1;
-        count2[k] = c2;
-        if (c1 > maxC1)
-        {
-            maxC1 = c1;
-        }
-        if (c2 > maxC2)
-        {
-            maxC2 = c2;
-        }
-    }
-
-    const float kNegBig = -3.4e38f; // scalar maxSeparation seed
-    const float kPosBig = 3.4e38f;  // scalar per-edge si seed and min pad
-    const m2f8 vPosBig = m2F8Set1(kPosBig);
-    const m2f8 vNegBig = m2F8Set1(kNegBig);
-
-    m2f8 maxSep = vNegBig;
-    m2f8 bestIndex = m2F8Zero(); // scalar bestIndex seed = 0
-
-    float lane[8];
-    int32_t valid[8];
-
-    for (int32_t i = 0; i < maxC1; ++i)
-    {
-        for (int32_t k = 0; k < 8; ++k)
-        {
-            valid[k] = i < count1[k];
-            int32_t idx = valid[k] ? i : 0;
-            lane[k] = polys1[k] ? polys1[k]->normals[idx].x : 0.0f;
-        }
-        m2f8 nx = m2F8Load(lane);
-        for (int32_t k = 0; k < 8; ++k)
-        {
-            int32_t idx = i < count1[k] ? i : 0;
-            lane[k] = polys1[k] ? polys1[k]->normals[idx].y : 0.0f;
-        }
-        m2f8 ny = m2F8Load(lane);
-        for (int32_t k = 0; k < 8; ++k)
-        {
-            int32_t idx = i < count1[k] ? i : 0;
-            lane[k] = polys1[k] ? polys1[k]->vertices[idx].x : 0.0f;
-        }
-        m2f8 v1x = m2F8Load(lane);
-        for (int32_t k = 0; k < 8; ++k)
-        {
-            int32_t idx = i < count1[k] ? i : 0;
-            lane[k] = polys1[k] ? polys1[k]->vertices[idx].y : 0.0f;
-        }
-        m2f8 v1y = m2F8Load(lane);
-
-        m2f8 si = vPosBig;
-        for (int32_t j = 0; j < maxC2; ++j)
-        {
-            int32_t jvalid[8];
-            for (int32_t k = 0; k < 8; ++k)
-            {
-                jvalid[k] = j < count2[k];
-                int32_t idx = jvalid[k] ? j : 0;
-                lane[k] = polys2[k] ? polys2[k]->vertices[idx].x : 0.0f;
-            }
-            m2f8 p2x = m2F8Load(lane);
-            for (int32_t k = 0; k < 8; ++k)
-            {
-                int32_t idx = j < count2[k] ? j : 0;
-                lane[k] = polys2[k] ? polys2[k]->vertices[idx].y : 0.0f;
-            }
-            m2f8 p2y = m2F8Load(lane);
-
-            // sij = n.x*(p2.x - v1.x) + n.y*(p2.y - v1.y), the same op
-            // order and rounding as the scalar kernel.
-            m2f8 dx = m2F8Sub(p2x, v1x);
-            m2f8 dy = m2F8Sub(p2y, v1y);
-            m2f8 sij = m2F8Add(m2F8Mul(nx, dx), m2F8Mul(ny, dy));
-            sij = m2F8Select(LaneMask(jvalid), sij, vPosBig);
-            si = m2F8Min(si, sij);
-        }
-
-        m2f8 siMasked = m2F8Select(LaneMask(valid), si, vNegBig);
-        m2f8 gt = m2F8GT(siMasked, maxSep);
-        maxSep = m2F8Select(gt, siMasked, maxSep);
-        bestIndex = m2F8Select(gt, m2F8Set1((float)i), bestIndex);
-    }
-
-    float sepOut[8];
-    float idxOut[8];
-    m2F8Store(sepOut, maxSep);
-    m2F8Store(idxOut, bestIndex);
-    for (int32_t k = 0; k < count; ++k)
-    {
-        outSep[k] = sepOut[k];
-        outEdge[k] = (int32_t)idxOut[k];
-    }
 }
 
 static m2Manifold ClipPolygons(const m2Polygon* polyA, const m2Polygon* polyB, int32_t edgeA,
@@ -488,40 +351,50 @@ static m2Manifold ClipPolygons(const m2Polygon* polyA, const m2Polygon* polyB, i
     return manifold;
 }
 
-m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativePose pose)
+// Stage 1 of the polygon collide: shift both polygons near A's first
+// vertex for round-off (reference technique; our positions are already
+// A-relative f32, this tightens the last bits) and rotate B into A's
+// frame. Split out so the SAT between it and FinishPolygons can run one
+// pair at a time (m2CollidePolygons) or eight at a time (the batch), the
+// SAT being the only step that changes; the transform math is byte for
+// byte the same either way.
+static void PreparePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativePose pose,
+                            m2Polygon* localA, m2Polygon* localB, m2Vec2* origin)
 {
-    // Shift everything near A's first vertex for round-off (reference
-    // technique; our positions are already A-relative f32, this tightens
-    // the last bits).
-    m2Vec2 origin = a->vertices[0];
+    m2Vec2 o = a->vertices[0];
+    *origin = o;
 
-    m2Polygon localA;
-    memset(&localA, 0, sizeof(localA));
-    localA.count = a->count;
-    localA.radius = a->radius;
+    memset(localA, 0, sizeof(*localA));
+    localA->count = a->count;
+    localA->radius = a->radius;
     for (int32_t i = 0; i < a->count; ++i)
     {
-        localA.vertices[i] = (m2Vec2){a->vertices[i].x - origin.x, a->vertices[i].y - origin.y};
-        localA.normals[i] = a->normals[i];
+        localA->vertices[i] = (m2Vec2){a->vertices[i].x - o.x, a->vertices[i].y - o.y};
+        localA->normals[i] = a->normals[i];
     }
-    m2Polygon localB;
-    memset(&localB, 0, sizeof(localB));
-    localB.count = b->count;
-    localB.radius = b->radius;
+    memset(localB, 0, sizeof(*localB));
+    localB->count = b->count;
+    localB->radius = b->radius;
     for (int32_t i = 0; i < b->count; ++i)
     {
         m2Vec2 r = {pose.q.c * b->vertices[i].x - pose.q.s * b->vertices[i].y,
                     pose.q.s * b->vertices[i].x + pose.q.c * b->vertices[i].y};
-        localB.vertices[i] = (m2Vec2){r.x + pose.p.x - origin.x, r.y + pose.p.y - origin.y};
-        localB.normals[i] = (m2Vec2){pose.q.c * b->normals[i].x - pose.q.s * b->normals[i].y,
-                                     pose.q.s * b->normals[i].x + pose.q.c * b->normals[i].y};
+        localB->vertices[i] = (m2Vec2){r.x + pose.p.x - o.x, r.y + pose.p.y - o.y};
+        localB->normals[i] = (m2Vec2){pose.q.c * b->normals[i].x - pose.q.s * b->normals[i].y,
+                                      pose.q.s * b->normals[i].x + pose.q.c * b->normals[i].y};
     }
+}
 
-    int32_t edgeA = 0;
-    float separationA = m2FindMaxSeparation(&edgeA, &localA, &localB);
-    int32_t edgeB = 0;
-    float separationB = m2FindMaxSeparation(&edgeB, &localB, &localA);
-    float radius = localA.radius + localB.radius;
+// Stage 3 of the polygon collide: given the prepared polygons and the
+// SAT result (max separations and winning edges), reject on the margin,
+// pick the incident edge, clip or fall back to vertex-vertex, and undo
+// the origin shift. This is the second half of the old m2CollidePolygons
+// verbatim, so both callers (scalar and batch) share identical bits.
+static m2Manifold FinishPolygons(const m2Polygon* localA, const m2Polygon* localB, int32_t edgeA,
+                                 int32_t edgeB, float separationA, float separationB,
+                                 m2RelativePose pose, m2Vec2 origin)
+{
+    float radius = localA->radius + localB->radius;
 
     m2Manifold manifold;
     memset(&manifold, 0, sizeof(manifold));
@@ -532,8 +405,8 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
     }
 
     bool flip = separationA < separationB;
-    const m2Polygon* searchPoly = flip ? &localB : &localA;
-    const m2Polygon* incidentPoly = flip ? &localA : &localB;
+    const m2Polygon* searchPoly = flip ? localB : localA;
+    const m2Polygon* incidentPoly = flip ? localA : localB;
     int32_t* incidentEdge = flip ? &edgeA : &edgeB;
     m2Vec2 searchDirection = searchPoly->normals[flip ? edgeB : edgeA];
     float minDot = 3.4e38f;
@@ -554,18 +427,19 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
     {
         // Disjoint edges: closest points decide vertex-vertex vs clip.
         int32_t i11 = edgeA;
-        int32_t i12 = edgeA + 1 < localA.count ? edgeA + 1 : 0;
+        int32_t i12 = edgeA + 1 < localA->count ? edgeA + 1 : 0;
         int32_t i21 = edgeB;
-        int32_t i22 = edgeB + 1 < localB.count ? edgeB + 1 : 0;
-        m2SegmentDistanceResult result = SegmentDistance(
-            localA.vertices[i11], localA.vertices[i12], localB.vertices[i21], localB.vertices[i22]);
+        int32_t i22 = edgeB + 1 < localB->count ? edgeB + 1 : 0;
+        m2SegmentDistanceResult result =
+            SegmentDistance(localA->vertices[i11], localA->vertices[i12], localB->vertices[i21],
+                            localB->vertices[i22]);
         M2_ASSERT(result.distanceSquared > 0.0f);
         float distance = sqrtf(result.distanceSquared);
         if (distance - radius > M2_SPECULATIVE_DISTANCE)
         {
             return manifold; // vertex-vertex beyond the margin
         }
-        manifold = ClipPolygons(&localA, &localB, edgeA, edgeB, flip);
+        manifold = ClipPolygons(localA, localB, edgeA, edgeB, flip);
 
         float minSeparation = 3.4e38f;
         for (int32_t i = 0; i < manifold.pointCount; ++i)
@@ -577,12 +451,12 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
             // Vertex-vertex beats the clip: single-point manifold.
             bool f1 = result.fraction1 > 0.5f;
             bool f2 = result.fraction2 > 0.5f;
-            m2Vec2 pA = f1 ? localA.vertices[i12] : localA.vertices[i11];
-            m2Vec2 pB = f2 ? localB.vertices[i22] : localB.vertices[i21];
+            m2Vec2 pA = f1 ? localA->vertices[i12] : localA->vertices[i11];
+            m2Vec2 pB = f2 ? localB->vertices[i22] : localB->vertices[i21];
             float invDistance = 1.0f / distance;
             m2Vec2 normal = {(pB.x - pA.x) * invDistance, (pB.y - pA.y) * invDistance};
-            m2Vec2 c1 = {pA.x + localA.radius * normal.x, pA.y + localA.radius * normal.y};
-            m2Vec2 c2 = {pB.x - localB.radius * normal.x, pB.y - localB.radius * normal.y};
+            m2Vec2 c1 = {pA.x + localA->radius * normal.x, pA.y + localA->radius * normal.y};
+            m2Vec2 c2 = {pB.x - localB->radius * normal.x, pB.y - localB->radius * normal.y};
             manifold.normal = normal;
             manifold.points[0].anchorA = (m2Vec2){0.5f * (c1.x + c2.x), 0.5f * (c1.y + c2.y)};
             manifold.points[0].separation = distance - radius;
@@ -595,7 +469,7 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
     }
     else
     {
-        manifold = ClipPolygons(&localA, &localB, edgeA, edgeB, flip);
+        manifold = ClipPolygons(localA, localB, edgeA, edgeB, flip);
     }
 
     // Undo the origin shift and fill B-frame anchors.
@@ -616,6 +490,21 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
         manifold.points[i].anchorB = (m2Vec2){rb.x + inverse.p.x, rb.y + inverse.p.y};
     }
     return manifold;
+}
+
+m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativePose pose)
+{
+    m2Polygon localA;
+    m2Polygon localB;
+    m2Vec2 origin;
+    PreparePolygons(a, b, pose, &localA, &localB, &origin);
+
+    int32_t edgeA = 0;
+    float separationA = FindMaxSeparation(&edgeA, &localA, &localB);
+    int32_t edgeB = 0;
+    float separationB = FindMaxSeparation(&edgeB, &localB, &localA);
+
+    return FinishPolygons(&localA, &localB, edgeA, edgeB, separationA, separationB, pose, origin);
 }
 
 // --- Point-to-shape distance (bullet CCD kernel) ------------------------------

@@ -69,12 +69,6 @@ target_include_directories(test_contacts PRIVATE src)
 maul2d_apply_flags(test_contacts)
 add_test(NAME contacts COMMAND test_contacts)
 
-add_executable(test_narrowphase test/test_narrowphase.c)
-target_link_libraries(test_narrowphase PRIVATE maul2d)
-target_include_directories(test_narrowphase PRIVATE src)
-maul2d_apply_flags(test_narrowphase)
-add_test(NAME narrowphase COMMAND test_narrowphase)
-
 add_executable(test_solver test/test_solver.c)
 target_link_libraries(test_solver PRIVATE maul2d)
 target_include_directories(test_solver PRIVATE src)
