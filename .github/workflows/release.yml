@@ -1,0 +1,54 @@
+name: release
+
+# Tag push = prebuilt static libraries attached to the GitHub
+# release: install tree (lib + headers + cmake package + pkg-config)
+# per platform, straight from the same sources the gates just ran.
+# The tag name only ever enters shell steps through a quoted
+# environment variable (workflow-injection hygiene).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: package ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-latest, archive: tar }
+          - { name: windows-x64, os: windows-latest, archive: zip }
+          - { name: macos-arm64, os: macos-latest, archive: tar }
+    env:
+      TAG: ${{ github.ref_name }}
+      PLATFORM: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build --config Release -j 4
+      - name: install
+        shell: bash
+        run: cmake --install build --config Release --prefix "stage/maul2d-$TAG-$PLATFORM"
+      - name: archive (tar)
+        if: matrix.archive == 'tar'
+        working-directory: stage
+        shell: bash
+        run: tar czf "../maul2d-$TAG-$PLATFORM.tar.gz" "maul2d-$TAG-$PLATFORM"
+      - name: archive (zip)
+        if: matrix.archive == 'zip'
+        working-directory: stage
+        shell: bash
+        run: 7z a "../maul2d-$TAG-$PLATFORM.zip" "maul2d-$TAG-$PLATFORM"
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          FILE=$(ls "maul2d-$TAG-$PLATFORM."*)
+          gh release upload "$TAG" "$FILE" --clobber

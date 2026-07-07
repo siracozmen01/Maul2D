@@ -1,0 +1,11 @@
+# Relocatable: paths derive from this file's own location, so any
+# install prefix works without reconfiguring.
+libdir=${pcfiledir}/..
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: maul2d
+Description: Deterministic 2D physics with bit-exact rollback and record/replay
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lmaul2d -lm -lpthread
+Cflags: -I${includedir}

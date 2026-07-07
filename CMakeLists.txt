@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
-project(maul2d LANGUAGES C)
+project(maul2d VERSION 1.7.0 LANGUAGES C)
 
 option(MAUL2D_SANITIZE "Build with ASAN/UBSAN" OFF)
+option(MAUL2D_INSTALL "Generate install and package rules" ON)
 
 include(cmake/CompilerFlags.cmake)
 
@@ -23,12 +24,16 @@ add_library(maul2d STATIC
     src/shape.c
     src/solver.c
     src/world.c)
-target_include_directories(maul2d PUBLIC include)
+target_include_directories(maul2d PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                                         $<INSTALL_INTERFACE:include>)
 maul2d_apply_flags(maul2d)
 if(NOT MSVC)
     # The library's own math (sqrtf/floorf) needs libm; consumers inherit it.
     target_link_libraries(maul2d PUBLIC m)
 endif()
+# The deterministic worker pool rides the platform threads; the
+# exported target carries the dependency for consumers.
+target_link_libraries(maul2d PUBLIC Threads::Threads)
 
 enable_testing()
 
@@ -144,4 +149,36 @@ endif()
 
 if(MAUL2D_BENCHMARKS)
     add_subdirectory(benchmark)
+endif()
+
+# ---- install and package rules -------------------------------------------------
+# find_package(maul2d) and pkg-config both work from an installed
+# prefix; the exported target carries libm and Threads for consumers.
+if(MAUL2D_INSTALL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+    install(TARGETS maul2d
+        EXPORT maul2dTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY include/maul2d DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(EXPORT maul2dTargets
+        NAMESPACE maul2d::
+        FILE maul2dTargets.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/maul2d)
+    configure_package_config_file(cmake/maul2dConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/maul2dConfig.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/maul2d)
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/maul2dConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/maul2dConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/maul2dConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/maul2d)
+    configure_file(cmake/maul2d.pc.in ${CMAKE_CURRENT_BINARY_DIR}/maul2d.pc @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/maul2d.pc
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 endif()
