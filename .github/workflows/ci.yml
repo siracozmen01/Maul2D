@@ -80,6 +80,21 @@ jobs:
           name: hash-${{ matrix.name }}
           path: hash-${{ matrix.name }}.txt
 
+  tsan:
+    name: thread sanitizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_TSAN=ON -DMAUL2D_SIMD=scalar -DCMAKE_C_COMPILER=clang
+      - name: Build
+        run: cmake --build build -j 4
+      - name: Run the thread-heavy suites
+        run: |
+          ./build/test_threads
+          ./build/test_fuzz
+          ./build/test_solver
+
   wasm:
     name: wasm-node
     runs-on: ubuntu-latest
@@ -155,7 +170,7 @@ jobs:
         # Also the scalar-SIMD cell: its hashes join the cross-platform
         # gate, so the fmaf fallback must match the vector backends bit
         # for bit or this build is red.
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_SANITIZE=ON -DMAUL2D_SIMD=scalar -DCMAKE_C_COMPILER=clang
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAUL2D_SANITIZE=ON -DMAUL2D_VALIDATE=ON -DMAUL2D_SIMD=scalar -DCMAKE_C_COMPILER=clang
       - name: Build
         run: cmake --build build
       - name: Run

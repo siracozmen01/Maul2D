@@ -191,6 +191,8 @@ typedef struct m2World
     int32_t particleBodyCapacity; // 4 per particle of capacity
     int32_t particleBodyCount;
     int32_t particleBodyOverflow;
+    uint64_t particlePoolFullCount; // cumulative quiet-full refusals
+    uint64_t misuseCount;           // cumulative loud rejections
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;

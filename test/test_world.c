@@ -1657,6 +1657,59 @@ static void TestLeftoverBasket(void)
 // Dominance (slice 77, a rival lesson): the higher body cannot be
 // pushed by the lower one in contacts, statics outrank everyone,
 // joints stay symmetric.
+// The diagnostics surface: a healthy world validates, quiet facts
+// count, and typed-path misuse counts without asserting.
+static void TestValidateAndCounters(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.particleCapacity = 8;
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef fd = m2DefaultBodyDef();
+    fd.position = (m2Pos2){0.0, -0.5};
+    m2ShapeDef fs = m2DefaultShapeDef();
+    m2Polygon slab = m2MakeBox(4.0f, 0.5f);
+    m2CreatePolygonShape(m2CreateBody(world, &fd), &fs, &slab);
+    m2BodyDef ad = m2DefaultBodyDef();
+    m2BodyId hook = m2CreateBody(world, &ad);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){0.0, 1.0};
+    m2BodyId bob = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    m2Circle disc = {{0.0f, 0.0f}, 0.3f};
+    m2CreateCircleShape(bob, &sd, &disc);
+    m2DistanceJointDef dj = m2DefaultDistanceJointDef();
+    dj.bodyIdA = hook;
+    dj.bodyIdB = bob;
+    m2JointId rope = m2CreateDistanceJoint(world, &dj);
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Validate(world), "a healthy world validates");
+    uint64_t before = m2World_Hash(world);
+    m2World_Validate(world);
+    CHECK(m2World_Hash(world) == before, "the validator is a pure reader");
+
+    // Quiet facts count: fill the pool past its brim.
+    for (int32_t i = 0; i < 12; ++i)
+    {
+        m2World_EmitParticle(world, (m2Pos2){(double)i, 5.0}, (m2Vec2){0.0f, 0.0f}, 0);
+    }
+    m2Counters counters = m2World_GetCounters(world);
+    CHECK(counters.particlePoolFull == 4, "refused emits are on the scoreboard");
+
+    // Typed-path misuse counts without asserting: a gear getter on a
+    // distance joint is quiet in every build, and countable.
+    CHECK(m2GearJoint_GetRatio(rope) == 0.0f, "the wrong-type getter answers zero");
+    counters = m2World_GetCounters(world);
+    CHECK(counters.misuse >= 1, "the wrong-type read is on the scoreboard");
+    m2DestroyWorld(world);
+}
+
 // Subsystem hashes: twins agree part by part, and a nudge to one
 // subsystem splits exactly that part.
 static void TestHashParts(void)
@@ -1922,6 +1975,7 @@ int main(void)
     TestDominance();
     TestShatterBody();
     TestHashParts();
+    TestValidateAndCounters();
     TestLeftoverBasket();
     TestSmallBasket();
     TestDormancyMassAndExplosions();

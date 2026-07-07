@@ -338,6 +338,17 @@ work in game code feeding the world different inputs; the journal
 will confirm it, because two tapes of the same inputs replay to the
 same bits by contract.
 
+## Diagnostics
+
+`m2World_GetCounters` carries the scoreboard: live object counts,
+solver facts, and the quiet runtime truths that Release builds
+cannot assert about: emits refused by a full pool, neighbor pairs
+dropped by the budget, and stale-id or wrong-type rejections on the
+typed paths. `m2World_Validate` walks every invariant the world
+owns (finiteness, endpoint liveness, canonical pair order, registry
+consistency) and answers loudly; build with -DMAUL2D_VALIDATE=ON
+and it runs itself after every step of your debug sessions.
+
 ## Threads
 
 Readers (queries, getters, diagnostics, draw) may run concurrently

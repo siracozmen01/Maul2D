@@ -3,6 +3,8 @@ project(maul2d VERSION 1.8.0 LANGUAGES C)
 
 option(MAUL2D_SANITIZE "Build with ASAN/UBSAN" OFF)
 option(MAUL2D_INSTALL "Generate install and package rules" ON)
+option(MAUL2D_TSAN "Build with ThreadSanitizer" OFF)
+option(MAUL2D_VALIDATE "Run m2World_Validate after every step" OFF)
 
 include(cmake/CompilerFlags.cmake)
 

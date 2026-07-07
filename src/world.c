@@ -1525,6 +1525,10 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
     m2SolveStep(world, dt, substepCount);
     uint64_t tSolve = m2TimeNowNs();
     m2UpdateSleep(world, dt);
+#ifdef MAUL2D_VALIDATE
+    // The validate build walks the invariants after every step.
+    M2_ASSERT(m2World_Validate(worldId));
+#endif
     // Freshness streak: two consecutive step-ends asleep guarantee the
     // stashed manifolds were computed from these exact transforms.
     for (int32_t i = 0; i < world->maxBodyIndex; ++i)
@@ -4350,6 +4354,10 @@ m2Counters m2World_GetCounters(m2WorldId worldId)
     counters.graphColors = world->lastGraphColors;
     counters.overflowConstraints = world->lastOverflow;
     counters.stepCount = world->stepCount;
+    counters.particlePairOverflow = world->particlePairOverflow;
+    counters.particleBodyOverflow = world->particleBodyOverflow;
+    counters.particlePoolFull = world->particlePoolFullCount;
+    counters.misuse = world->misuseCount;
     return counters;
 }
 
@@ -5781,6 +5789,7 @@ static int32_t TypedJointSlot(m2World* world, m2JointId jointId, uint8_t type)
     if (index < 0 || index >= world->jointCapacity || world->jointAlive[index] == 0 ||
         world->jointGenerations[index] != jointId.generation || world->jointType[index] != type)
     {
+        world->misuseCount += 1; // stale id or wrong type on a typed path
         return -1;
     }
     return index;
@@ -6458,7 +6467,8 @@ m2ParticleId m2World_EmitParticle(m2WorldId worldId, m2Pos2 position, m2Vec2 vel
     if (world->particleFreeCount == 0)
     {
         // A full pool is a runtime fact, not misuse: pace emitters
-        // off m2World_GetParticleCount.
+        // off m2World_GetParticleCount; the counter keeps the score.
+        world->particlePoolFullCount += 1;
         return m2_nullParticleId;
     }
     int32_t index = world->particleFreeQueue[world->particleFreeHead];
@@ -6847,4 +6857,96 @@ m2WorldHashParts m2World_HashParts(m2WorldId worldId)
     parts.particles = h;
 
     return parts;
+}
+
+// The invariant walk: everything a healthy world must be able to
+// say about itself, checked loudly. Pure reader.
+bool m2World_Validate(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        M2_ASSERT(false);
+        return false;
+    }
+#define M2_CHECK_INVARIANT(cond)                                                                   \
+    do                                                                                             \
+    {                                                                                              \
+        if (!(cond))                                                                               \
+        {                                                                                          \
+            M2_ASSERT(false);                                                                      \
+            return false;                                                                          \
+        }                                                                                          \
+    } while (0)
+
+    for (int32_t i = 0; i < world->maxBodyIndex; ++i)
+    {
+        if (world->alive[i] == 0)
+        {
+            continue;
+        }
+        m2Transform xf = world->transforms[i];
+        M2_CHECK_INVARIANT(xf.p.x == xf.p.x && xf.p.y == xf.p.y);
+        M2_CHECK_INVARIANT(xf.q.c == xf.q.c && xf.q.s == xf.q.s);
+        m2Vec2 v = world->linearVelocities[i];
+        M2_CHECK_INVARIANT(v.x == v.x && v.y == v.y);
+        M2_CHECK_INVARIANT(world->angularVelocities[i] == world->angularVelocities[i]);
+        M2_CHECK_INVARIANT(world->types[i] <= 2);
+    }
+    for (int32_t i = 0; i < world->maxShapeIndex; ++i)
+    {
+        if (world->shapeAlive[i] == 0)
+        {
+            continue;
+        }
+        int32_t body = world->shapeBody[i];
+        M2_CHECK_INVARIANT(body >= 0 && body < world->bodyCapacity && world->alive[body] != 0);
+    }
+    for (int32_t i = 0; i < world->maxJointIndex; ++i)
+    {
+        if (world->jointAlive[i] == 0)
+        {
+            continue;
+        }
+        M2_CHECK_INVARIANT(world->jointType[i] <= 10);
+        int32_t a = world->jointBodyA[i];
+        int32_t b = world->jointBodyB[i];
+        M2_CHECK_INVARIANT(a >= 0 && a < world->bodyCapacity && world->alive[a] != 0);
+        M2_CHECK_INVARIANT(b >= 0 && b < world->bodyCapacity && world->alive[b] != 0);
+    }
+    for (int32_t i = 1; i < world->pairCount; ++i)
+    {
+        // The canonical ordering law, checked where it lives.
+        M2_CHECK_INVARIANT(world->pairKeys[i - 1] < world->pairKeys[i]);
+    }
+    if (world->particleCapacity > 0)
+    {
+        int32_t alive = 0;
+        for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+        {
+            if (world->particleAlive[i] == 0)
+            {
+                continue;
+            }
+            alive += 1;
+            m2Pos2 p = world->particlePositions[i];
+            M2_CHECK_INVARIANT(p.x == p.x && p.y == p.y);
+            m2Vec2 v = world->particleVelocities[i];
+            M2_CHECK_INVARIANT(v.x == v.x && v.y == v.y);
+        }
+        M2_CHECK_INVARIANT(alive == world->particleCount);
+        for (int32_t k = 0; k < world->particleSpringCount; ++k)
+        {
+            M2_CHECK_INVARIANT(world->particleAlive[world->particleSpringA[k]] != 0 &&
+                               world->particleAlive[world->particleSpringB[k]] != 0);
+        }
+        for (int32_t k = 0; k < world->particleTriadCount; ++k)
+        {
+            M2_CHECK_INVARIANT(world->particleAlive[world->particleTriadA[k]] != 0 &&
+                               world->particleAlive[world->particleTriadB[k]] != 0 &&
+                               world->particleAlive[world->particleTriadC[k]] != 0);
+        }
+    }
+#undef M2_CHECK_INVARIANT
+    return true;
 }

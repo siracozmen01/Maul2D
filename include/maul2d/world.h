@@ -78,6 +78,15 @@ extern "C"
     /// Generation-checked liveness. Thread class: reader.
     bool m2World_IsValid(m2WorldId worldId);
 
+    /// Walk the whole world and check its invariants: finiteness of
+    /// every live transform, velocity and particle, endpoint liveness
+    /// of joints and jelly nets, registry count consistency, pair-key
+    /// ordering. Asserts loudly on the first violation and returns
+    /// false; true means the world is sound. Pure reader; costs a
+    /// full walk, so call it from debug paths. Building with
+    /// -DMAUL2D_VALIDATE=ON runs it automatically after every step.
+    bool m2World_Validate(m2WorldId worldId);
+
     /// Changing gravity wakes every sleeping dynamic body: a stack
     /// must not float against a world that turned upside down. (The
     /// reference leaves sleepers floating; Maul picks honesty.) The
@@ -157,6 +166,12 @@ extern "C"
         int32_t graphColors;         // colors used last step
         int32_t overflowConstraints; // serial bucket last step
         uint64_t stepCount;
+        // Diagnostics for integrators: quiet runtime facts and loud
+        // misuse, countable in Release where asserts are silent.
+        int32_t particlePairOverflow; // pairs dropped last step (budget)
+        int32_t particleBodyOverflow; // body contacts dropped last step
+        uint64_t particlePoolFull;    // emits refused by a full pool, cumulative
+        uint64_t misuse;              // stale-id or wrong-type API rejections, cumulative
     } m2Counters;
 
     /// Snapshot of the last completed Step. Thread class: reader.
