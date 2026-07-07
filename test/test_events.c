@@ -373,14 +373,23 @@ static void TestSensors(void)
     bool sawEnter = false;
     bool sawExit = false;
     bool contactStreamPolluted = false;
+    int32_t enterPointCount = -1;
+    double enterPointY = 0.0;
     for (int32_t i = 0; i < 180; ++i)
     {
         m2World_Step(world, 1.0f / 60.0f, 4);
         m2SensorEvents sensor = m2World_GetSensorEvents(world);
         for (int32_t k = 0; k < sensor.beginCount; ++k)
         {
-            sawEnter = sawEnter || sensor.beginEvents[k].shapeIdA.index1 == zoneId.index1 ||
-                       sensor.beginEvents[k].shapeIdB.index1 == zoneId.index1;
+            bool isZone = sensor.beginEvents[k].shapeIdA.index1 == zoneId.index1 ||
+                          sensor.beginEvents[k].shapeIdB.index1 == zoneId.index1;
+            sawEnter = sawEnter || isZone;
+            if (isZone && enterPointCount < 0)
+            {
+                // The overlap hit point rides the begin event (b2 #945).
+                enterPointCount = sensor.beginEvents[k].pointCount;
+                enterPointY = sensor.beginEvents[k].points[0].y;
+            }
         }
         for (int32_t k = 0; k < sensor.endCount; ++k)
         {
@@ -399,6 +408,8 @@ static void TestSensors(void)
     CHECK(sawExit, "and leaving out the bottom");
     CHECK(!contactStreamPolluted, "the contact stream never hears about sensors");
     CHECK(m2Body_GetPosition(runner).y < 1.0, "the runner fell straight through the zone");
+    CHECK(enterPointCount > 0, "the sensor begin carries the overlap hit point");
+    CHECK(enterPointY > 2.0 && enterPointY < 4.0, "the hit point sits at the zone overlap");
 
     // A box parked inside a sensor zone still sleeps (sensors never
     // hold anyone awake).

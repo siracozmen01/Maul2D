@@ -57,9 +57,12 @@ extern "C"
     /// Thread class: reader.
     m2ContactEvents m2World_GetContactEvents(m2WorldId worldId);
 
-    /// Sensor overlap stream: same shapes-and-step records, separate
-    /// buffers, same bookending guarantees (a destroyed or filtered
-    /// overlap always emits its end). Thread class: reader.
+    /// Sensor overlap stream: same records, separate buffers, same
+    /// bookending guarantees (a destroyed or filtered overlap always
+    /// emits its end). Each begin now carries the overlap hit point,
+    /// normal and closing speed, filled from the overlap manifold just
+    /// like a solid contact begin (b2 #945); an end carries shapes and
+    /// step only. Thread class: reader.
     typedef struct m2SensorEvents
     {
         const m2ContactBeginEvent* beginEvents;

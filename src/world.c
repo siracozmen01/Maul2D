@@ -230,18 +230,13 @@ static void EmitEnd(m2World* world, int32_t shapeA, int32_t shapeB)
     e->step = world->stepCount;
 }
 
-static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB, int32_t pairIndex)
+// Shared begin-event geometry: the manifold's world normal, the world
+// hit points, and the first-point closing speed, all in body A's frame.
+// Used by the solid-contact and the sensor begin streams alike, so a
+// sensor overlap reports WHERE it was entered and how fast (b2 #945).
+static void FillBeginGeometry(m2World* world, m2ContactBeginEvent* e, int32_t pairIndex,
+                              int32_t shapeA, int32_t shapeB)
 {
-    if (world->beginEventCount >= world->pairCapacity)
-    {
-        return;
-    }
-    m2ContactBeginEvent* e = &world->beginEvents[world->beginEventCount++];
-    memset(e, 0, sizeof(*e)); // no stack garbage in observer payloads
-    e->shapeIdA = MakeShapeId(world, shapeA);
-    e->shapeIdB = MakeShapeId(world, shapeB);
-    e->step = world->stepCount;
-
     const m2Manifold* manifold = &world->manifolds[pairIndex];
     int32_t bodyA = world->shapeBody[shapeA];
     int32_t bodyB = world->shapeBody[shapeB];
@@ -281,6 +276,20 @@ static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB, int32_t pa
     }
 }
 
+static void EmitBegin(m2World* world, int32_t shapeA, int32_t shapeB, int32_t pairIndex)
+{
+    if (world->beginEventCount >= world->pairCapacity)
+    {
+        return;
+    }
+    m2ContactBeginEvent* e = &world->beginEvents[world->beginEventCount++];
+    memset(e, 0, sizeof(*e)); // no stack garbage in observer payloads
+    e->shapeIdA = MakeShapeId(world, shapeA);
+    e->shapeIdB = MakeShapeId(world, shapeB);
+    e->step = world->stepCount;
+    FillBeginGeometry(world, e, pairIndex, shapeA, shapeB);
+}
+
 static void EmitSensorEnd(m2World* world, int32_t shapeA, int32_t shapeB)
 {
     if (world->sensorEndCount < world->pairCapacity)
@@ -292,7 +301,7 @@ static void EmitSensorEnd(m2World* world, int32_t shapeA, int32_t shapeB)
     }
 }
 
-static void EmitSensorBegin(m2World* world, int32_t shapeA, int32_t shapeB)
+static void EmitSensorBegin(m2World* world, int32_t shapeA, int32_t shapeB, int32_t pairIndex)
 {
     if (world->sensorBeginCount < world->pairCapacity)
     {
@@ -301,6 +310,8 @@ static void EmitSensorBegin(m2World* world, int32_t shapeA, int32_t shapeB)
         e->shapeIdA = MakeShapeId(world, shapeA);
         e->shapeIdB = MakeShapeId(world, shapeB);
         e->step = world->stepCount;
+        // The overlap manifold carries the hit point and normal (b2 #945).
+        FillBeginGeometry(world, e, pairIndex, shapeA, shapeB);
     }
 }
 
@@ -1568,7 +1579,7 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
             {
                 if (sensor)
                 {
-                    EmitSensorBegin(world, a, b);
+                    EmitSensorBegin(world, a, b, i);
                 }
                 else
                 {
