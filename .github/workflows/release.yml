@@ -78,9 +78,9 @@ jobs:
       PLATFORM: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
-      - name: install X11 (linux testbed viewer)
+      - name: install X11 and OpenGL (linux testbed viewer)
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxkbcommon-dev
       - name: configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMAUL2D_TESTBED=ON
       - name: build
