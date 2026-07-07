@@ -12,6 +12,7 @@
 
 #include "maul2d/base.h"
 #include "maul2d/math.h"
+#include "simd.h"
 
 static m2Vec2 RotateVec(m2Rot q, m2Vec2 v)
 {
@@ -239,7 +240,7 @@ static m2SegmentDistanceResult SegmentDistance(m2Vec2 p1, m2Vec2 q1, m2Vec2 p2, 
     return result;
 }
 
-static float FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Polygon* poly2)
+float m2FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Polygon* poly2)
 {
     int32_t bestIndex = 0;
     float maxSeparation = -3.4e38f;
@@ -261,6 +262,142 @@ static float FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const
     }
     *edgeIndex = bestIndex;
     return maxSeparation;
+}
+
+// A lane-valid bit mask (all-ones or all-zeros per lane) for m2F8Select,
+// built by a plain integer store so it stays backend-agnostic.
+static m2f8 LaneMask(const int32_t* valid)
+{
+    float bits[8];
+    for (int32_t k = 0; k < 8; ++k)
+    {
+        uint32_t m = valid[k] ? 0xFFFFFFFFu : 0u;
+        memcpy(&bits[k], &m, sizeof(m));
+    }
+    return m2F8Load(bits);
+}
+
+// Eight-lane SAT (queue #2, phase 5 groundwork). Runs m2FindMaxSeparation
+// for `count` (1..8) independent (poly1, poly2) pairs at once, lane k =
+// pair k. The result is BIT-IDENTICAL to calling m2FindMaxSeparation on
+// each pair, by construction:
+//   - sij uses the same sub, mul, sub, mul, add order (no fused multiply
+//     add), so each product and sum rounds exactly as the scalar path;
+//   - the per-edge min is m2F8Min, which is compare-and-select, the same
+//     a<b?a:b as m2MinF;
+//   - the argmax is a strict m2F8GT walked in the same edge order 0..n,
+//     so the first edge to reach a new max wins, exactly as scalar;
+//   - mixed vertex counts are handled by masking: a poly2 vertex past a
+//     lane's count is padded to +big so the min ignores it, and a poly1
+//     edge past a lane's count is padded to -big so the argmax ignores
+//     it. The gather clamps such lanes to vertex 0 (a valid slot) so no
+//     stale or out-of-count vertex is ever read.
+// This kernel is not yet on the hot path; the fuzz gate proves the bit
+// law before it is wired into the narrowphase loop.
+void m2FindMaxSeparationBatch8(const m2Polygon* const* polys1, const m2Polygon* const* polys2,
+                               int32_t count, float* outSep, int32_t* outEdge)
+{
+    int32_t count1[8];
+    int32_t count2[8];
+    int32_t maxC1 = 0;
+    int32_t maxC2 = 0;
+    for (int32_t k = 0; k < 8; ++k)
+    {
+        int32_t c1 = k < count ? polys1[k]->count : 0;
+        int32_t c2 = k < count ? polys2[k]->count : 0;
+        count1[k] = c1;
+        count2[k] = c2;
+        if (c1 > maxC1)
+        {
+            maxC1 = c1;
+        }
+        if (c2 > maxC2)
+        {
+            maxC2 = c2;
+        }
+    }
+
+    const float kNegBig = -3.4e38f; // scalar maxSeparation seed
+    const float kPosBig = 3.4e38f;  // scalar per-edge si seed and min pad
+    const m2f8 vPosBig = m2F8Set1(kPosBig);
+    const m2f8 vNegBig = m2F8Set1(kNegBig);
+
+    m2f8 maxSep = vNegBig;
+    m2f8 bestIndex = m2F8Zero(); // scalar bestIndex seed = 0
+
+    float lane[8];
+    int32_t valid[8];
+
+    for (int32_t i = 0; i < maxC1; ++i)
+    {
+        for (int32_t k = 0; k < 8; ++k)
+        {
+            valid[k] = i < count1[k];
+            int32_t idx = valid[k] ? i : 0;
+            lane[k] = polys1[k] ? polys1[k]->normals[idx].x : 0.0f;
+        }
+        m2f8 nx = m2F8Load(lane);
+        for (int32_t k = 0; k < 8; ++k)
+        {
+            int32_t idx = i < count1[k] ? i : 0;
+            lane[k] = polys1[k] ? polys1[k]->normals[idx].y : 0.0f;
+        }
+        m2f8 ny = m2F8Load(lane);
+        for (int32_t k = 0; k < 8; ++k)
+        {
+            int32_t idx = i < count1[k] ? i : 0;
+            lane[k] = polys1[k] ? polys1[k]->vertices[idx].x : 0.0f;
+        }
+        m2f8 v1x = m2F8Load(lane);
+        for (int32_t k = 0; k < 8; ++k)
+        {
+            int32_t idx = i < count1[k] ? i : 0;
+            lane[k] = polys1[k] ? polys1[k]->vertices[idx].y : 0.0f;
+        }
+        m2f8 v1y = m2F8Load(lane);
+
+        m2f8 si = vPosBig;
+        for (int32_t j = 0; j < maxC2; ++j)
+        {
+            int32_t jvalid[8];
+            for (int32_t k = 0; k < 8; ++k)
+            {
+                jvalid[k] = j < count2[k];
+                int32_t idx = jvalid[k] ? j : 0;
+                lane[k] = polys2[k] ? polys2[k]->vertices[idx].x : 0.0f;
+            }
+            m2f8 p2x = m2F8Load(lane);
+            for (int32_t k = 0; k < 8; ++k)
+            {
+                int32_t idx = j < count2[k] ? j : 0;
+                lane[k] = polys2[k] ? polys2[k]->vertices[idx].y : 0.0f;
+            }
+            m2f8 p2y = m2F8Load(lane);
+
+            // sij = n.x*(p2.x - v1.x) + n.y*(p2.y - v1.y), the same op
+            // order and rounding as the scalar kernel.
+            m2f8 dx = m2F8Sub(p2x, v1x);
+            m2f8 dy = m2F8Sub(p2y, v1y);
+            m2f8 sij = m2F8Add(m2F8Mul(nx, dx), m2F8Mul(ny, dy));
+            sij = m2F8Select(LaneMask(jvalid), sij, vPosBig);
+            si = m2F8Min(si, sij);
+        }
+
+        m2f8 siMasked = m2F8Select(LaneMask(valid), si, vNegBig);
+        m2f8 gt = m2F8GT(siMasked, maxSep);
+        maxSep = m2F8Select(gt, siMasked, maxSep);
+        bestIndex = m2F8Select(gt, m2F8Set1((float)i), bestIndex);
+    }
+
+    float sepOut[8];
+    float idxOut[8];
+    m2F8Store(sepOut, maxSep);
+    m2F8Store(idxOut, bestIndex);
+    for (int32_t k = 0; k < count; ++k)
+    {
+        outSep[k] = sepOut[k];
+        outEdge[k] = (int32_t)idxOut[k];
+    }
 }
 
 static m2Manifold ClipPolygons(const m2Polygon* polyA, const m2Polygon* polyB, int32_t edgeA,
@@ -381,9 +518,9 @@ m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativeP
     }
 
     int32_t edgeA = 0;
-    float separationA = FindMaxSeparation(&edgeA, &localA, &localB);
+    float separationA = m2FindMaxSeparation(&edgeA, &localA, &localB);
     int32_t edgeB = 0;
-    float separationB = FindMaxSeparation(&edgeB, &localB, &localA);
+    float separationB = m2FindMaxSeparation(&edgeB, &localB, &localA);
     float radius = localA.radius + localB.radius;
 
     m2Manifold manifold;

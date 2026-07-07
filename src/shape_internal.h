@@ -83,6 +83,14 @@ m2Manifold m2CollideCircles(const m2Circle* a, const m2Circle* b, m2RelativePose
 m2Manifold m2CollidePolygonAndCircle(const m2Polygon* a, const m2Circle* b, m2RelativePose pose);
 m2Manifold m2CollidePolygons(const m2Polygon* a, const m2Polygon* b, m2RelativePose pose);
 
+// SAT support: the largest separation of poly2 across poly1's edges,
+// with the winning edge. The batch form runs `count` (1..8) independent
+// pairs at once and is bit-identical to the scalar form per lane (queue
+// #2 narrowphase SIMD groundwork; the fuzz gate holds the bit law).
+float m2FindMaxSeparation(int32_t* edgeIndex, const m2Polygon* poly1, const m2Polygon* poly2);
+void m2FindMaxSeparationBatch8(const m2Polygon* const* polys1, const m2Polygon* const* polys2,
+                               int32_t count, float* outSep, int32_t* outEdge);
+
 // Capsules and segments enter the polygon kernels as 2-vertex rounded
 // polygons (the Box2D v3 model): one kernel table, fewer edge cases.
 m2Polygon m2MakeSegmentProxy(m2Vec2 p1, m2Vec2 p2, float radius);
