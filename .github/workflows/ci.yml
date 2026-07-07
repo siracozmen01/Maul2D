@@ -74,6 +74,7 @@ jobs:
           "$BIN/test_fluid$SUFFIX" | tee -a out.txt
           "$BIN/test_threads$SUFFIX" | tee -a out.txt
           "$BIN/test_draw$SUFFIX" | tee -a out.txt
+          "$BIN/test_distance$SUFFIX" | tee -a out.txt
           grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > "hash-${{ matrix.name }}.txt"
 
       - uses: actions/upload-artifact@v4
@@ -132,6 +133,7 @@ jobs:
           node build/test_fluid.js | tee -a out.txt
           node build/test_threads.js | tee -a out.txt
           node build/test_draw.js | tee -a out.txt
+          node build/test_distance.js | tee -a out.txt
           grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > hash-wasm-node.txt
       - uses: actions/upload-artifact@v4
         with:
@@ -194,6 +196,7 @@ jobs:
           ./build/test_fluid | tee -a out.txt
           ./build/test_threads | tee -a out.txt
           ./build/test_draw | tee -a out.txt
+          ./build/test_distance | tee -a out.txt
           grep -E '^M2_(DET|WORLD|BP|SHAPE|CONTACT|SOLVER|ISLAND|CCD|EVENT|JOINT|JOURNAL|QUERY|CHAOS|THREAD|FUZZ|FLUID)_HASH=' out.txt | tr -d '\r' > hash-sanitize-scalar.txt
       - uses: actions/upload-artifact@v4
         with:

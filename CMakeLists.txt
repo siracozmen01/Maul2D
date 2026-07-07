@@ -151,6 +151,13 @@ target_link_libraries(test_draw PRIVATE maul2d)
 maul2d_apply_flags(test_draw)
 add_test(NAME draw COMMAND test_draw)
 
+# White-box: exercises the internal GJK proxy kernel directly.
+add_executable(test_distance test/test_distance.c)
+target_link_libraries(test_distance PRIVATE maul2d)
+target_include_directories(test_distance PRIVATE src)
+maul2d_apply_flags(test_distance)
+add_test(NAME distance COMMAND test_distance)
+
 option(MAUL2D_SAMPLES "Build the sample programs" ON)
 if(MAUL2D_SAMPLES)
     add_subdirectory(samples)
