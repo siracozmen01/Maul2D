@@ -260,6 +260,23 @@ jobs:
       - name: soak 300k steps
         run: ./build/test_soak 300000
 
+  deep-fuzz:
+    name: weekly deep fuzz
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build --target test_fuzz -j 4
+      # 200 deterministically generated extra seeds beyond the ten gated
+      # ones, each through all four promises. The gated M2_FUZZ_HASH still
+      # comes from the ten canonical seeds alone, so this widens coverage
+      # without moving the gate. Skipped on push (weekly and dispatch only).
+      - name: 200 deep-sweep seeds
+        run: ./build/test_fuzz 200
+
   perf-trend:
     name: perf trend
     runs-on: ubuntu-latest

@@ -24,7 +24,14 @@
 #define M2_CONTACT_HERTZ          30.0f
 #define M2_CONTACT_DAMPING_RATIO  10.0f
 #define M2_CONTACT_PUSH_MAX_SPEED 3.0f
-#define M2_RESTITUTION_THRESHOLD  1.0f
+// Reference (b2DefaultWorldDef) default maximum linear speed, 400 m/s. It
+// is a SAFETY bound, not a gameplay knob: an over-constrained or
+// near-degenerate configuration is bounded here instead of pumping speed
+// exponentially to infinity and then a NaN. Hardcoded like the angular cap
+// (M2_PI quarter-turn) so the guard stays off the determinism-sensitive
+// worldDef surface; 400 m/s leaves ample headroom over any real 2D motion.
+#define M2_MAX_LINEAR_SPEED      400.0f
+#define M2_RESTITUTION_THRESHOLD 1.0f
 
 typedef struct m2Softness
 {
@@ -2388,21 +2395,36 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             {
                 continue;
             }
-            // Per-substep rotation cap, applied after the solve and
-            // before the position consumes it: a body may not turn
-            // more than a quarter circle in a substep (reference
-            // B2_MAX_ROTATION). Tame scenes never reach it; a
-            // near-massless body under a stray solver impulse stops
-            // short of the angle guard instead of exploding into it.
-            float maxW = 0.25f * M2_PI * invH;
-            float wi = world->angularVelocities[i];
-            if (wi > maxW)
+            // Reference velocity caps (b2 maximumLinearSpeed 400 m/s and
+            // B2_MAX_ROTATION, a quarter turn per substep), applied to the
+            // STORED dynamic velocity at the point the integrator consumes
+            // it. The reference caps in IntegrateVelocities; Maul caps here
+            // because a warm-started joint accumulation can spike a body past
+            // the cap AFTER that stage, and the guard must bound what
+            // m2MakeRot and the f64 position actually see. Capping the stored
+            // value each substep also breaks an over-constrained scene's
+            // exponential velocity growth at the source, so it can never
+            // reach inf and hand a kinematic neighbour 0 * inf = NaN. Ratio
+            // scaling matches the reference bit-form; tame scenes reach
+            // neither cap, so the gated hashes are untouched.
+            if (world->types[i] == (uint8_t)m2_dynamicBody)
             {
-                world->angularVelocities[i] = maxW;
-            }
-            else if (wi < -maxW)
-            {
-                world->angularVelocities[i] = -maxW;
+                float vx = world->linearVelocities[i].x;
+                float vy = world->linearVelocities[i].y;
+                float v2 = vx * vx + vy * vy;
+                if (v2 > M2_MAX_LINEAR_SPEED * M2_MAX_LINEAR_SPEED)
+                {
+                    float ratio = M2_MAX_LINEAR_SPEED / sqrtf(v2);
+                    world->linearVelocities[i].x = vx * ratio;
+                    world->linearVelocities[i].y = vy * ratio;
+                }
+                float maxW = 0.25f * M2_PI * invH;
+                float wv = world->angularVelocities[i];
+                if (wv * wv > maxW * maxW)
+                {
+                    float ratio = maxW / m2AbsF(wv);
+                    world->angularVelocities[i] = wv * ratio;
+                }
             }
             // The center of mass is what the velocity moves; the origin
             // swings around it. With the COM on the origin both extra

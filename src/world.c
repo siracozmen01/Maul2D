@@ -3485,6 +3485,33 @@ void m2SetShapeParamInternal(m2World* world, m2ShapeId shapeId, uint8_t param, f
     else if (param == 2)
     {
         world->shapeTangentSpeed[index] = value;
+        // A belt that changes speed must wake its riders, and the wake must
+        // live HERE, inside the journaled channel, so a replay reproduces
+        // it exactly. When it lived only in the public wrapper the replay
+        // set the speed but left a sleeping rider asleep, and the recorded
+        // and replayed worlds diverged (a fuzz seed caught this once the
+        // velocity cap let it run far enough to reach the replay check).
+        int32_t body = world->shapeBody[index];
+        for (int32_t i = 0; i < world->pairCount; ++i)
+        {
+            int32_t a = (int32_t)(world->pairKeys[i] >> 32);
+            int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
+            if (a != index && b != index)
+            {
+                continue;
+            }
+            int32_t otherBody = world->shapeBody[a == index ? b : a];
+            if (world->types[otherBody] == (uint8_t)m2_dynamicBody)
+            {
+                world->asleep[otherBody] = 0;
+                world->sleepTimes[otherBody] = 0.0f;
+            }
+        }
+        if (world->types[body] == (uint8_t)m2_dynamicBody)
+        {
+            world->asleep[body] = 0;
+            world->sleepTimes[body] = 0.0f;
+        }
     }
     else
     {
@@ -3497,33 +3524,9 @@ void m2Shape_SetTangentSpeed(m2ShapeId shapeId, float speed)
     m2World* world = WorldFromIndex(shapeId.world0);
     if (world != NULL && speed == speed)
     {
+        // The wake now rides inside the journaled channel, so the live call
+        // and its replay leave identical sleep state.
         m2SetShapeParamInternal(world, shapeId, 2, speed);
-        // A belt that changes speed must wake its riders.
-        int32_t index = shapeId.index1 - 1;
-        if (index >= 0 && index < world->shapeCapacity && world->shapeAlive[index] != 0)
-        {
-            int32_t body = world->shapeBody[index];
-            for (int32_t i = 0; i < world->pairCount; ++i)
-            {
-                int32_t a = (int32_t)(world->pairKeys[i] >> 32);
-                int32_t b = (int32_t)(world->pairKeys[i] & 0xFFFFFFFFu);
-                if (a != index && b != index)
-                {
-                    continue;
-                }
-                int32_t otherBody = world->shapeBody[a == index ? b : a];
-                if (world->types[otherBody] == (uint8_t)m2_dynamicBody)
-                {
-                    world->asleep[otherBody] = 0;
-                    world->sleepTimes[otherBody] = 0.0f;
-                }
-            }
-            if (world->types[body] == (uint8_t)m2_dynamicBody)
-            {
-                world->asleep[body] = 0;
-                world->sleepTimes[body] = 0.0f;
-            }
-        }
     }
 }
 

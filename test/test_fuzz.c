@@ -836,6 +836,7 @@ static const uint64_t s_regressionSeeds[] = {
     0x00000000C0FFEE99ull, // dense stacks with ratchet joints
     0x000000001CEB00DAull, // shatter into a flowing pool
     0x00000000FADEDCABull, // lifetime reaping mid-rollback
+    0x81B0FDFA6D7E8E98ull, // belt-wake side effect lost on journal replay
 };
 
 // Deterministic extra seeds for the weekly deep sweep: a mixing
