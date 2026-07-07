@@ -59,4 +59,10 @@ function(maul2d_apply_flags target)
     if(MAUL2D_VALIDATE)
         target_compile_definitions(${target} PRIVATE MAUL2D_VALIDATE=1)
     endif()
+    # Coverage is a one-off audit switch, never a determinism cell: the
+    # instrumentation only adds counters, so it can ride the normal flags.
+    if(MAUL2D_COVERAGE AND NOT MSVC)
+        target_compile_options(${target} PRIVATE --coverage -O0)
+        target_link_options(${target} PRIVATE --coverage)
+    endif()
 endfunction()

@@ -5,6 +5,7 @@ option(MAUL2D_SANITIZE "Build with ASAN/UBSAN" OFF)
 option(MAUL2D_INSTALL "Generate install and package rules" ON)
 option(MAUL2D_TSAN "Build with ThreadSanitizer" OFF)
 option(MAUL2D_VALIDATE "Run m2World_Validate after every step" OFF)
+option(MAUL2D_COVERAGE "Build with gcov coverage instrumentation (one-off audit)" OFF)
 
 include(cmake/CompilerFlags.cmake)
 
@@ -143,6 +144,12 @@ target_link_libraries(test_threads PRIVATE maul2d)
 target_include_directories(test_threads PRIVATE src)
 maul2d_apply_flags(test_threads)
 add_test(NAME threads COMMAND test_threads)
+
+# Black-box: drives only the public m2World_Draw, so no src include.
+add_executable(test_draw test/test_draw.c)
+target_link_libraries(test_draw PRIVATE maul2d)
+maul2d_apply_flags(test_draw)
+add_test(NAME draw COMMAND test_draw)
 
 option(MAUL2D_SAMPLES "Build the sample programs" ON)
 if(MAUL2D_SAMPLES)
