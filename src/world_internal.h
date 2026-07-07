@@ -152,7 +152,8 @@ typedef struct m2World
     float particleElasticStrength;
     // Step-transient fluid scratch: rebuilt from positions every
     // step, never walked, never hashed (the island precedent).
-    void* particleProxies; // capacity * 16 bytes (key, index, pad)
+    void* particleProxies;    // capacity * 16 bytes (key, index, pad)
+    void* particleProxiesTmp; // radix ping-pong buffer, same size
     int32_t* particlePairA;
     int32_t* particlePairB;
     float* particlePairWeight;

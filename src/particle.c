@@ -61,15 +61,41 @@ static uint64_t ShiftKey(uint64_t key, int32_t dx, int32_t dy)
     return ((uint64_t)cy << 32) | (uint64_t)cx;
 }
 
-static int CompareProxies(const void* lhs, const void* rhs)
+// Stable LSD radix over the 64-bit cell key, eight 8-bit passes.
+// The proxy array is built in ascending particle index order and
+// stability preserves it, so the result is exactly the (key, index)
+// order the old comparison sort produced: the gated pair digest is
+// the proof, byte for byte. O(n) instead of n log n, and the pair
+// pass stops being sort-bound as pools grow.
+static void SortProxies(m2ParticleProxy* proxies, m2ParticleProxy* scratch, int32_t count)
 {
-    const m2ParticleProxy* a = (const m2ParticleProxy*)lhs;
-    const m2ParticleProxy* b = (const m2ParticleProxy*)rhs;
-    if (a->key != b->key)
+    m2ParticleProxy* src = proxies;
+    m2ParticleProxy* dst = scratch;
+    for (int32_t pass = 0; pass < 8; ++pass)
     {
-        return a->key < b->key ? -1 : 1;
+        int32_t shift = pass * 8;
+        int32_t histogram[256];
+        memset(histogram, 0, sizeof(histogram));
+        for (int32_t i = 0; i < count; ++i)
+        {
+            histogram[(src[i].key >> shift) & 0xFF] += 1;
+        }
+        int32_t running = 0;
+        for (int32_t b = 0; b < 256; ++b)
+        {
+            int32_t n = histogram[b];
+            histogram[b] = running;
+            running += n;
+        }
+        for (int32_t i = 0; i < count; ++i)
+        {
+            dst[histogram[(src[i].key >> shift) & 0xFF]++] = src[i];
+        }
+        m2ParticleProxy* swap = src;
+        src = dst;
+        dst = swap;
     }
-    return a->index < b->index ? -1 : (a->index > b->index ? 1 : 0);
+    // Eight passes: the data ends where it started.
 }
 
 // First proxy at or after key, searching [lo, count).
@@ -151,7 +177,7 @@ void m2UpdateParticlePairs(m2World* world)
         proxies[proxyCount].pad = 0;
         proxyCount += 1;
     }
-    qsort(proxies, (size_t)proxyCount, sizeof(m2ParticleProxy), CompareProxies);
+    SortProxies(proxies, (m2ParticleProxy*)world->particleProxiesTmp, proxyCount);
 
     for (int32_t a = 0; a < proxyCount; ++a)
     {

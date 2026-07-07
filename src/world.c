@@ -1070,6 +1070,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         world->particlePairCapacity = 12 * particleCap;
         world->particleProxies = m2AllocZeroed((size_t)particleCap * 16);
         ok = ok && world->particleProxies != NULL;
+        world->particleProxiesTmp = m2AllocZeroed((size_t)particleCap * 16);
+        ok = ok && world->particleProxiesTmp != NULL;
         M2_ALLOC(particlePairA, world->particlePairCapacity, int32_t);
         M2_ALLOC(particlePairB, world->particlePairCapacity, int32_t);
         M2_ALLOC(particlePairWeight, world->particlePairCapacity, float);
@@ -1285,6 +1287,7 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particleFlags);
     m2Free(world->particleFreeQueue);
     m2Free(world->particleProxies);
+    m2Free(world->particleProxiesTmp);
     m2Free(world->particlePairA);
     m2Free(world->particlePairB);
     m2Free(world->particlePairWeight);
