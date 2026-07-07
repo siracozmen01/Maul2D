@@ -1168,7 +1168,13 @@ int main(void)
             world = m2CreateWorld(&def);
             free(ring);
             ringEntry = m2World_SnapshotSize(world);
+#ifdef __EMSCRIPTEN__
+            // Browsers get a slimmer rewind ring; the desktop
+            // keeps its quarter gigabyte of history.
+            int64_t budget = 64ll * 1024ll * 1024ll;
+#else
             int64_t budget = 256ll * 1024ll * 1024ll;
+#endif
             int64_t fit = budget / (int64_t)ringEntry;
             ringCapacity = fit < 30 ? 30 : (fit > 400 ? 400 : (int32_t)fit);
             ring = malloc((size_t)ringCapacity * (size_t)ringEntry);

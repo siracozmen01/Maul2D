@@ -1,0 +1,49 @@
+name: pages
+
+# The playable proof: the testbed, compiled to WebAssembly, deployed
+# to GitHub Pages on every push to main. Single-threaded on purpose
+# (Pages sends no COOP/COEP headers, so no SharedArrayBuffer; the
+# worker count is non-semantic anyway).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.2
+      - name: configure
+        run: emcmake cmake -B build-web -DCMAKE_BUILD_TYPE=Release -DMAUL2D_TESTBED=ON
+      - name: build
+        run: cmake --build build-web --target testbed -j 4
+      - name: stage site
+        run: |
+          mkdir site
+          cp build-web/testbed/testbed.html site/index.html
+          cp build-web/testbed/testbed.js build-web/testbed/testbed.wasm site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

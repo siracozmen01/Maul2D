@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maul2D testbed</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #16181d; height: 100%; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #status { color: #9aa4b2; font: 14px monospace; position: absolute;
+              top: 12px; left: 12px; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="status">loading the deterministic world...</div>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      postRun: [function () {
+        var s = document.getElementById('status');
+        if (s) { s.remove(); }
+      }]
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

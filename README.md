@@ -5,6 +5,11 @@
 A deterministic 2D physics engine for games. Written in C17 with a
 pure C API, zero dependencies, MIT licensed.
 
+**[Play the testbed in your browser](https://siracozmen01.github.io/Maul2D/)**:
+the same engine, compiled to WebAssembly, producing the same bits
+it produces everywhere else (the wasm cell in CI proves that on
+every push). Hold R and time runs backward.
+
 Maul2D's difference is a contract, not a feature flag: the same
 inputs produce the same bits on every supported platform, and the
 engine is built around that promise end to end. Snapshots restore
@@ -90,7 +95,8 @@ both work from any prefix. Three samples show the shape of the API:
   into a fresh world, and compares end hashes.
 
 The interactive testbed (raylib, viewer only, outside the engine's
-dependency surface) builds with `-DMAUL2D_TESTBED=ON`: twelve
+dependency surface) runs [in the browser](https://siracozmen01.github.io/Maul2D/)
+or builds natively with `-DMAUL2D_TESTBED=ON`: twelve
 scenes including a playable platformer on the character mover, a
 machinery hall, particle goo, and a rewind ring; hold R and time
 runs backward, bit for bit.
