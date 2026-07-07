@@ -114,6 +114,38 @@ static void TestAabbAndMass(void)
     m2CreateCircleShape(floored, &sd3, &circle);
     CHECK(m2Body_GetMass(floored) == 1.0f, "zero-density dynamic body floors to 1 kg");
 
+    // Inertia accuracy far from the origin. A single circle of radius 1 at
+    // local (1000,0) has its COM at its own center, so its inertia ABOUT
+    // the COM is exactly m*0.5*r^2, independent of the offset. The old
+    // origin-then-subtract math lost ~1000^2 * epsilon to cancellation here
+    // (measured error ~7e-2, and it hits zero entirely by an offset of
+    // 5000); the centroid-based accumulation (reference b2 #955) holds it
+    // at float epsilon. The tight tolerance is the test: it passes with the
+    // centroid math and fails with the cancellation.
+    m2BodyDef bd4 = m2DefaultBodyDef();
+    bd4.type = m2_dynamicBody;
+    m2BodyId farBody = m2CreateBody(worldId, &bd4);
+    m2ShapeDef sd4 = m2DefaultShapeDef();
+    sd4.density = 1.0f;
+    m2Circle farCircle = {{1000.0f, 0.0f}, 1.0f};
+    m2CreateCircleShape(farBody, &sd4, &farCircle);
+    float farMass = m2Body_GetMass(farBody);
+    CHECK_NEAR(m2Body_GetRotationalInertia(farBody), farMass * 0.5f, 1.0e-3f,
+               "a far-off-origin circle's inertia is cancellation-free");
+
+    // Two circles straddling the origin: the COM lands between them, so the
+    // parallel-axis offsets are real (distance 3 each) and the accumulation
+    // must match the analytic sum 2*(m*0.5*r^2 + m*3^2).
+    m2BodyId two = m2CreateBody(worldId, &bd4);
+    m2Circle left = {{-3.0f, 0.0f}, 0.5f};
+    m2Circle right = {{3.0f, 0.0f}, 0.5f};
+    m2CreateCircleShape(two, &sd4, &left);
+    m2CreateCircleShape(two, &sd4, &right);
+    float mc = 3.14159f * 0.25f; // each circle mass, r=0.5
+    float twoExpected = 2.0f * (mc * 0.5f * 0.25f + mc * 9.0f);
+    CHECK_NEAR(m2Body_GetRotationalInertia(two), twoExpected, 1.0e-2f,
+               "a symmetric two-circle body matches the analytic inertia");
+
     m2DestroyWorld(worldId);
 }
 

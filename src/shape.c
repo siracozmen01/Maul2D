@@ -439,10 +439,11 @@ m2MassData m2ComputeShapeMass(const m2ShapeGeometry* geometry, float density)
         float r = geometry->circle.radius;
         data.mass = density * M2_PI * r * r;
         data.center = geometry->circle.center;
-        // I about center + parallel axis handled by the caller.
-        data.rotationalInertia =
-            data.mass * (0.5f * r * r + geometry->circle.center.x * geometry->circle.center.x +
-                         geometry->circle.center.y * geometry->circle.center.y);
+        // Inertia about the shape centroid; the caller shifts to the body
+        // center of mass. Leaving the origin-shift out here (reference b2
+        // #955) keeps that shift free of a big-minus-big when the shape
+        // sits far off the body origin.
+        data.rotationalInertia = data.mass * 0.5f * r * r;
         return data;
     }
     case m2_capsuleShape:
@@ -459,9 +460,8 @@ m2MassData m2ComputeShapeMass(const m2ShapeGeometry* geometry, float density)
         float h = 0.5f * length;
         float rectInertia = rectMass * (4.0f * h * h + 4.0f * r * r) * (1.0f / 12.0f);
         float discInertia = discMass * (0.5f * r * r + h * h);
-        data.rotationalInertia =
-            rectInertia + discInertia +
-            data.mass * (data.center.x * data.center.x + data.center.y * data.center.y);
+        // About the capsule centroid; the caller shifts to the body COM.
+        data.rotationalInertia = rectInertia + discInertia;
         return data;
     }
     case m2_polygonShape:
@@ -490,8 +490,11 @@ m2MassData m2ComputeShapeMass(const m2ShapeGeometry* geometry, float density)
         center.x *= invArea;
         center.y *= invArea;
         data.center = center;
-        // The integral is already about the body origin.
-        data.rotationalInertia = density * inertia;
+        // The integral is about the origin; shift it to the centroid so the
+        // caller's shift to the body COM stays cancellation-free (b2 #955).
+        // A centered polygon (centroid at origin) is unchanged.
+        data.rotationalInertia =
+            density * inertia - data.mass * (center.x * center.x + center.y * center.y);
         return data;
     }
     default:
