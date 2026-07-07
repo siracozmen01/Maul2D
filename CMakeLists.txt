@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(maul2d VERSION 1.7.0 LANGUAGES C)
+project(maul2d VERSION 1.8.0 LANGUAGES C)
 
 option(MAUL2D_SANITIZE "Build with ASAN/UBSAN" OFF)
 option(MAUL2D_INSTALL "Generate install and package rules" ON)

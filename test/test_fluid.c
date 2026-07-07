@@ -767,6 +767,50 @@ static void TestJelly(void)
     m2DestroyWorld(gw);
 }
 
+// The region query: exact membership, truthful totals, and the
+// read-only law.
+static void TestOverlapParticles(void)
+{
+    m2WorldDef def = FluidWorldDef(64);
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    for (int32_t i = 0; i < 25; ++i)
+    {
+        double x = (double)(i % 5) * 1.0;
+        double y = (double)(i / 5) * 1.0;
+        m2ParticleId made = m2World_EmitParticle(world, (m2Pos2){x, y}, (m2Vec2){0.0f, 0.0f}, 0);
+        CHECK(made.index1 != 0, "the grid emits");
+    }
+    m2ParticleId found[64];
+    int32_t n =
+        m2World_OverlapParticlesAABB(world, (m2Pos2){0.5, 0.5}, (m2Pos2){3.5, 3.5}, found, 64);
+    CHECK(n == 9, "the inner three-by-three answers the box");
+    for (int32_t i = 0; i < n; ++i)
+    {
+        m2Pos2 p = m2Particle_GetPosition(found[i]);
+        CHECK(p.x > 0.5 && p.x < 3.5 && p.y > 0.5 && p.y < 3.5, "every answer is inside");
+        CHECK(m2Particle_IsValid(found[i]), "every answer is live");
+    }
+    int32_t total =
+        m2World_OverlapParticlesAABB(world, (m2Pos2){0.5, 0.5}, (m2Pos2){3.5, 3.5}, found, 4);
+    CHECK(total == 9, "capacity pressure never lies about the total");
+    total = m2World_OverlapParticlesAABB(world, (m2Pos2){0.5, 0.5}, (m2Pos2){3.5, 3.5}, NULL, 0);
+    CHECK(total == 9, "the count query agrees");
+    total =
+        m2World_OverlapParticlesAABB(world, (m2Pos2){50.0, 50.0}, (m2Pos2){51.0, 51.0}, found, 64);
+    CHECK(total == 0, "an empty region answers zero");
+
+    // Read-only law: a query storm moves no bits.
+    m2World_Step(world, 1.0f / 60.0f, 4);
+    uint64_t before = m2World_Hash(world);
+    for (int32_t i = 0; i < 50; ++i)
+    {
+        m2World_OverlapParticlesAABB(world, (m2Pos2){-1.0, -1.0}, (m2Pos2){5.0, 5.0}, found, 64);
+    }
+    CHECK(m2World_Hash(world) == before, "the query storm leaves the world untouched");
+    m2DestroyWorld(world);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -827,6 +871,7 @@ int main(void)
     TestSurfaceTension();
     TestParticleFill();
     TestJelly();
+    TestOverlapParticles();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

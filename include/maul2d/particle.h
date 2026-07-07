@@ -86,6 +86,14 @@ extern "C"
     int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* polygon,
                                              m2Pos2 position, m2Vec2 velocity, uint32_t flags);
 
+    /// Live particles whose centers lie inside the box: ascending
+    /// slot order, truthful total, NULL ids with zero capacity is a
+    /// count query (the enumeration contract). Circular regions are
+    /// one distance filter away on the caller's side.
+    /// Thread class: reader.
+    int32_t m2World_OverlapParticlesAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper,
+                                         m2ParticleId* ids, int32_t capacity);
+
     /// Fill ids with live particles in ascending slot order; returns
     /// the truthful total even beyond capacity (the enumeration
     /// contract). NULL ids with zero capacity is a count query.

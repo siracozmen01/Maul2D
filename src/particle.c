@@ -954,3 +954,35 @@ int32_t m2World_FillPolygonWithParticles(m2WorldId worldId, const m2Polygon* pol
     }
     return count;
 }
+
+// Region query over the pool: a plain ascending scan. Particles
+// carry no tree (their grid is step-transient); an honest linear
+// walk over a fixed-capacity pool is deterministic and cheap.
+int32_t m2World_OverlapParticlesAABB(m2WorldId worldId, m2Pos2 lower, m2Pos2 upper,
+                                     m2ParticleId* ids, int32_t capacity)
+{
+    m2World* world = m2World_GetInternal(worldId);
+    if (world == NULL || world->particleCapacity == 0)
+    {
+        return 0;
+    }
+    int32_t total = 0;
+    for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+    {
+        if (world->particleAlive[i] == 0)
+        {
+            continue;
+        }
+        m2Pos2 p = world->particlePositions[i];
+        if (p.x < lower.x || p.x > upper.x || p.y < lower.y || p.y > upper.y)
+        {
+            continue;
+        }
+        if (ids != NULL && total < capacity)
+        {
+            ids[total] = (m2ParticleId){i + 1, worldId.index1, world->particleGenerations[i]};
+        }
+        total += 1;
+    }
+    return total;
+}

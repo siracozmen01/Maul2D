@@ -4,17 +4,18 @@ This is the ten - minute tour : what the engine promises, how to hold it right,
     and where the sharp edges are.The headers are the reference;
 this document is the map.
 
-## Versions and formats
+    ##Versions and formats
 
-Snapshots and journal tapes are exact-byte artifacts of one library
-version. Every snapshot carries a version stamp and every tape
-carries one plus an echo of the world def that recorded it; a
-mismatch of either is rejected loudly before a single byte lands.
-They are rollback and replay tools, not archival formats: when an
-engine release bumps the snapshot or wire version (any new state
-array, any grown def), old bytes refuse to load by design, because
-a silently reinterpreted byte is a corrupted world. Persist game
-state you care about at your own layer; persist Maul bytes only
+    Snapshots and journal tapes are exact -
+    byte artifacts of one library version.Every snapshot carries a version stamp and every tape
+        carries one plus an echo of the world def that recorded it;
+a mismatch of either is rejected loudly before a single byte lands.They are rollback and replay
+    tools,
+    not archival formats : when an engine release bumps the snapshot or
+        wire version(any new state array, any grown def),
+    old bytes refuse to load by design,
+    because a silently reinterpreted byte is a corrupted world.Persist game state you care about at
+        your own layer; persist Maul bytes only
 next to the exact engine build that wrote them.
 
 ## The contract
@@ -174,14 +175,17 @@ damping and viscous strengths, gravity scale) and the particle
 system exists for the world's whole lifetime, inside every snapshot,
 journal and hash the world produces. Emit with a position and
 velocity, destroy by id, read positions and velocities back, and
-enumerate with truthful totals; a full pool quietly returns the null
-id, so pace emitters off the count. Zero viscous strength is plain
-water; raise it for syrup. m2World_FillPolygonWithParticles pours
+enumerate with truthful totals;
+a full pool quietly returns the null id,
+    so pace emitters off the count.Zero viscous strength is plain water; raise it for syrup. m2World_FillPolygonWithParticles pours
 a whole pool in one call (row-major on the reference stride,
-deterministic layout). Emit takes behavior flags: tensile
-particles attract their tensile neighbors (surface tension), so
-sparse spray beads up and clings instead of drifting apart; viscous
-particles drag their neighbors (honey); powder grains repel when
+deterministic layout);
+m2World_OverlapParticlesAABB reads a region back with truthful totals,
+    and a circle is one distance filter away.Emit takes behavior flags
+    : tensile particles attract their tensile
+      neighbors(surface tension),
+    so sparse spray beads up and clings instead of drifting apart;
+viscous particles drag their neighbors(honey); powder grains repel when
 packed tighter than the rest stride and never cohere (sand, rubble).
 The def carries the reference strengths for all of them, pinned at
 world creation. Spring and elastic flags turn a fill into a body:
@@ -210,49 +214,53 @@ live particles never hibernates.
 
 The gear joint couples two bodies' spins at a ratio (positive for
 meshed cogs, negative for belts) with an accumulated phase that
-stays exact across any number of full turns; pin the bodies with
-their own joints, the gear only owns rotation.
+stays exact across any number of full turns;
+pin the bodies with their own joints,
+    the gear only owns rotation.
 
-The pulley joint runs a rope over two fixed world points: lengthA
-plus ratio times lengthB stays at the total measured when you create
-it, so there is no length knob to mis-set. The B side feels ratio
-times the A-side tension (a ratio-2 hoist balances double the mass);
-retuning the ratio recaptures the total from the current geometry so
-the machine re-decides instead of snapping, and a side that fully
-unspools goes limp near its ground anchor rather than pushing.
+    The pulley joint runs a rope over two fixed world points
+    : lengthA plus ratio times lengthB stays at the total measured when you create it,
+    so there is no length knob to mis - set.The B side feels ratio times the A -
+        side tension(a ratio - 2 hoist balances double the mass);
+retuning the ratio recaptures the total from the current geometry so the machine re -
+    decides instead of snapping,
+    and a side that fully unspools goes limp near its ground anchor rather than pushing.
 
-The ratchet joint lets relative rotation run free in its sign
-direction, clicking tooth by tooth, and never gives back more than
-the last engaged tooth: socket wrenches, winches, turnstiles. Pin
-the bodies with their own joints; the ratchet only owns rotation
-and stays exact across any number of turns.
+        The ratchet joint lets relative rotation run free in its sign direction,
+    clicking tooth by tooth,
+    and never gives back more than the last engaged tooth : socket wrenches, winches,
+    turnstiles.Pin the bodies with their own joints;
+the ratchet only owns rotation and stays exact across any number of turns.
 
-The revolute joint can carry an angular spring (springHertz and
-springDampingRatio on the def, zero hertz means off) pulling toward
-the creation angle; it runs alongside the motor and limits, retunes
-through the angular spring setters like the weld's pair, and setting
-the hertz to zero drops the spring and its stored impulse.
+    The revolute joint can carry an angular
+    spring(springHertz and springDampingRatio on the def,
+           zero hertz means off) pulling toward the creation angle;
+it runs alongside the motor and limits,
+    retunes through the angular spring setters like the weld's pair, and setting the
+        hertz to zero drops the spring and its stored impulse
+            .
 
+    The motor joint drives one body's transform toward offsets from another with force and
+        torque budgets : moving platforms retarget with `m2MotorJoint_SetOffsets` every frame and
+                             the physics stays honest.The mouse joint is a soft spring pulling a
+                                 grab point toward a world target(`m2MouseJoint_SetTarget`)
+    : dragging,
+done deterministically and
+    journaled like everything else.
 
-The motor joint drives one body's transform toward offsets from
-another with force and torque budgets: moving platforms retarget
-with `m2MotorJoint_SetOffsets` every frame and the physics stays
-honest. The mouse joint is a soft spring pulling a grab point toward
-a world target (`m2MouseJoint_SetTarget`): dragging, done
-deterministically and journaled like everything else.
+    ##Dominance
 
-## Dominance
+    Give a body a higher dominance
+    and contacts stop pushing it around : in any pair,
+    the higher side acts as unmovable toward the lower one,
+    and statics outrank everything.Enemies stop bulldozing the player,
+    the boss stands firm in a crate avalanche,
+    and joints stay perfectly symmetric because dominance touches contacts only.
 
-Give a body a higher dominance and contacts stop pushing it around:
-in any pair, the higher side acts as unmovable toward the lower one,
-and statics outrank everything. Enemies stop bulldozing the player,
-the boss stands firm in a crate avalanche, and joints stay perfectly
-symmetric because dominance touches contacts only.
+        ##Jointed bodies and collision
 
-## Jointed bodies and collision
-
-Jointed bodies do not collide with each other by default (the
-reference convention ragdolls expect); set `collideConnected` on any
+        Jointed bodies do not collide with each other by
+        default(the reference convention ragdolls expect); set `collideConnected` on any
 joint def to restore contact. The filter joint is that switch with
 nothing else attached: `m2CreateFilterJoint` turns collision off
 between two bodies for the joint's lifetime, and destroying it turns
@@ -338,19 +346,22 @@ Step the world at a fixed dt and never tie it to the frame rate.
 For presentation, keep last step's transforms application-side
 (enumerate bodies, copy poses), and each frame draw the blend
 between previous and current by alpha = accumulator / dt. The
-readers are pure and cheap; the simulation stays bit-exact because
-interpolation never feeds back. The testbed's platformer shows the
-difference: press I to cycle 60 Hz, 30 Hz snapped, and 30 Hz
-interpolated.
+readers are pure and cheap;
+the simulation stays bit -
+    exact because interpolation never feeds back.The testbed's platformer shows the difference
+    : press I to cycle 60 Hz,
+    30 Hz snapped,
+    and 30 Hz interpolated
+            .
 
-## Rollback netcode in one paragraph
+        ##Rollback netcode in one paragraph
 
-Snapshot every confirmed frame. When a late input arrives, restore,
-apply the corrected inputs, re-step to now. The engine guarantees the
-re-simulation lands on the same bits the original would have, so
-divergence can only come from your input handling. If you record a
-journal while doing this, the tape includes your rollbacks and
-replays them faithfully;
+            Snapshot every confirmed frame.When a late input arrives,
+    restore, apply the corrected inputs,
+    re - step to now.The engine guarantees the re -
+        simulation lands on the same bits the original would have,
+    so divergence can only come from your input handling.If you record a journal while doing this,
+    the tape includes your rollbacks and replays them faithfully;
 size tapes from `m2World_JournalBaseSize`.
 
     ##Threads

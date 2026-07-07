@@ -6,7 +6,7 @@ The 2D companion to [Maul3D](https://github.com/siracozmen01/Maul3D): same solve
 
 Written in C17. MIT licensed.
 
-## Status: 1.7
+## Status: 1.8
 
 ## API stability
 
