@@ -783,3 +783,45 @@ int32_t m2DecomposeOutline(const m2Vec2* points, int32_t count, m2Polygon* piece
     }
     return total;
 }
+
+// Area of a shape's core, used by the buoyancy fallback for capsules
+// and thin shapes (circles and polygons get exact submersion).
+float m2ShapeArea(const m2ShapeGeometry* g)
+{
+    switch (g->type)
+    {
+    case m2_circleShape:
+        return M2_PI * g->circle.radius * g->circle.radius;
+    case m2_capsuleShape:
+    {
+        m2Vec2 p1 = g->capsule.point1;
+        m2Vec2 p2 = g->capsule.point2;
+        float r = g->capsule.radius;
+        float dx = p2.x - p1.x;
+        float dy = p2.y - p1.y;
+        float length = sqrtf(dx * dx + dy * dy);
+        return 2.0f * r * length + M2_PI * r * r;
+    }
+    case m2_polygonShape:
+    {
+        float area2 = 0.0f;
+        for (int32_t i = 0; i < g->polygon.count; ++i)
+        {
+            m2Vec2 a = g->polygon.vertices[i];
+            m2Vec2 b = g->polygon.vertices[(i + 1) % g->polygon.count];
+            area2 += a.x * b.y - b.x * a.y;
+        }
+        return 0.5f * (area2 < 0.0f ? -area2 : area2);
+    }
+    case m2_segmentShape:
+    case m2_chainSegmentShape:
+    {
+        const m2Segment* seg = g->type == m2_segmentShape ? &g->segment : &g->chainSegment.segment;
+        float dx = seg->point2.x - seg->point1.x;
+        float dy = seg->point2.y - seg->point1.y;
+        return 0.05f * sqrtf(dx * dx + dy * dy); // a thin sliver, nominal
+    }
+    default:
+        return 0.0f;
+    }
+}

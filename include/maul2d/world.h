@@ -35,9 +35,10 @@ extern "C"
         /// into the world for its whole lifetime (constant snapshot
         /// shape keeps rollback safe across every point in history).
         /// Parameters are pinned here like every other physics knob.
-        int32_t particleCapacity; // 0 = no fluids
-        float particleRadius;     // meters, floor 4x linear slop
-        float particleDensity;    // mass per area
+        int32_t particleCapacity;    // 0 = no fluids
+        int32_t fluidVolumeCapacity; // 0 = no buoyancy volumes
+        float particleRadius;        // meters, floor 4x linear slop
+        float particleDensity;       // mass per area
         float particleGravityScale;
         float particlePressureStrength; // reference water default 0.05
         float particleDampingStrength;  // reference default 1.0
@@ -226,6 +227,46 @@ extern "C"
         uint64_t particles; // fluid state including the jelly nets
     } m2WorldHashParts;
     m2WorldHashParts m2World_HashParts(m2WorldId worldId);
+
+    typedef struct m2FluidVolumeId
+    {
+        int32_t index1; // 1-based, 0 = null
+        uint16_t world0;
+        uint16_t generation;
+    } m2FluidVolumeId;
+
+    static const m2FluidVolumeId m2_nullFluidVolumeId = {0, 0, 0};
+
+    /// A particle-free body of water: an axis-aligned activation
+    /// region and a horizontal surface line. Every awake dynamic body
+    /// whose bounds touch the region feels buoyancy on the part of
+    /// each shape below the surface (Archimedes, exact for circles and
+    /// polygons, a bounding-box approximation for capsules and
+    /// segments), plus linear and angular drag, plus an optional flow
+    /// current. Cheap where a full particle pool would be overkill.
+    typedef struct m2FluidVolumeDef
+    {
+        m2Pos2 regionLower; // activation box, world space
+        m2Pos2 regionUpper;
+        double surface;    // waterline, world y
+        float density;     // fluid density (buoyant force per submerged area)
+        float linearDrag;  // velocity damping inside, per submerged area
+        float angularDrag; // spin damping inside
+        m2Vec2 flow;       // current the water drags bodies toward, m/s
+        uint64_t userData;
+        int32_t internalValue;
+    } m2FluidVolumeDef;
+
+    m2FluidVolumeDef m2DefaultFluidVolumeDef(void);
+    /// Thread class: writer. Journaled.
+    m2FluidVolumeId m2World_CreateFluidVolume(m2WorldId worldId, const m2FluidVolumeDef* def);
+    void m2World_DestroyFluidVolume(m2FluidVolumeId volumeId);
+    bool m2FluidVolume_IsValid(m2FluidVolumeId volumeId);
+    /// Move the waterline at runtime (a rising tide, a draining tank).
+    /// Journaled. Thread class: writer.
+    void m2FluidVolume_SetSurface(m2FluidVolumeId volumeId, double surface);
+    double m2FluidVolume_GetSurface(m2FluidVolumeId volumeId);
+    uint64_t m2FluidVolume_GetUserData(m2FluidVolumeId volumeId);
 
     /// Command journal (the replay primitive). StartJournal embeds a
     /// full snapshot into the caller's buffer, then records every

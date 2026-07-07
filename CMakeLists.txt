@@ -18,6 +18,7 @@ add_library(maul2d STATIC
     src/island.c
     src/journal.c
     src/particle.c
+    src/buoyancy.c
     src/query.c
     src/platform_thread.c
     src/draw.c

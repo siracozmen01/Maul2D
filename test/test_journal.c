@@ -33,7 +33,8 @@ static m2WorldDef TestDef(void)
     def.bodyCapacity = 64;
     def.shapeCapacity = 64;
     def.jointCapacity = 32;
-    def.particleCapacity = 64; // the parade drives the particle ops too
+    def.particleCapacity = 64;   // the parade drives the particle ops too
+    def.fluidVolumeCapacity = 4; // and the buoyancy ops
     return def;
 }
 
@@ -264,6 +265,12 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
                         0);              // op 58 (ram is dynamic; its gear dies with it)
     m2Particle_SetLifetime(drop2, 0.5f); // op 59
     m2Particle_SetUserData(drop2, 777);  // op 60
+    m2FluidVolumeDef poolDef = m2DefaultFluidVolumeDef();
+    poolDef.regionLower = (m2Pos2){-5.0, -5.0};
+    poolDef.regionUpper = (m2Pos2){5.0, 5.0};
+    poolDef.surface = -1.0;
+    m2FluidVolumeId pool = m2World_CreateFluidVolume(world, &poolDef); // op 61
+    m2FluidVolume_SetSurface(pool, 0.5);                               // op 63
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

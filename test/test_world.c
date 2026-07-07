@@ -1780,6 +1780,114 @@ static void TestHashParts(void)
 // The destruction road: a spinning crate shatters into four
 // triangles that carry its rigid velocity field, the wreck rolls
 // back out of existence, and the whole thing replays from tape.
+// Particle-free water: a light box floats, a dense box sinks, a
+// flow current carries a drifter, the waterline moves at runtime,
+// and the whole thing rolls back and replays from tape.
+static void TestFluidVolume(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 8;
+    def.shapeCapacity = 8;
+    def.jointCapacity = 4;
+    def.fluidVolumeCapacity = 4;
+    m2WorldId world = m2CreateWorld(&def);
+    m2FluidVolumeDef fd = m2DefaultFluidVolumeDef();
+    fd.regionLower = (m2Pos2){-10.0, -10.0};
+    fd.regionUpper = (m2Pos2){10.0, 10.0};
+    fd.surface = 0.0;
+    fd.density = 2.0f;
+    fd.linearDrag = 2.0f;
+    fd.userData = 42;
+    m2FluidVolumeId vol = m2World_CreateFluidVolume(world, &fd);
+    CHECK(m2FluidVolume_IsValid(vol), "the volume is live");
+    CHECK(m2FluidVolume_GetSurface(vol) == 0.0, "the surface reads back");
+    CHECK(m2FluidVolume_GetUserData(vol) == 42, "userData reads back");
+
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2BodyDef ld = m2DefaultBodyDef();
+    ld.type = m2_dynamicBody;
+    ld.position = (m2Pos2){-2.0, -3.0};
+    m2BodyId light = m2CreateBody(world, &ld);
+    m2ShapeDef ls = m2DefaultShapeDef();
+    ls.density = 0.5f;
+    m2CreatePolygonShape(light, &ls, &box);
+    m2BodyDef hd = m2DefaultBodyDef();
+    hd.type = m2_dynamicBody;
+    hd.position = (m2Pos2){2.0, -1.0};
+    m2BodyId heavy = m2CreateBody(world, &hd);
+    m2ShapeDef hs = m2DefaultShapeDef();
+    hs.density = 5.0f;
+    m2CreatePolygonShape(heavy, &hs, &box);
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    m2World_Snapshot(world, snap, size);
+
+    for (int32_t i = 0; i < 400; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(light).y > -0.6 && m2Body_GetPosition(light).y < 0.6,
+          "the light box floats at the waterline");
+    CHECK(m2Body_GetPosition(heavy).y < -3.0, "the dense box sinks past the light one");
+
+    // Rollback: the boxes return to their launch and re-float exactly.
+    uint64_t future = m2World_Hash(world);
+    CHECK(m2World_Restore(world, snap, size), "the pre-float snapshot restores");
+    for (int32_t i = 0; i < 400; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Hash(world) == future, "buoyancy replays bit for bit after rollback");
+
+    // Runtime waterline: drain it below the boxes and they fall.
+    m2FluidVolume_SetSurface(vol, -20.0);
+    CHECK(m2FluidVolume_GetSurface(vol) == -20.0, "the drained surface reads back");
+    double lightBefore = m2Body_GetPosition(light).y;
+    for (int32_t i = 0; i < 120; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2Body_GetPosition(light).y < lightBefore - 0.5, "a drained tank drops its cargo");
+    free(snap);
+    m2DestroyWorld(world);
+
+    // Tape: record a volume plus a float, replay onto identical bits.
+    m2WorldId rec = m2CreateWorld(&def);
+    int32_t cap = 1 << 20;
+    void* tape = malloc((size_t)cap);
+    m2World_StartJournal(rec, tape, cap);
+    m2FluidVolumeDef rfd = m2DefaultFluidVolumeDef();
+    rfd.regionLower = (m2Pos2){-10.0, -10.0};
+    rfd.regionUpper = (m2Pos2){10.0, 10.0};
+    rfd.surface = 0.0;
+    m2FluidVolumeId rv = m2World_CreateFluidVolume(rec, &rfd);
+    m2BodyDef rb = m2DefaultBodyDef();
+    rb.type = m2_dynamicBody;
+    rb.position = (m2Pos2){0.0, -2.0};
+    m2BodyId rbody = m2CreateBody(rec, &rb);
+    m2ShapeDef rs = m2DefaultShapeDef();
+    rs.density = 0.5f;
+    m2CreatePolygonShape(rbody, &rs, &box);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(rec, 1.0f / 60.0f, 4);
+    }
+    m2FluidVolume_SetSurface(rv, 1.0);
+    for (int32_t i = 0; i < 60; ++i)
+    {
+        m2World_Step(rec, 1.0f / 60.0f, 4);
+    }
+    int32_t used = m2World_StopJournal(rec);
+    uint64_t recorded = m2World_Hash(rec);
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, tape, used), "the buoyancy tape replays");
+    CHECK(m2World_Hash(fresh) == recorded, "the recorded float replays bit for bit");
+    m2DestroyWorld(fresh);
+    m2DestroyWorld(rec);
+    free(tape);
+}
+
 static void TestShatterBody(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -1974,6 +2082,7 @@ int main(void)
     TestRuntimeGravity();
     TestDominance();
     TestShatterBody();
+    TestFluidVolume();
     TestHashParts();
     TestValidateAndCounters();
     TestLeftoverBasket();

@@ -33,7 +33,7 @@
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 32u
+#define M2_SNAPSHOT_VERSION 33u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -904,7 +904,8 @@ m2WorldDef m2DefaultWorldDef(void)
     def.bodyCapacity = 1024;
     def.shapeCapacity = 2048;
     def.jointCapacity = 256;
-    def.particleCapacity = 0; // fluids are opt-in
+    def.particleCapacity = 0;    // fluids are opt-in
+    def.fluidVolumeCapacity = 0; // buoyancy volumes are opt-in
     def.particleRadius = 0.05f;
     def.particleDensity = 1.0f;
     def.particleGravityScale = 1.0f;
@@ -924,6 +925,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
 {
     if (def == NULL || def->internalValue != M2_WORLD_COOKIE || def->bodyCapacity < 1 ||
         def->shapeCapacity < 1 || def->jointCapacity < 1)
+    {
+        M2_ASSERT(false);
+        return m2_nullWorldId;
+    }
+    if (def->fluidVolumeCapacity < 0)
     {
         M2_ASSERT(false);
         return m2_nullWorldId;
@@ -974,6 +980,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->treeNodeCapacity = 2 * shapeCap;
     world->pairCapacity = 8 * shapeCap;
     world->particleCapacity = def->particleCapacity;
+    world->fvCapacity = def->fluidVolumeCapacity;
     world->particleRadius = def->particleRadius;
     world->particleDensity = def->particleDensity;
     world->particleGravityScale = def->particleGravityScale;
@@ -1118,6 +1125,21 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(torques, cap, float);
     M2_ALLOC(disabled, cap, uint8_t);
     M2_ALLOC(dominances, cap, int8_t);
+    if (def->fluidVolumeCapacity > 0)
+    {
+        int32_t fvCap = def->fluidVolumeCapacity;
+        M2_ALLOC(fvLower, fvCap, m2Pos2);
+        M2_ALLOC(fvUpper, fvCap, m2Pos2);
+        M2_ALLOC(fvSurface, fvCap, double);
+        M2_ALLOC(fvDensity, fvCap, float);
+        M2_ALLOC(fvLinearDrag, fvCap, float);
+        M2_ALLOC(fvAngularDrag, fvCap, float);
+        M2_ALLOC(fvFlow, fvCap, m2Vec2);
+        M2_ALLOC(fvUserData, fvCap, uint64_t);
+        M2_ALLOC(fvAlive, fvCap, uint8_t);
+        M2_ALLOC(fvGenerations, fvCap, uint16_t);
+        M2_ALLOC(fvFreeQueue, fvCap, int32_t);
+    }
     M2_ALLOC(shapeChain, shapeCap, int32_t);
     M2_ALLOC(chainAlive, shapeCap, uint8_t);
     M2_ALLOC(chainBody, shapeCap, int32_t);
@@ -1194,6 +1216,11 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         world->particleFreeQueue[i] = i;
     }
     world->particleFreeCount = world->particleCapacity;
+    for (int32_t i = 0; i < world->fvCapacity; ++i)
+    {
+        world->fvFreeQueue[i] = i;
+    }
+    world->fvFreeCount = world->fvCapacity;
     world->freeHead = 0;
     world->freeTail = 0;
     world->freeCount = cap;
@@ -1296,6 +1323,17 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particleLifetime);
     m2Free(world->particleUserData);
     m2Free(world->particleFreeQueue);
+    m2Free(world->fvLower);
+    m2Free(world->fvUpper);
+    m2Free(world->fvSurface);
+    m2Free(world->fvDensity);
+    m2Free(world->fvLinearDrag);
+    m2Free(world->fvAngularDrag);
+    m2Free(world->fvFlow);
+    m2Free(world->fvUserData);
+    m2Free(world->fvAlive);
+    m2Free(world->fvGenerations);
+    m2Free(world->fvFreeQueue);
     m2Free(world->particleProxies);
     m2Free(world->particleProxiesTmp);
     m2Free(world->particlePairA);
@@ -1555,6 +1593,12 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
             }
         }
     }
+    if (world->maxFvIndex > 0)
+    {
+        // Buoyancy feeds the force accumulators before the solve, so
+        // it integrates alongside gravity and dies with the step.
+        m2ApplyFluidVolumes(world, dt);
+    }
     m2UpdateIslandsAndWake(world);
     uint64_t tIslands = m2TimeNowNs();
     m2SolveStep(world, dt, substepCount);
@@ -1793,6 +1837,24 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         M2_BLOCK(world->particleTriadPC, (size_t)world->particleTriadCapacity * sizeof(m2Vec2));
         M2_BLOCK(&world->particleTriadCount, sizeof(int32_t));
     }
+    if (world->fvCapacity > 0)
+    {
+        size_t fvCap = (size_t)world->fvCapacity;
+        M2_BLOCK(world->fvLower, fvCap * sizeof(m2Pos2));
+        M2_BLOCK(world->fvUpper, fvCap * sizeof(m2Pos2));
+        M2_BLOCK(world->fvSurface, fvCap * sizeof(double));
+        M2_BLOCK(world->fvDensity, fvCap * sizeof(float));
+        M2_BLOCK(world->fvLinearDrag, fvCap * sizeof(float));
+        M2_BLOCK(world->fvAngularDrag, fvCap * sizeof(float));
+        M2_BLOCK(world->fvFlow, fvCap * sizeof(m2Vec2));
+        M2_BLOCK(world->fvUserData, fvCap * sizeof(uint64_t));
+        M2_BLOCK(world->fvAlive, fvCap * sizeof(uint8_t));
+        M2_BLOCK(world->fvGenerations, fvCap * sizeof(uint16_t));
+        M2_BLOCK(world->fvFreeQueue, fvCap * sizeof(int32_t));
+        M2_BLOCK(&world->fvFreeHead, sizeof(int32_t));
+        M2_BLOCK(&world->fvFreeCount, sizeof(int32_t));
+        M2_BLOCK(&world->maxFvIndex, sizeof(int32_t));
+    }
 #undef M2_BLOCK
     return cursor;
 }
@@ -1929,6 +1991,18 @@ uint64_t m2World_Hash(m2WorldId worldId)
         h = m2Hash64(h, &world->jointLowerImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointUpperImpulse[i], (int32_t)sizeof(float));
         h = m2Hash64(h, &world->jointSpringImpulse[i], (int32_t)sizeof(float));
+    }
+    if (world->fvCapacity > 0)
+    {
+        for (int32_t i = 0; i < world->maxFvIndex; ++i)
+        {
+            h = m2Hash64(h, &world->fvAlive[i], 1);
+            if (world->fvAlive[i] == 0)
+            {
+                continue;
+            }
+            h = m2Hash64(h, &world->fvSurface[i], (int32_t)sizeof(double));
+        }
     }
     if (world->particleCapacity > 0)
     {

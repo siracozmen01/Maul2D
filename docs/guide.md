@@ -270,6 +270,22 @@ reference raises its iteration count for fast flows, Maul pins one
 iteration and keeps the law explicit), and a world with live
 particles never hibernates.
 
+## Buoyancy volumes
+
+When a full particle pool is more than a scene needs, a fluid
+volume is the cheap answer: an axis-aligned activation region and a
+horizontal surface line. `m2World_CreateFluidVolume` places one,
+and every awake dynamic body whose origin sits in the region feels
+Archimedes lift on the part of each shape below the surface (exact
+for circles and polygons, a bounding-box fraction for capsules and
+segments), plus linear and angular drag, plus an optional flow
+current. Light bodies float, dense ones sink, and a flow carries
+whatever drifts in. The waterline moves at runtime with
+`m2FluidVolume_SetSurface` for a rising tide or a draining tank,
+and the whole thing is snapshot and journal state like everything
+else. Forces feed the ordinary accumulators, so a body that
+settles at the surface and sleeps simply floats.
+
 ## Walking the world
 
 An editor or engine layer can enumerate everything from a bare world

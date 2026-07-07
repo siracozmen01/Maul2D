@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 32u
+#define M2_JOURNAL_VERSION 33u
 
 typedef struct m2JournalHeader
 {
@@ -856,6 +856,42 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_READ_OP(struct m2OpParticleUserData, pu);
             pu.id.world0 = here;
             m2Particle_SetUserData(pu.id, pu.userData);
+            break;
+        }
+        case m2_opCreateFluidVolume:
+        {
+            struct m2OpFluidVolume
+            {
+                m2FluidVolumeDef def;
+                m2FluidVolumeId expected;
+            };
+            M2_READ_OP(struct m2OpFluidVolume, fv);
+            m2FluidVolumeId made = m2World_CreateFluidVolume(worldId, &fv.def);
+            M2_ASSERT(made.index1 == fv.expected.index1);
+            (void)made;
+            break;
+        }
+        case m2_opDestroyFluidVolume:
+        {
+            struct m2OpKillFluidVolume
+            {
+                m2FluidVolumeId id;
+            };
+            M2_READ_OP(struct m2OpKillFluidVolume, kv);
+            kv.id.world0 = here;
+            m2World_DestroyFluidVolume(kv.id);
+            break;
+        }
+        case m2_opSetFluidSurface:
+        {
+            struct m2OpFluidSurface
+            {
+                m2FluidVolumeId id;
+                double surface;
+            };
+            M2_READ_OP(struct m2OpFluidSurface, fs);
+            fs.id.world0 = here;
+            m2FluidVolume_SetSurface(fs.id, fs.surface);
             break;
         }
         case m2_opCreateRatchetJoint:

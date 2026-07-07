@@ -256,7 +256,23 @@ typedef struct m2World
     uint8_t* touchingScratch; // pair-touching carry scratch (step-transient)
     int32_t* queryScratch;    // shapeCapacity ints (query-transient, never snapshot)
     m2ThreadPool* pool;       // NULL = serial; never snapshot state
-    m2Profile profile;        // diagnostics only (never walked/hashed)
+    // Buoyancy volumes: particle-free water regions (snapshot state).
+    m2Pos2* fvLower;
+    m2Pos2* fvUpper;
+    double* fvSurface;
+    float* fvDensity;
+    float* fvLinearDrag;
+    float* fvAngularDrag;
+    m2Vec2* fvFlow;
+    uint64_t* fvUserData;
+    uint8_t* fvAlive;
+    uint16_t* fvGenerations;
+    int32_t* fvFreeQueue;
+    int32_t fvCapacity;
+    int32_t fvFreeHead;
+    int32_t fvFreeCount;
+    int32_t maxFvIndex;
+    m2Profile profile; // diagnostics only (never walked/hashed)
     int32_t lastConstraintCount;
     int32_t lastGraphColors;
     int32_t lastOverflow;
@@ -377,6 +393,9 @@ enum
     m2_opShatterBody = 58,
     m2_opSetParticleLifetime = 59,
     m2_opSetParticleUserData = 60,
+    m2_opCreateFluidVolume = 61,
+    m2_opDestroyFluidVolume = 62,
+    m2_opSetFluidSurface = 63,
 };
 
 // Journaled joint parameter channel (op 16).
@@ -455,6 +474,9 @@ int32_t m2ContactConstraintSize(void);
 m2World* m2World_GetInternal(m2WorldId worldId);
 void m2UpdateParticlePairs(m2World* world);
 void m2SolveParticles(m2World* world, float dt);
+void m2ApplyFluidVolumes(m2World* world, float dt);
+#define M2_FVOLUME_COOKIE (M2_COOKIE ^ ((int32_t)sizeof(m2FluidVolumeDef) << 8) ^ 17)
+float m2ShapeArea(const struct m2ShapeGeometry* g);
 struct m2CastHitInternal
 {
     m2Vec2 point;
