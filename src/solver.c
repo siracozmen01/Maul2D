@@ -2388,6 +2388,22 @@ void m2SolveStep(m2World* world, float dt, int32_t substepCount)
             {
                 continue;
             }
+            // Per-substep rotation cap, applied after the solve and
+            // before the position consumes it: a body may not turn
+            // more than a quarter circle in a substep (reference
+            // B2_MAX_ROTATION). Tame scenes never reach it; a
+            // near-massless body under a stray solver impulse stops
+            // short of the angle guard instead of exploding into it.
+            float maxW = 0.25f * M2_PI * invH;
+            float wi = world->angularVelocities[i];
+            if (wi > maxW)
+            {
+                world->angularVelocities[i] = maxW;
+            }
+            else if (wi < -maxW)
+            {
+                world->angularVelocities[i] = -maxW;
+            }
             // The center of mass is what the velocity moves; the origin
             // swings around it. With the COM on the origin both extra
             // terms are exact zeros and the old bits fall out.

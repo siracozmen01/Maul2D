@@ -71,6 +71,12 @@ static m2BodyId RandomBody(m2WorldId world)
 {
     m2BodyId ids[16];
     int32_t n = m2World_GetBodies(world, ids, 16);
+    // The total can exceed the buffer (the enumeration contract);
+    // only pick from what we actually received.
+    if (n > 16)
+    {
+        n = 16;
+    }
     if (n == 0)
     {
         m2BodyId nil = {0, 0, 0};
@@ -83,6 +89,10 @@ static m2JointId RandomJoint(m2WorldId world)
 {
     m2JointId ids[8];
     int32_t n = m2World_GetJoints(world, ids, 8);
+    if (n > 8)
+    {
+        n = 8;
+    }
     if (n == 0)
     {
         m2JointId nil = {0, 0, 0};
@@ -101,6 +111,10 @@ static m2ShapeId RandomShape(m2WorldId world)
     }
     m2ShapeId ids[16];
     int32_t n = m2Body_GetShapes(body, ids, 16);
+    if (n > 16)
+    {
+        n = 16; // a chain body can hold more shapes than the buffer
+    }
     if (n == 0)
     {
         return nil;
@@ -812,8 +826,37 @@ static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapa
     return endHash;
 }
 
-int main(void)
+// The regression bank: seeds that ever exposed a bug live here
+// forever, run through all four promises on every build so a fix
+// can never quietly regress. It starts with a handful of extra
+// hand-picked seeds for breadth; when a future seed catches
+// something, add it here with a one-line note on what it caught.
+static const uint64_t s_regressionSeeds[] = {
+    0x00000000B0A710ADull, // buoyancy + jelly under churn
+    0x00000000C0FFEE99ull, // dense stacks with ratchet joints
+    0x000000001CEB00DAull, // shatter into a flowing pool
+    0x00000000FADEDCABull, // lifetime reaping mid-rollback
+};
+
+// Deterministic extra seeds for the weekly deep sweep: a mixing
+// sequence off a fixed base, so more depth never means less
+// reproducibility.
+static uint64_t ExtraSeed(int32_t i)
 {
+    uint64_t x = 0x243F6A8885A308D3ull + (uint64_t)(i + 1) * 0x9E3779B97F4A7C15ull;
+    x ^= x >> 33;
+    x *= 0xFF51AFD7ED558CCDull;
+    x ^= x >> 33;
+    return x;
+}
+
+int main(int argc, char** argv)
+{
+    int32_t extraSeeds = argc > 1 ? atoi(argv[1]) : 0;
+    if (extraSeeds < 0)
+    {
+        extraSeeds = 0;
+    }
     enum
     {
         JOURNAL_CAPACITY = 1 << 21
@@ -833,6 +876,27 @@ int main(void)
         CHECK(recorded == twin, "the unjournaled twin reaches the same bits");
         CHECK(recorded == threaded, "the threaded twin reaches the same bits");
         fuzzHash ^= recorded + 0x9E3779B97F4A7C15ull + (fuzzHash << 6) + (fuzzHash >> 2);
+    }
+    // The gated hash is computed only from the ten canonical seeds
+    // above, so its value never moves. The regression bank and the
+    // deep sweep are additional pass/fail passes, hash-neutral.
+    int32_t regressionCount = (int32_t)(sizeof(s_regressionSeeds) / sizeof(s_regressionSeeds[0]));
+    for (int32_t i = 0; i < regressionCount; ++i)
+    {
+        uint64_t recorded = RunScenario(s_regressionSeeds[i], journal, JOURNAL_CAPACITY, 1);
+        uint64_t twin = RunScenario(s_regressionSeeds[i], NULL, 0, 1);
+        uint64_t threaded = RunScenario(s_regressionSeeds[i], NULL, 0, 3);
+        CHECK(recorded == twin, "a regression seed's unjournaled twin agrees");
+        CHECK(recorded == threaded, "a regression seed's threaded twin agrees");
+    }
+    for (int32_t i = 0; i < extraSeeds; ++i)
+    {
+        uint64_t seed = ExtraSeed(i);
+        uint64_t recorded = RunScenario(seed, journal, JOURNAL_CAPACITY, 1);
+        uint64_t twin = RunScenario(seed, NULL, 0, 1);
+        uint64_t threaded = RunScenario(seed, NULL, 0, 3);
+        CHECK(recorded == twin, "a deep-sweep seed's unjournaled twin agrees");
+        CHECK(recorded == threaded, "a deep-sweep seed's threaded twin agrees");
     }
     free(journal);
 
