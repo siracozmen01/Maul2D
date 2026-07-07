@@ -1657,6 +1657,115 @@ static void TestLeftoverBasket(void)
 // Dominance (slice 77, a rival lesson): the higher body cannot be
 // pushed by the lower one in contacts, statics outrank everyone,
 // joints stay symmetric.
+// The destruction road: a spinning crate shatters into four
+// triangles that carry its rigid velocity field, the wreck rolls
+// back out of existence, and the whole thing replays from tape.
+static void TestShatterBody(void)
+{
+    m2WorldDef def = m2DefaultWorldDef();
+    def.bodyCapacity = 16;
+    def.shapeCapacity = 16;
+    def.jointCapacity = 4;
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+    m2BodyDef bd = m2DefaultBodyDef();
+    bd.type = m2_dynamicBody;
+    bd.position = (m2Pos2){10.0, 5.0};
+    bd.linearVelocity = (m2Vec2){2.0f, 1.0f};
+    bd.angularVelocity = 3.0f;
+    m2BodyId crate = m2CreateBody(world, &bd);
+    m2ShapeDef sd = m2DefaultShapeDef();
+    sd.friction = 0.9f;
+    m2Polygon box = m2MakeBox(0.5f, 0.5f);
+    m2CreatePolygonShape(crate, &sd, &box);
+
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    m2World_Snapshot(world, snap, size);
+
+    // Four triangles fanned around the center.
+    m2Vec2 c[4] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+    m2Polygon shards[4];
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        m2Vec2 tri[3] = {{0.0f, 0.0f}, c[i], c[(i + 1) % 4]};
+        shards[i] = m2MakePolygon(tri, 3, 0.0f);
+        CHECK(shards[i].count == 3, "each shard validates");
+    }
+    m2BodyId out[4];
+    int32_t made = m2World_ShatterBody(crate, shards, 4, out, 4);
+    CHECK(made == 4, "the crate shatters into four");
+    CHECK(!m2Body_IsValid(crate), "the parent is gone");
+    float mass = 0.0f;
+    for (int32_t i = 0; i < 4; ++i)
+    {
+        CHECK(m2Body_IsValid(out[i]), "every shard lives");
+        CHECK(m2Body_GetAngularVelocity(out[i]) == 3.0f, "shards inherit the spin");
+        mass += m2Body_GetMass(out[i]);
+        m2ShapeId shardShapes[2];
+        CHECK(m2Body_GetShapes(out[i], shardShapes, 2) == 1, "one shape per shard");
+        CHECK(m2Shape_GetFriction(shardShapes[0]) == 0.9f, "shards wear the parent's material");
+        // The rigid field: v_piece = v + w x r about the parent COM.
+        m2Pos2 com = m2Body_GetWorldCenterOfMass(out[i]);
+        float rx = (float)(com.x - 10.0);
+        float ry = (float)(com.y - 5.0);
+        m2Vec2 v = m2Body_GetLinearVelocity(out[i]);
+        CHECK(v.x > 2.0f - 3.0f * ry - 0.001f && v.x < 2.0f - 3.0f * ry + 0.001f,
+              "the shard rides the field in x");
+        CHECK(v.y > 1.0f + 3.0f * rx - 0.001f && v.y < 1.0f + 3.0f * rx + 0.001f,
+              "the shard rides the field in y");
+    }
+    CHECK(mass > 0.99f && mass < 1.01f, "the shards keep the parent's mass");
+
+    // Step the wreck, then roll it back out of existence.
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_Restore(world, snap, size), "the pre-wreck snapshot restores");
+    CHECK(m2Body_IsValid(crate), "the crate is whole again");
+    CHECK(!m2Body_IsValid(out[0]), "the shards never happened");
+
+    // The tape: record a shatter, replay it onto the same bits.
+    int32_t cap = 1 << 20;
+    void* tape = malloc((size_t)cap);
+    CHECK(m2World_StartJournal(world, tape, cap), "the tape starts");
+    made = m2World_ShatterBody(crate, shards, 4, NULL, 0);
+    CHECK(made == 4, "the recorded shatter lands");
+    for (int32_t i = 0; i < 30; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    int32_t used = m2World_StopJournal(world);
+    uint64_t recorded = m2World_Hash(world);
+    m2WorldId fresh = m2CreateWorld(&def);
+    CHECK(m2World_ReplayJournal(fresh, tape, used), "the shatter tape replays");
+    CHECK(m2World_Hash(fresh) == recorded, "the wreck replays bit for bit");
+    m2DestroyWorld(fresh);
+    free(tape);
+    free(snap);
+
+    // All or nothing: a world too full to seat the pieces refuses
+    // without touching anything.
+    m2WorldDef tight = m2DefaultWorldDef();
+    tight.bodyCapacity = 2;
+    tight.shapeCapacity = 4;
+    tight.jointCapacity = 4;
+    m2WorldId small = m2CreateWorld(&tight);
+    m2BodyDef sb = m2DefaultBodyDef();
+    sb.type = m2_dynamicBody;
+    sb.position = (m2Pos2){0.0, 1.0};
+    m2BodyId lone = m2CreateBody(small, &sb);
+    m2ShapeDef ss = m2DefaultShapeDef();
+    m2CreatePolygonShape(lone, &ss, &box);
+    uint64_t before = m2World_Hash(small);
+    CHECK(m2World_ShatterBody(lone, shards, 4, NULL, 0) == 0, "a full world refuses");
+    CHECK(m2Body_IsValid(lone), "the refused parent is untouched");
+    CHECK(m2World_Hash(small) == before, "a refusal moves no bits");
+    m2DestroyWorld(small);
+    m2DestroyWorld(world);
+}
+
 static void TestDominance(void)
 {
     m2WorldDef def = m2DefaultWorldDef();
@@ -1744,6 +1853,7 @@ int main(void)
 {
     TestRuntimeGravity();
     TestDominance();
+    TestShatterBody();
     TestLeftoverBasket();
     TestSmallBasket();
     TestDormancyMassAndExplosions();

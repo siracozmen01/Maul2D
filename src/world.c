@@ -6661,3 +6661,96 @@ float m2Joint_GetAngularSpringDampingRatio(m2JointId jointId)
 {
     return m2Joint_GetAngularDampingRatio(jointId);
 }
+
+// --- Shatter: the destruction road ------------------------------------------------
+
+int32_t m2World_ShatterBody(m2BodyId bodyId, const m2Polygon* pieces, int32_t pieceCount,
+                            m2BodyId* outBodies, int32_t capacity)
+{
+    m2World* world = WorldFromIndex(bodyId.world0);
+    int32_t parent = world != NULL ? BodySlot(world, bodyId) : -1;
+    if (parent < 0 || pieces == NULL || pieceCount < 1 || pieceCount > 64 ||
+        world->types[parent] != (uint8_t)m2_dynamicBody)
+    {
+        M2_ASSERT(false);
+        return 0;
+    }
+    for (int32_t i = 0; i < pieceCount; ++i)
+    {
+        if (pieces[i].count < 3)
+        {
+            M2_ASSERT(false);
+            return 0;
+        }
+    }
+    if (world->freeCount < pieceCount || world->shapeFreeCount < pieceCount)
+    {
+        return 0; // cannot seat every piece: a runtime fact, all or nothing
+    }
+
+    // The parent's rigid field, sampled before anything moves.
+    m2Transform xf = world->transforms[parent];
+    m2Vec2 vParent = world->linearVelocities[parent];
+    float wParent = world->angularVelocities[parent];
+    m2Vec2 lcParent = world->localCenters[parent];
+    m2Vec2 comArm = {xf.q.c * lcParent.x - xf.q.s * lcParent.y,
+                     xf.q.s * lcParent.x + xf.q.c * lcParent.y};
+
+    // Materials and filter ride from the parent's first shape; a
+    // shapeless parent hands out defaults (documented).
+    m2ShapeDef pieceShape = m2DefaultShapeDef();
+    int32_t firstShape = world->bodyShapeHead[parent];
+    if (firstShape != -1)
+    {
+        pieceShape.density = world->shapeDensity[firstShape];
+        pieceShape.friction = world->shapeFriction[firstShape];
+        pieceShape.restitution = world->shapeRestitution[firstShape];
+        pieceShape.tangentSpeed = world->shapeTangentSpeed[firstShape];
+        pieceShape.categoryBits = world->shapeCategory[firstShape];
+        pieceShape.maskBits = world->shapeMask[firstShape];
+        pieceShape.groupIndex = world->shapeGroup[firstShape];
+    }
+
+    // Ids carry the 1-based world index; the generation lives in
+    // the registry beside the world itself.
+    m2WorldId worldId = {bodyId.world0, s_worldGenerations[bodyId.world0 - 1]};
+
+    uint8_t journalWasActive = world->journalActive;
+    world->journalActive = 0;
+
+    int32_t firstIndex1 = 0;
+    for (int32_t i = 0; i < pieceCount; ++i)
+    {
+        m2BodyDef bd = m2DefaultBodyDef();
+        bd.type = m2_dynamicBody;
+        bd.position = xf.p;
+        bd.rotation = xf.q;
+        bd.gravityScale = world->gravityScales[parent];
+        bd.linearDamping = world->linearDampings[parent];
+        bd.angularDamping = world->angularDampings[parent];
+        m2BodyId piece = m2CreateBody(worldId, &bd);
+        m2CreatePolygonShape(piece, &pieceShape, &pieces[i]);
+        int32_t pieceIndex = piece.index1 - 1;
+        // The rigid field at this piece's own center of mass.
+        m2Vec2 lc = world->localCenters[pieceIndex];
+        m2Vec2 arm = {xf.q.c * lc.x - xf.q.s * lc.y, xf.q.s * lc.x + xf.q.c * lc.y};
+        float rx = arm.x - comArm.x;
+        float ry = arm.y - comArm.y;
+        world->linearVelocities[pieceIndex] =
+            (m2Vec2){vParent.x - wParent * ry, vParent.y + wParent * rx};
+        world->angularVelocities[pieceIndex] = wParent;
+        if (i == 0)
+        {
+            firstIndex1 = piece.index1;
+        }
+        if (outBodies != NULL && i < capacity)
+        {
+            outBodies[i] = piece;
+        }
+    }
+    m2DestroyBody(bodyId); // joints die with it, touching sleepers wake
+
+    world->journalActive = journalWasActive;
+    m2JournalRecordShatter(world, bodyId, pieces, pieceCount, firstIndex1);
+    return pieceCount;
+}

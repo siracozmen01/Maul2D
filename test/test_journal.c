@@ -255,6 +255,13 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     m2Particle_SetVelocity(drop, (m2Vec2){0.2f, 0.0f});                           // op 55
     m2ParticleId drop2 = m2World_EmitParticle(world, (m2Pos2){0.7, 6.0}, (m2Vec2){0.0f, 0.0f}, 0);
     m2World_DestroyParticle(drop); // op 54
+    m2Vec2 shardTri[3] = {{0.0f, 0.0f}, {0.3f, 0.0f}, {0.0f, 0.3f}};
+    m2Polygon shard = m2MakePolygon(shardTri, 3, 0.0f);
+    m2Polygon shardPair[2];
+    shardPair[0] = shard;
+    shardPair[1] = shard;
+    m2World_ShatterBody(ram, shardPair, 2, NULL,
+                        0); // op 58 (ram is dynamic; its gear dies with it)
     (void)drop2;
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};

@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 30u
+#define M2_JOURNAL_VERSION 31u
 
 typedef struct m2JournalHeader
 {
@@ -78,6 +78,31 @@ typedef struct m2OpChainHeader
     uint64_t userData;
     uint8_t isLoop;
 } m2OpChainHeader;
+
+void m2JournalRecordShatter(m2World* world, m2BodyId bodyId, const m2Polygon* pieces,
+                            int32_t pieceCount, int32_t expectedFirst)
+{
+    if (world->journalActive == 0 || world->journalOverflow != 0)
+    {
+        return;
+    }
+    int32_t pieceBytes = pieceCount * (int32_t)sizeof(m2Polygon);
+    int32_t needed = 1 + (int32_t)sizeof(m2OpShatterHeader) + pieceBytes;
+    if (world->journalCursor + needed > world->journalCapacity)
+    {
+        world->journalOverflow = 1;
+        return;
+    }
+    m2OpShatterHeader header;
+    memset(&header, 0, sizeof(header));
+    header.body = bodyId;
+    header.pieceCount = pieceCount;
+    header.expectedFirst = expectedFirst;
+    world->journal[world->journalCursor] = (uint8_t)m2_opShatterBody;
+    memcpy(world->journal + world->journalCursor + 1, &header, sizeof(header));
+    memcpy(world->journal + world->journalCursor + 1 + sizeof(header), pieces, (size_t)pieceBytes);
+    world->journalCursor += needed;
+}
 
 void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def,
                           int32_t createdCount)
@@ -891,6 +916,31 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
                 return false;
             }
             cursor += restoreSize;
+            break;
+        }
+        case m2_opShatterBody:
+        {
+            M2_READ_OP(m2OpShatterHeader, sh);
+            int32_t pieceBytes = sh.pieceCount * (int32_t)sizeof(m2Polygon);
+            if (sh.pieceCount < 1 || cursor + pieceBytes > size)
+            {
+                return false;
+            }
+            // The stream is unaligned; copy pieces out before use.
+            m2Polygon* pieces = m2AllocZeroed((size_t)pieceBytes);
+            if (pieces == NULL)
+            {
+                return false;
+            }
+            memcpy(pieces, in + cursor, (size_t)pieceBytes);
+            cursor += pieceBytes;
+            sh.body.world0 = here;
+            m2BodyId first[1];
+            int32_t made = m2World_ShatterBody(sh.body, pieces, sh.pieceCount, first, 1);
+            M2_ASSERT(made == sh.pieceCount);
+            M2_ASSERT(made == 0 || first[0].index1 == sh.expectedFirst);
+            (void)made;
+            m2Free(pieces);
             break;
         }
         case m2_opCreateChain:

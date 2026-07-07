@@ -286,6 +286,14 @@ void m2Free(void* memory);
 
 void m2JournalRecord(m2World* world, uint8_t op, const void* payload, int32_t bytes);
 void m2JournalRecordRestore(m2World* world, const void* snapshot, int32_t size);
+typedef struct m2OpShatterHeader
+{
+    m2BodyId body;
+    int32_t pieceCount;
+    int32_t expectedFirst; // index1 of the first piece body
+} m2OpShatterHeader;
+void m2JournalRecordShatter(m2World* world, m2BodyId bodyId, const struct m2Polygon* pieces,
+                            int32_t pieceCount, int32_t expectedFirst);
 void m2JournalRecordChain(m2World* world, m2BodyId bodyId, const m2ChainDef* def,
                           int32_t createdCount);
 void m2SetJointParamInternal(m2World* world, m2JointId jointId, uint8_t param, float value);
@@ -353,6 +361,7 @@ enum
     m2_opSetParticleVelocity = 55,
     m2_opCreateRatchetJoint = 56,
     m2_opFillParticles = 57,
+    m2_opShatterBody = 58,
 };
 
 // Journaled joint parameter channel (op 16).

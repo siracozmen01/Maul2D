@@ -159,6 +159,21 @@ extern "C"
     /// Thread class: reader (pure).
     int32_t m2DecomposeOutline(const m2Vec2* points, int32_t count, m2Polygon* pieces,
                                int32_t capacity);
+
+    /// Break a dynamic body into one new dynamic body per piece, all
+    /// at the parent's pose, each inheriting the parent's rigid
+    /// velocity field evaluated at its own center of mass (v + w x r)
+    /// plus the parent's spin, and the material and filter of the
+    /// parent's first shape. Pieces are body-local polygons (pair
+    /// with m2DecomposeOutline). The parent is destroyed: its joints
+    /// die with it and touching sleepers wake, the ordinary destroy
+    /// road. All-or-nothing: if body or shape capacity cannot seat
+    /// every piece the call returns 0 and changes nothing (a full
+    /// pool is a runtime fact). One journal op replays the whole
+    /// shatter. Fills outBodies up to capacity, returns the piece
+    /// count. Thread class: writer.
+    int32_t m2World_ShatterBody(m2BodyId bodyId, const m2Polygon* pieces, int32_t pieceCount,
+                                m2BodyId* outBodies, int32_t capacity);
     m2Polygon m2MakeBox(float halfWidth, float halfHeight);
 
     /// Attach a shape to a body. Validation failure or exhausted capacity

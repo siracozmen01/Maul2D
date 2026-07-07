@@ -167,6 +167,13 @@ convex pieces of at most 8 vertices that keep the area, ready to
 become the shapes of a destructible body. Bad outlines (clockwise,
 self-intersecting) bounce loudly instead of producing garbage.
 
+m2World_ShatterBody closes the loop at runtime: it breaks a dynamic
+body into one body per piece, each carrying the parent's rigid
+velocity field at its own center of mass plus the parent's spin and
+first-shape material, as a single journaled operation that replays
+and rolls back like everything else. All or nothing: a world too
+full to seat every piece refuses without moving a bit.
+
 ## Water
 
 Fluids are opt-in at world creation: set particleCapacity on the
