@@ -33,7 +33,7 @@
 #define M2_PLJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2PulleyJointDef) << 8) ^ 15)
 #define M2_RTJOINT_COOKIE   (M2_COOKIE ^ ((int32_t)sizeof(m2RatchetJointDef) << 8) ^ 16)
 #define M2_SNAPSHOT_MAGIC   0x4D32534Eu // 'M2SN'
-#define M2_SNAPSHOT_VERSION 31u
+#define M2_SNAPSHOT_VERSION 32u
 
 // Fat margin in meters (topic-02 §3; harness-tuned later, F-T2-1).
 #define M2_AABB_MARGIN 0.1
@@ -1066,6 +1066,8 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         M2_ALLOC(particleAlive, particleCap, uint8_t);
         M2_ALLOC(particleGenerations, particleCap, uint16_t);
         M2_ALLOC(particleFlags, particleCap, uint32_t);
+        M2_ALLOC(particleLifetime, particleCap, float);
+        M2_ALLOC(particleUserData, particleCap, uint64_t);
         M2_ALLOC(particleFreeQueue, particleCap, int32_t);
         world->particlePairCapacity = 12 * particleCap;
         world->particleProxies = m2AllocZeroed((size_t)particleCap * 16);
@@ -1291,6 +1293,8 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->particleAlive);
     m2Free(world->particleGenerations);
     m2Free(world->particleFlags);
+    m2Free(world->particleLifetime);
+    m2Free(world->particleUserData);
     m2Free(world->particleFreeQueue);
     m2Free(world->particleProxies);
     m2Free(world->particleProxiesTmp);
@@ -1531,6 +1535,25 @@ void m2World_Step(m2WorldId worldId, float dt, int32_t substepCount)
         // It runs BEFORE the island update so a body the water wakes
         // pulls its whole island awake, the island-coupled sleep law.
         m2SolveParticles(world, dt);
+        // Lifetimes count down and expire in ascending slot order at
+        // step end; derived from state, so no journal op and it
+        // replays and rolls back by itself.
+        for (int32_t i = 0; i < world->maxParticleIndex; ++i)
+        {
+            if (world->particleAlive[i] == 0 || world->particleLifetime[i] <= 0.0f)
+            {
+                continue;
+            }
+            world->particleLifetime[i] -= dt;
+            if (world->particleLifetime[i] <= 0.0f)
+            {
+                m2ParticleId dying = {i + 1, worldId.index1, world->particleGenerations[i]};
+                uint8_t journalWas = world->journalActive;
+                world->journalActive = 0; // derived death is never recorded
+                m2World_DestroyParticle(dying);
+                world->journalActive = journalWas;
+            }
+        }
     }
     m2UpdateIslandsAndWake(world);
     uint64_t tIslands = m2TimeNowNs();
@@ -1751,6 +1774,8 @@ static int32_t WalkBlocks(m2World* world, uint8_t* out, const uint8_t* in, int d
         M2_BLOCK(world->particleAlive, particleCap * sizeof(uint8_t));
         M2_BLOCK(world->particleGenerations, particleCap * sizeof(uint16_t));
         M2_BLOCK(world->particleFlags, particleCap * sizeof(uint32_t));
+        M2_BLOCK(world->particleLifetime, particleCap * sizeof(float));
+        M2_BLOCK(world->particleUserData, particleCap * sizeof(uint64_t));
         M2_BLOCK(world->particleFreeQueue, particleCap * sizeof(int32_t));
         M2_BLOCK(&world->particleFreeHead, sizeof(int32_t));
         M2_BLOCK(&world->particleFreeCount, sizeof(int32_t));
@@ -1918,6 +1943,8 @@ uint64_t m2World_Hash(m2WorldId worldId)
             h = m2Hash64(h, &world->particlePositions[i], (int32_t)sizeof(m2Pos2));
             h = m2Hash64(h, &world->particleVelocities[i], (int32_t)sizeof(m2Vec2));
             h = m2Hash64(h, &world->particleFlags[i], (int32_t)sizeof(uint32_t));
+            h = m2Hash64(h, &world->particleLifetime[i], (int32_t)sizeof(float));
+            h = m2Hash64(h, &world->particleUserData[i], (int32_t)sizeof(uint64_t));
         }
         h = m2Hash64(h, &world->particleSpringCount, (int32_t)sizeof(int32_t));
         h = m2Hash64(h, world->particleSpringA,
@@ -6493,6 +6520,8 @@ m2ParticleId m2World_EmitParticle(m2WorldId worldId, m2Pos2 position, m2Vec2 vel
     world->particlePositions[index] = position;
     world->particleVelocities[index] = velocity;
     world->particleFlags[index] = flags;
+    world->particleLifetime[index] = 0.0f;
+    world->particleUserData[index] = 0;
     world->particleAlive[index] = 1;
     world->particleCount += 1;
     m2ParticleId id = {index + 1, worldId.index1, world->particleGenerations[index]};
@@ -6631,6 +6660,68 @@ uint32_t m2Particle_GetFlags(m2ParticleId particleId)
     m2World* world = WorldFromIndex(particleId.world0);
     int32_t index = ParticleSlot(world, particleId);
     return index >= 0 ? world->particleFlags[index] : 0;
+}
+
+void m2Particle_SetLifetime(m2ParticleId particleId, float seconds)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    if (index < 0 || !(seconds >= 0.0f))
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ParticleId id;
+            float seconds;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.id = particleId;
+        record.seconds = seconds;
+        m2JournalRecord(world, m2_opSetParticleLifetime, &record, (int32_t)sizeof(record));
+    }
+    world->particleLifetime[index] = seconds;
+}
+
+float m2Particle_GetLifetime(m2ParticleId particleId)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    return index >= 0 ? world->particleLifetime[index] : 0.0f;
+}
+
+void m2Particle_SetUserData(m2ParticleId particleId, uint64_t userData)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    if (index < 0)
+    {
+        M2_ASSERT(false);
+        return;
+    }
+    if (world->journalActive != 0)
+    {
+        struct
+        {
+            m2ParticleId id;
+            uint64_t userData;
+        } record;
+        memset(&record, 0, sizeof(record));
+        record.id = particleId;
+        record.userData = userData;
+        m2JournalRecord(world, m2_opSetParticleUserData, &record, (int32_t)sizeof(record));
+    }
+    world->particleUserData[index] = userData;
+}
+
+uint64_t m2Particle_GetUserData(m2ParticleId particleId)
+{
+    m2World* world = WorldFromIndex(particleId.world0);
+    int32_t index = ParticleSlot(world, particleId);
+    return index >= 0 ? world->particleUserData[index] : 0;
 }
 
 int32_t m2World_GetParticleCount(m2WorldId worldId)
@@ -6850,6 +6941,8 @@ m2WorldHashParts m2World_HashParts(m2WorldId worldId)
             h = m2Hash64(h, &world->particlePositions[i], (int32_t)sizeof(m2Pos2));
             h = m2Hash64(h, &world->particleVelocities[i], (int32_t)sizeof(m2Vec2));
             h = m2Hash64(h, &world->particleFlags[i], (int32_t)sizeof(uint32_t));
+            h = m2Hash64(h, &world->particleLifetime[i], (int32_t)sizeof(float));
+            h = m2Hash64(h, &world->particleUserData[i], (int32_t)sizeof(uint64_t));
         }
         h = m2Hash64(h, &world->particleSpringCount, (int32_t)sizeof(int32_t));
         h = m2Hash64(h, world->particleSpringA,

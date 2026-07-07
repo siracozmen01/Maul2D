@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define M2_JOURNAL_MAGIC   0x4D324A4Eu // 'M2JN'
-#define M2_JOURNAL_VERSION 31u
+#define M2_JOURNAL_VERSION 32u
 
 typedef struct m2JournalHeader
 {
@@ -832,6 +832,30 @@ bool m2World_ReplayJournal(m2WorldId worldId, const void* data, int32_t size)
             M2_READ_OP(struct m2OpParticleVel, pv);
             pv.id.world0 = here;
             m2Particle_SetVelocity(pv.id, pv.velocity);
+            break;
+        }
+        case m2_opSetParticleLifetime:
+        {
+            struct m2OpParticleLifetime
+            {
+                m2ParticleId id;
+                float seconds;
+            };
+            M2_READ_OP(struct m2OpParticleLifetime, pl);
+            pl.id.world0 = here;
+            m2Particle_SetLifetime(pl.id, pl.seconds);
+            break;
+        }
+        case m2_opSetParticleUserData:
+        {
+            struct m2OpParticleUserData
+            {
+                m2ParticleId id;
+                uint64_t userData;
+            };
+            M2_READ_OP(struct m2OpParticleUserData, pu);
+            pu.id.world0 = here;
+            m2Particle_SetUserData(pu.id, pu.userData);
             break;
         }
         case m2_opCreateRatchetJoint:

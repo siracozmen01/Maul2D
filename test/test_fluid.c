@@ -853,6 +853,53 @@ static void TestFluidThreadingParity(void)
     CHECK(hashes[0] == hashes[1], "one worker and four reach the same fluid bits");
 }
 
+// Lifetime and userData: a spray that cleans itself up on schedule,
+// data that rides snapshots and tapes, and a death that rolls back.
+static void TestLifetimeAndUserData(void)
+{
+    m2WorldDef def = FluidWorldDef(32);
+    def.gravity = (m2Vec2){0.0f, 0.0f};
+    m2WorldId world = m2CreateWorld(&def);
+
+    // Ten drops, half of them mortal at a quarter second (15 steps at
+    // 1/60), tagged with their index in userData.
+    m2ParticleId drops[10];
+    for (int32_t i = 0; i < 10; ++i)
+    {
+        drops[i] = m2World_EmitParticle(world, (m2Pos2){(double)i, 0.0}, (m2Vec2){0.0f, 0.0f}, 0);
+        m2Particle_SetUserData(drops[i], (uint64_t)(1000 + i));
+        if (i % 2 == 0)
+        {
+            m2Particle_SetLifetime(drops[i], 0.25f);
+        }
+    }
+    CHECK(m2Particle_GetUserData(drops[3]) == 1003, "userData reads back");
+    CHECK(m2Particle_GetLifetime(drops[0]) == 0.25f, "lifetime reads back");
+    CHECK(m2Particle_GetLifetime(drops[1]) == 0.0f, "immortals report zero");
+
+    // Snapshot before the reaping, then run past it.
+    int32_t size = m2World_SnapshotSize(world);
+    void* snap = malloc((size_t)size);
+    m2World_Snapshot(world, snap, size);
+    for (int32_t i = 0; i < 20; ++i)
+    {
+        m2World_Step(world, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_GetParticleCount(world) == 5, "the mortal half reaped itself on schedule");
+    CHECK(!m2Particle_IsValid(drops[0]), "an expired drop is gone");
+    CHECK(m2Particle_IsValid(drops[1]) && m2Particle_GetUserData(drops[1]) == 1001,
+          "an immortal keeps its data past the reaping");
+
+    // Rollback: the reaped drops return with their data intact.
+    CHECK(m2World_Restore(world, snap, size), "the pre-reaping snapshot restores");
+    CHECK(m2World_GetParticleCount(world) == 10, "the reaped drops are back");
+    CHECK(m2Particle_IsValid(drops[0]) && m2Particle_GetUserData(drops[0]) == 1000,
+          "a resurrected drop keeps its userData and lifetime");
+    CHECK(m2Particle_GetLifetime(drops[0]) == 0.25f, "and its unspent lifetime");
+    free(snap);
+    m2DestroyWorld(world);
+}
+
 // The 16th gated line: an emit/fall/churn scenario far from origin.
 static void TestFluidHash(void)
 {
@@ -915,6 +962,7 @@ int main(void)
     TestJelly();
     TestOverlapParticles();
     TestFluidThreadingParity();
+    TestLifetimeAndUserData();
     TestRollbackIdentity();
     TestJournalReplay();
     TestFluidHash();

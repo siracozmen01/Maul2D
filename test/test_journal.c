@@ -261,8 +261,9 @@ static void RunSession(m2WorldId world, uint8_t* journal, int32_t capacity, int3
     shardPair[0] = shard;
     shardPair[1] = shard;
     m2World_ShatterBody(ram, shardPair, 2, NULL,
-                        0); // op 58 (ram is dynamic; its gear dies with it)
-    (void)drop2;
+                        0);              // op 58 (ram is dynamic; its gear dies with it)
+    m2Particle_SetLifetime(drop2, 0.5f); // op 59
+    m2Particle_SetUserData(drop2, 777);  // op 60
     m2BodyDef drd = m2DefaultBodyDef();
     drd.position = (m2Pos2){-4.0, 6.0};
     m2BodyId drHook = m2CreateBody(world, &drd);

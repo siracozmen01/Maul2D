@@ -879,7 +879,9 @@ static void SceneWaterTick(m2WorldId world, double simTime)
             int32_t lane = (s_faucetTicks + j * 5) % 7;
             double x = -0.27 + (double)lane * 0.09;
             uint32_t flags = s_faucetTensile ? m2_tensileParticle : 0;
-            m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f}, flags);
+            m2ParticleId d =
+                m2World_EmitParticle(world, (m2Pos2){x, 3.5}, (m2Vec2){0.0f, -2.0f}, flags);
+            m2Particle_SetLifetime(d, 12.0f); // the faucet's spray self-cleans
         }
     }
     s_faucetTicks += 1;

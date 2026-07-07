@@ -132,7 +132,9 @@ typedef struct m2World
     m2Vec2* particleVelocities;
     uint8_t* particleAlive;
     uint16_t* particleGenerations;
-    uint32_t* particleFlags; // behavior bits (snapshot state)
+    uint32_t* particleFlags;    // behavior bits (snapshot state)
+    float* particleLifetime;    // seconds left, 0 = immortal (snapshot state)
+    uint64_t* particleUserData; // opaque game data (snapshot state)
     int32_t* particleFreeQueue;
     int32_t particleCapacity;
     int32_t particleFreeHead;
@@ -373,6 +375,8 @@ enum
     m2_opCreateRatchetJoint = 56,
     m2_opFillParticles = 57,
     m2_opShatterBody = 58,
+    m2_opSetParticleLifetime = 59,
+    m2_opSetParticleUserData = 60,
 };
 
 // Journaled joint parameter channel (op 16).

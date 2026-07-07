@@ -67,6 +67,20 @@ extern "C"
 
     m2Pos2 m2Particle_GetPosition(m2ParticleId particleId);
     uint32_t m2Particle_GetFlags(m2ParticleId particleId);
+
+    /// Give a particle a finite lifetime in seconds: it counts down by
+    /// the step's dt and auto-destroys at the end of the step it
+    /// reaches zero, in ascending slot order, deterministically and
+    /// without a journal op (the countdown is state, so it replays and
+    /// rolls back by itself). Zero, the default, means immortal.
+    /// Journaled. Thread class: writer.
+    void m2Particle_SetLifetime(m2ParticleId particleId, float seconds);
+    float m2Particle_GetLifetime(m2ParticleId particleId);
+
+    /// Opaque per-particle game data, copied verbatim through
+    /// snapshots and journals. Journaled. Thread class: writer/reader.
+    void m2Particle_SetUserData(m2ParticleId particleId, uint64_t userData);
+    uint64_t m2Particle_GetUserData(m2ParticleId particleId);
     m2Vec2 m2Particle_GetVelocity(m2ParticleId particleId);
 
     /// Journaled. Thread class: writer.
