@@ -57,7 +57,7 @@ m2World_Restore(world, buffer, size); // bit-exact resimulation from here
 - **Geometry tools**: convex hull from a point cloud and convex
   decomposition from a concave outline, the road from a sprite
   silhouette to a destructible body.
-- **Integration surface**: 267 frozen 1.x functions, full readback
+- **Integration surface**: 269 frozen 1.x functions, full readback
   (a mirror test rebuilds a world from getters alone and matches
   its hash), debug draw, deterministic counters and profile,
   allocator hooks.
@@ -79,7 +79,9 @@ newer: older versions cannot disable FP contraction, which the
 determinism contract requires). x64 builds target AVX2+FMA (Haswell
 2013+); configure with `-DMAUL2D_SIMD=scalar` for a portable
 fallback that produces bit-identical results, and CI enforces that
-equality.
+equality. An AVX2 build run on a CPU that lacks it aborts with a
+clear message instead of trapping on an illegal instruction, and the
+prebuilt releases ship a portable scalar package for older x64.
 
 `cmake --install` ships the library, headers, a CMake package and a
 pkg-config file; `find_package(maul2d)` and `pkg-config maul2d`
@@ -121,7 +123,7 @@ stacks while carrying guarantees no engine in its class ships.
 
 ## Status and stability
 
-Current release: 1.8. The 1.x API surface is frozen: functions and
+Current release: 1.9. The 1.x API surface is frozen: functions and
 defs may be added in minor releases, but existing signatures,
 semantics and id layouts do not change until a 2.0. Defs are
 cookie-guarded, so a stale compiled caller fails loudly instead of
