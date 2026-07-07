@@ -22,6 +22,16 @@
 
 #include <math.h>
 
+// acos(x) = atan2(sqrt(1 - x^2), x), built on the engine's own
+// deterministic atan2 because libm acosf is not bit-identical
+// across platforms (the determinism contract, ADR-0010).
+static float FvAcos(float x)
+{
+    float s = 1.0f - x * x;
+    s = s > 0.0f ? sqrtf(s) : 0.0f;
+    return m2Atan2(s, x);
+}
+
 static m2Vec2 FvRotate(m2Rot q, m2Vec2 v)
 {
     return (m2Vec2){q.c * v.x - q.s * v.y, q.s * v.x + q.c * v.y};
@@ -44,7 +54,7 @@ static float SubmergedCircle(m2Vec2 center, float radius, double surface, m2Vec2
     // center; the submerged area is the disc minus that cap.
     float r2 = radius * radius;
     float root = sqrtf(r2 - depth * depth);
-    float dryArea = r2 * acosf(depth / radius) - depth * root;
+    float dryArea = r2 * FvAcos(depth / radius) - depth * root;
     float area = (float)M2_PI * r2 - dryArea;
     if (area <= 0.0f)
     {
@@ -346,7 +356,7 @@ void m2ApplyFluidVolumes(m2World* world, float dt)
             m2Vec2 areaCentroid = {0.0f, 0.0f};
             for (int32_t s = world->bodyShapeHead[b]; s != -1; s = world->shapeNext[s])
             {
-                m2Vec2 c;
+                m2Vec2 c = {0.0f, 0.0f};
                 float area = SubmergedShape(world, s, xf, surface, &c);
                 if (area <= 0.0f)
                 {
