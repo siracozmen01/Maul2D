@@ -113,6 +113,12 @@ target_link_libraries(test_fuzz PRIVATE maul2d)
 maul2d_apply_flags(test_fuzz)
 add_test(NAME fuzz COMMAND test_fuzz)
 
+add_executable(test_soak test/test_soak.c)
+target_link_libraries(test_soak PRIVATE maul2d)
+maul2d_apply_flags(test_soak)
+# Deliberately not registered with ctest: the soak runs deep in the
+# weekly scheduled CI job and shallow by hand (test_soak [steps]).
+
 add_executable(test_fluid test/test_fluid.c)
 target_include_directories(test_fluid PRIVATE src)
 target_link_libraries(test_fluid PRIVATE maul2d)

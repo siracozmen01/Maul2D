@@ -122,9 +122,26 @@ static void DoRandomOp(m2WorldId world)
     }
     if (roll < 30)
     {
-        // Water ops: emit, retarget, destroy. Live targets come from
-        // the enumeration (a reader, draw-free), the victim by draw.
-        uint32_t which = Pick(3);
+        // Water ops: emit, fill (the jelly road: op 57 and its nets
+        // must live under all four promises), retarget, destroy.
+        uint32_t which = Pick(4);
+        if (which == 3)
+        {
+            float half = 0.08f + (float)Pick(3) * 0.04f;
+            double fx = PickCoord();
+            double fy = (double)Pick(50) * 0.1;
+            uint32_t kind = Pick(6);
+            uint32_t flags = kind == 1   ? m2_tensileParticle
+                             : kind == 2 ? m2_viscousParticle
+                             : kind == 3 ? m2_powderParticle
+                             : kind == 4 ? m2_springParticle
+                             : kind == 5 ? (m2_springParticle | m2_elasticParticle)
+                                         : 0;
+            m2Polygon tub = m2MakeBox(half, half);
+            m2World_FillPolygonWithParticles(world, &tub, (m2Pos2){fx, fy}, (m2Vec2){0.0f, 0.0f},
+                                             flags);
+            return;
+        }
         if (which == 0)
         {
             double px = PickCoord();

@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly drift patrol: toolchain updates on the runners must not
+    # silently move a single bit (the Jolt-MSVC lesson). Runs the
+    # whole matrix plus the deep soak with no push required.
+    - cron: '17 3 * * 1'
 
 jobs:
   build-test:
@@ -180,3 +186,16 @@ jobs:
         with:
           name: harness-metrics
           path: harness-metrics.txt
+
+  soak:
+    name: weekly soak
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build -j 4
+      - name: soak 300k steps
+        run: ./build/test_soak 300000
