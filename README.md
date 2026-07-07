@@ -131,8 +131,10 @@ single library version: see "Versions and formats" in the guide.
 ## Learn more
 
 - [The guide](docs/guide.md): the contract, rollback netcode,
-  joints, water, queries, the character mover, and what Maul2D
-  leaves out on purpose.
+  joints, water, queries, the character mover, recipes, and what
+  Maul2D leaves out on purpose.
+- [The API reference](docs/api.md): every public function with its
+  doc comment, generated from the headers.
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.
 - [THIRD_PARTY.md](THIRD_PARTY.md) for adapted-code licenses.
 

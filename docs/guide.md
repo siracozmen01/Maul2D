@@ -404,6 +404,40 @@ out: enumerate and read transforms instead, the readers are cheap
 and the set of ids is yours to manage. Per-body sleep thresholds
 stay pinned for the same reason the world tuning knobs do.
 
+## Recipes
+
+Four common builds, each a few lines on top of the pieces above.
+
+**A top-down world with no gravity.** Set worldDef.gravity to zero;
+use linear and angular damping (m2Body_SetLinearDamping through the
+def) for the drag that a top-down game wants, and drive characters
+with the mover kit or with velocities you set each step.
+
+**A platformer character.** The character is a viewer-side kinematic
+capsule, not a body: each frame call m2World_CollideMover to gather
+the planes, m2SolvePlanes to resolve your desired move, and
+m2ClipVector to spend the velocity; jump by setting the vertical
+velocity and let one-sided chains be your one-way platforms. The
+testbed's platformer scene is this recipe end to end.
+
+**A vehicle.** A chassis body plus two wheel bodies, each joined
+with a wheel joint (suspension spring built in); enable the motor on
+the wheels and drive motorSpeed from input. For heavier rigs, a
+prismatic joint per wheel gives a stiffer axle. The car scene shows
+the two-wheel version.
+
+**Destructible geometry.** Author a sprite outline, run it through
+m2DecomposeOutline once to get convex pieces, and build a body from
+them. When it should break, call m2World_ShatterBody with the same
+pieces: the body becomes one flying fragment per piece, each
+carrying the parent's velocity. Pair it with an m2World_Explode at
+the impact point for the shove.
+
+**Water without particles.** Drop an m2FluidVolume over the region,
+set its surface line, and light bodies float while dense ones sink;
+give it a flow for a current, move the surface for a tide. Reach for
+a real particle pool only when you need the splash.
+
 ## The knobs you should not turn
 
 There is no way to disable determinism, skip the sleep bookkeeping

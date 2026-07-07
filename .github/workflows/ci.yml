@@ -223,6 +223,10 @@ jobs:
           pip install clang-format==22.1.5 >/dev/null
           clang-format --version
           clang-format --dry-run -Werror include/maul2d/*.h src/*.c test/*.c benchmark/*.c
+      - name: API reference is in sync with the headers
+        run: |
+          python3 tools/gen_api.py
+          git diff --exit-code docs/api.md || (echo 'docs/api.md is stale: run tools/gen_api.py and commit' && exit 1)
 
   harness:
     name: dual-backend harness (reference)

@@ -57,3 +57,48 @@ jobs:
         run: |
           FILE=$(ls "maul2d-$TAG-$PLATFORM."*)
           gh release upload "$TAG" "$FILE" --clobber
+
+  testbed:
+    name: package testbed ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-latest }
+          - { name: windows-x64, os: windows-latest }
+    env:
+      TAG: ${{ github.ref_name }}
+      PLATFORM: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: install X11 (linux testbed viewer)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+      - name: configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DMAUL2D_TESTBED=ON
+      - name: build
+        run: cmake --build build --config Release --target testbed -j 4
+      - name: stage and archive
+        shell: bash
+        run: |
+          mkdir -p stage
+          if [ "$PLATFORM" = "windows-x64" ]; then
+            cp build/testbed/Release/testbed.exe "stage/Maul2D-testbed.exe" 2>/dev/null || cp build/testbed/testbed.exe "stage/Maul2D-testbed.exe"
+            cd stage && 7z a "../Maul2D-testbed-$TAG-$PLATFORM.zip" "Maul2D-testbed.exe"
+          else
+            cp build/testbed/testbed "stage/Maul2D-testbed"
+            cd stage && tar czf "../Maul2D-testbed-$TAG-$PLATFORM.tar.gz" "Maul2D-testbed"
+          fi
+      - name: ensure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release view "$TAG" || gh release create "$TAG" --title "$TAG" --generate-notes || true
+      - name: upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          FILE=$(ls "Maul2D-testbed-$TAG-$PLATFORM."*)
+          gh release upload "$TAG" "$FILE" --clobber
