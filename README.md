@@ -139,6 +139,9 @@ single library version: see "Versions and formats" in the guide.
   doc comment, generated from the headers.
 - [CONTRIBUTING.md](CONTRIBUTING.md) for contributions.
 - [THIRD_PARTY.md](THIRD_PARTY.md) for adapted-code licenses.
+- [Maul3D](https://github.com/siracozmen01/Maul3D): the 3D sibling,
+  same constitution, with voxel destruction inside the rollback
+  contract.
 
 ## Acknowledgments
 
