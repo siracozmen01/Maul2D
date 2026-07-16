@@ -31,6 +31,18 @@ uint64_t m2Hash64(uint64_t seed, const void* data, int32_t byteCount);
 FNV-1a 64-bit hash over a byte range. This is the hash used by the determinism gates; its constants are frozen and will never change. Thread class: reader (pure function).
 
 ```c
+m2Result m2LastResult(void);
+```
+
+```c
+void m2SetLastResult(m2Result reason); // internal use; hosts read /// Host assert hook (integration audit A2/A5), contextful from /// day one: called before the default print-and-abort for every /// internal assertion failure AND for the create-time CPU /// backend refusal. Return nonzero to declare the failure /// handled and suppress the abort (crash reporters, test /// harnesses, engine diagnostics). NULL restores the default. /// Observer machinery: never touches simulation state. typedef int m2AssertFn(const char* condition, const char* file, int line, void* context);
+```
+
+```c
+void m2SetAssertHandler(m2AssertFn* handler, void* context);
+```
+
+```c
 void m2AssertFail(const char* condition, const char* file, int line);
 ```
 Internal assertion failure sink (debug builds only). Prints and traps.
@@ -92,7 +104,7 @@ True if the rotation is unit length within tolerance.
 ```c
 m2WorldDef m2DefaultWorldDef(void);
 ```
-THREAD CLASSES. Every API is tagged reader or writer. Readers (queries, getters, diagnostics) may run concurrently with each other but never during m2World_Step or any writer. Writers (create/destroy, setters, impulses, Step itself) require exclusive access to their world. Distinct worlds are fully independent. The solver's own workers are internal and do not change any of this. Returns a def with pinned defaults and a valid cookie. Thread class: reader (pure).
+THREAD CLASSES. Every API is tagged reader or writer. Readers (queries, getters, diagnostics) may run concurrently with each other but never during m2World_Step or any writer. Writers (create/destroy, setters, impulses, Step itself) require exclusive access to their world. m2CreateWorld and m2DestroyWorld touch a process-wide slot registry and must be serialized BY THE HOST across threads (the library adds no lock: zero-dependency law); the concurrency suite races two stepped worlds against serial twins to prove independence. Distinct worlds are fully independent. The solver's own workers are internal and do not change any of this. Returns a def with pinned defaults and a valid cookie. Thread class: reader (pure).
 
 ```c
 m2WorldId m2CreateWorld(const m2WorldDef* def);
@@ -1206,4 +1218,4 @@ Fill ids with live particles in ascending slot order; returns the truthful total
 
 ---
 
-273 functions across 8 headers.
+276 functions across 8 headers.

@@ -59,7 +59,7 @@ m2World_Restore(world, buffer, size); // bit-exact resimulation from here
 - **Geometry tools**: convex hull from a point cloud and convex
   decomposition from a concave outline, the road from a sprite
   silhouette to a destructible body.
-- **Integration surface**: 269 frozen 1.x functions, full readback
+- **Integration surface**: 276 frozen 1.x functions, full readback
   (a mirror test rebuilds a world from getters alone and matches
   its hash), debug draw, deterministic counters and profile,
   allocator hooks.

@@ -351,3 +351,15 @@ jobs:
         with:
           name: perf-trend
           path: perf-fresh.txt
+
+  api-surface:
+    name: api surface count (must be generated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate and compare
+        run: |
+          COUNT=$(python3 tools/gen_api.py | grep -oE '\([0-9]+ functions\)' | grep -oE '[0-9]+')
+          echo "generated count: $COUNT"
+          git diff --exit-code docs/api.md || { echo "docs/api.md is stale: regenerate with tools/gen_api.py"; exit 1; }
+          grep -q "$COUNT frozen 1.x functions" README.md || { echo "README function count ($COUNT expected) is stale"; exit 1; }
