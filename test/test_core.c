@@ -323,6 +323,18 @@ static void TestAssertHandler(void)
     CHECK(world.index1 == 0, "the bad def still refuses");
     CHECK(s_handled > 0, "the handler saw the failure and carried its context");
     CHECK(m2LastResult() == m2_errorInvalid, "the refusal carries its typed reason (A4)");
+    m2WorldDef good = m2DefaultWorldDef();
+    good.bodyCapacity = 32;
+    good.shapeCapacity = 32;
+    m2WorldId w2 = m2CreateWorld(&good);
+    CHECK(m2World_MemoryBytes(w2) > (int64_t)(32 * sizeof(void*)), "a world weighs something (D1)");
+    int64_t weight = m2World_MemoryBytes(w2);
+    for (int32_t i = 0; i < 5; ++i)
+    {
+        m2World_Step(w2, 1.0f / 60.0f, 4);
+    }
+    CHECK(m2World_MemoryBytes(w2) == weight, "steps allocate nothing persistent");
+    m2DestroyWorld(w2);
     m2SetAssertHandler(NULL, NULL);
 }
 #endif

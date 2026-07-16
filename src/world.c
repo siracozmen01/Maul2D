@@ -1048,10 +1048,14 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     world->particleTensileNormal = def->particleTensileNormalStrength;
 
     bool ok = true;
+// The macro also meters the world's persistent footprint
+// (integration audit D1): every use site is inside create where
+// `world` is in scope by construction.
 #define M2_ALLOC(field, count, type)                                                               \
     do                                                                                             \
     {                                                                                              \
         world->field = m2AllocZeroed((size_t)(count) * sizeof(type));                              \
+        world->memoryBytes += (int64_t)((size_t)(count) * sizeof(type));                           \
         ok = ok && world->field != NULL;                                                           \
     } while (0)
     M2_ALLOC(transforms, cap, m2Transform);
@@ -2021,6 +2025,16 @@ bool m2World_Restore(m2WorldId worldId, const void* buffer, int32_t size)
     world->pendingSensorEndCount = 0;
     world->jointBreakEventCount = 0;
     return true;
+}
+
+int64_t m2World_MemoryBytes(m2WorldId worldId)
+{
+    m2World* world = GetWorld(worldId);
+    if (world == NULL)
+    {
+        return 0;
+    }
+    return world->memoryBytes + (int64_t)sizeof(m2World);
 }
 
 uint64_t m2World_Hash(m2WorldId worldId)

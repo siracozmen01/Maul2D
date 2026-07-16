@@ -206,6 +206,7 @@ typedef struct m2World
     int32_t particleBodyOverflow;
     uint64_t particlePoolFullCount; // cumulative quiet-full refusals
     uint64_t misuseCount;           // cumulative loud rejections
+    int64_t memoryBytes;            // D1: persistent footprint, from create
     int32_t* jointFreeQueue;
     int32_t jointFreeHead;
     int32_t jointFreeTail;

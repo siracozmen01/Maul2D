@@ -260,6 +260,13 @@ extern "C"
     /// Thread class: reader.
     uint64_t m2World_Hash(m2WorldId worldId);
 
+    /// Per-world persistent memory footprint in bytes (integration
+    /// audit D1): everything create allocated for this world,
+    /// including the world struct itself. Fixed for the world's
+    /// lifetime (pools never grow; the journal buffer is the
+    /// host's). Thread class: reader.
+    int64_t m2World_MemoryBytes(m2WorldId worldId);
+
     /// Per-subsystem hashes for hunting a divergence: run your twin
     /// simulations, compare parts each step, and the first field
     /// that splits names the subsystem while the step count names

@@ -208,6 +208,11 @@ uint64_t m2World_Hash(m2WorldId worldId);
 Deterministic state hash (alive bodies in index order + globals). Present in all builds: this is the desync-forensics primitive. Thread class: reader.
 
 ```c
+int64_t m2World_MemoryBytes(m2WorldId worldId);
+```
+Per-world persistent memory footprint in bytes (integration audit D1): everything create allocated for this world, including the world struct itself. Fixed for the world's lifetime (pools never grow; the journal buffer is the host's). Thread class: reader.
+
+```c
 m2WorldHashParts m2World_HashParts(m2WorldId worldId);
 ```
 
@@ -1218,4 +1223,4 @@ Fill ids with live particles in ascending slot order; returns the truthful total
 
 ---
 
-276 functions across 8 headers.
+277 functions across 8 headers.
