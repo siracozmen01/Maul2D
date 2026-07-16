@@ -132,6 +132,14 @@ maul2d_apply_flags(test_soak)
 # Deliberately not registered with ctest: the soak runs deep in the
 # weekly scheduled CI job and shallow by hand (test_soak [steps]).
 
+if(NOT WIN32)
+    # POSIX-only referee for the multi-world contract (audit B2).
+    add_executable(test_concurrency test/test_concurrency.c)
+    target_link_libraries(test_concurrency PRIVATE maul2d Threads::Threads)
+    maul2d_apply_flags(test_concurrency)
+    add_test(NAME concurrency COMMAND test_concurrency)
+endif()
+
 add_executable(test_fluid test/test_fluid.c)
 target_include_directories(test_fluid PRIVATE src)
 target_link_libraries(test_fluid PRIVATE maul2d Threads::Threads)

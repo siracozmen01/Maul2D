@@ -967,17 +967,20 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     // illegal-instruction trap on pre-Haswell hardware.
     if (m2VerifyCpuBackend() == 0)
     {
+        m2SetLastResult(m2_errorConfig);
         return m2_nullWorldId; // B1: typed refusal, never an abort
     }
     if (def == NULL || def->internalValue != M2_WORLD_COOKIE || def->bodyCapacity < 1 ||
         def->shapeCapacity < 1 || def->jointCapacity < 1)
     {
         M2_ASSERT(false);
+        m2SetLastResult(m2_errorInvalid);
         return m2_nullWorldId;
     }
     if (def->fluidVolumeCapacity < 0)
     {
         M2_ASSERT(false);
+        m2SetLastResult(m2_errorInvalid);
         return m2_nullWorldId;
     }
     if (def->particleCapacity < 0 ||
@@ -993,6 +996,7 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
         // Fluids config is validated loudly: the radius floor is 4x
         // linear slop so the skin laws keep meaning.
         M2_ASSERT(false);
+        m2SetLastResult(m2_errorInvalid);
         return m2_nullWorldId;
     }
 
@@ -1007,12 +1011,14 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     }
     if (slot < 0)
     {
+        m2SetLastResult(m2_errorCapacity);
         return m2_nullWorldId;
     }
 
     m2World* world = m2AllocZeroed(sizeof(m2World));
     if (world == NULL)
     {
+        m2SetLastResult(m2_errorCapacity);
         return m2_nullWorldId;
     }
 
@@ -6090,6 +6096,7 @@ static int32_t TypedJointSlot(m2World* world, m2JointId jointId, uint8_t type)
         world->jointGenerations[index] != jointId.generation || world->jointType[index] != type)
     {
         world->misuseCount += 1; // stale id or wrong type on a typed path
+        m2SetLastResult(m2_errorInvalid);
         return -1;
     }
     return index;

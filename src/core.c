@@ -100,6 +100,18 @@ int32_t m2CpuSupportsBackend(void)
 // Internal (world_internal.h): a one-time guard so an AVX2 binary on a
 // pre-Haswell CPU aborts with a clear, actionable message instead of
 // trapping on the first wide instruction deep in the solver.
+static m2Result s_lastResult = m2_success;
+
+m2Result m2LastResult(void)
+{
+    return s_lastResult;
+}
+
+void m2SetLastResult(m2Result reason)
+{
+    s_lastResult = reason;
+}
+
 static m2AssertFn* s_assertHandler = NULL;
 static void* s_assertContext = NULL;
 

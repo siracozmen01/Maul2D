@@ -80,7 +80,12 @@ extern "C"
     /// (queries, getters, diagnostics) may run concurrently with each
     /// other but never during m2World_Step or any writer. Writers
     /// (create/destroy, setters, impulses, Step itself) require
-    /// exclusive access to their world. Distinct worlds are fully
+    /// exclusive access to their world. m2CreateWorld and
+    /// m2DestroyWorld touch a process-wide slot registry and must be
+    /// serialized BY THE HOST across threads (the library adds no
+    /// lock: zero-dependency law); the concurrency suite races two
+    /// stepped worlds against serial twins to prove independence.
+    /// Distinct worlds are fully
     /// independent. The solver's own workers are internal and do not
     /// change any of this.
 

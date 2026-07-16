@@ -322,6 +322,7 @@ static void TestAssertHandler(void)
     m2WorldId world = m2CreateWorld(&bad);
     CHECK(world.index1 == 0, "the bad def still refuses");
     CHECK(s_handled > 0, "the handler saw the failure and carried its context");
+    CHECK(m2LastResult() == m2_errorInvalid, "the refusal carries its typed reason (A4)");
     m2SetAssertHandler(NULL, NULL);
 }
 #endif
