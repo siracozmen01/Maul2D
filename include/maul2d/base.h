@@ -50,6 +50,16 @@ extern "C"
 /// Seed value for m2Hash64 chains (FNV-1a offset basis).
 #define M2_HASH_INIT 14695981039346656037ULL
 
+    /// Host assert hook (integration audit A2/A5), contextful from
+    /// day one: called before the default print-and-abort for every
+    /// internal assertion failure AND for the create-time CPU
+    /// backend refusal. Return nonzero to declare the failure
+    /// handled and suppress the abort (crash reporters, test
+    /// harnesses, engine diagnostics). NULL restores the default.
+    /// Observer machinery: never touches simulation state.
+    typedef int m2AssertFn(const char* condition, const char* file, int line, void* context);
+    void m2SetAssertHandler(m2AssertFn* handler, void* context);
+
     /// Internal assertion failure sink (debug builds only). Prints and traps.
     void m2AssertFail(const char* condition, const char* file, int line);
 

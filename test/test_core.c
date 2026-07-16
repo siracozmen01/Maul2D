@@ -300,8 +300,37 @@ static void TestSimdBackend(void)
     m2DestroyWorld(world);
 }
 
+#ifndef NDEBUG
+static int s_handled = 0;
+static int HandleAssert(const char* condition, const char* file, int line, void* context)
+{
+    (void)condition;
+    (void)file;
+    (void)line;
+    *(int*)context += 1;
+    return 1; // handled: no abort
+}
+
+// R5-7 (audit A2/A5): the host hook sees the failure, with its
+// context, and the abort is suppressed on a nonzero return.
+static void TestAssertHandler(void)
+{
+    s_handled = 0;
+    m2SetAssertHandler(HandleAssert, &s_handled);
+    m2WorldDef bad = m2DefaultWorldDef();
+    bad.internalValue = 0; // a hand-rolled def: refused with an assert
+    m2WorldId world = m2CreateWorld(&bad);
+    CHECK(world.index1 == 0, "the bad def still refuses");
+    CHECK(s_handled > 0, "the handler saw the failure and carried its context");
+    m2SetAssertHandler(NULL, NULL);
+}
+#endif
+
 int main(void)
 {
+#ifndef NDEBUG
+    TestAssertHandler();
+#endif
     TestAllocatorHooks();
     printf("maul2d version %d (%s backend)\n", m2GetVersion(), m2GetSimdBackend());
 

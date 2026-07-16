@@ -100,23 +100,44 @@ int32_t m2CpuSupportsBackend(void)
 // Internal (world_internal.h): a one-time guard so an AVX2 binary on a
 // pre-Haswell CPU aborts with a clear, actionable message instead of
 // trapping on the first wide instruction deep in the solver.
-void m2VerifyCpuBackend(void)
+static m2AssertFn* s_assertHandler = NULL;
+static void* s_assertContext = NULL;
+
+void m2SetAssertHandler(m2AssertFn* handler, void* context)
 {
+    s_assertHandler = handler;
+    s_assertContext = context;
+}
+
+int m2VerifyCpuBackend(void)
+{
+    // B1 (integration audit): the library never aborts in release.
+    // An unsupported CPU routes through the assert hook and refuses
+    // the world with a null id; the printed reason remains for the
+    // hookless case, and the host that skipped the public probe
+    // (m2CpuSupportsBackend) still gets a loud, typed refusal.
     static int32_t checked = 0;
-    if (checked != 0)
+    static int32_t supported = 1;
+    if (checked == 0)
     {
-        return;
+        checked = 1;
+        supported = m2CpuSupportsBackend() != 0;
+        if (!supported)
+        {
+            const char* message = "CPU does not support the built SIMD backend; "
+                                  "rebuild with -DMAUL2D_SIMD=scalar";
+            if (s_assertHandler == NULL ||
+                s_assertHandler(message, "m2CreateWorld", 0, s_assertContext) == 0)
+            {
+                fprintf(stderr,
+                        "maul2d: built for the '%s' SIMD backend, but this CPU "
+                        "does not support it. Rebuild with -DMAUL2D_SIMD=scalar "
+                        "for a portable binary.\n",
+                        m2GetSimdBackend());
+            }
+        }
     }
-    checked = 1;
-    if (m2CpuSupportsBackend() == 0)
-    {
-        fprintf(stderr,
-                "maul2d: built for the '%s' SIMD backend, but this CPU does "
-                "not support it. Rebuild with -DMAUL2D_SIMD=scalar for a "
-                "portable binary.\n",
-                m2GetSimdBackend());
-        abort();
-    }
+    return supported;
 }
 
 uint64_t m2Hash64(uint64_t seed, const void* data, int32_t byteCount)
@@ -134,6 +155,10 @@ uint64_t m2Hash64(uint64_t seed, const void* data, int32_t byteCount)
 
 void m2AssertFail(const char* condition, const char* file, int line)
 {
+    if (s_assertHandler != NULL && s_assertHandler(condition, file, line, s_assertContext) != 0)
+    {
+        return; // handled by the host (A2)
+    }
     fprintf(stderr, "maul2d assertion failed: %s (%s:%d)\n", condition, file, line);
     abort();
 }

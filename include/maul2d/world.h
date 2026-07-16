@@ -207,6 +207,11 @@ extern "C"
         uint64_t stepCount;
         // Diagnostics for integrators: quiet runtime facts and loud
         // misuse, countable in Release where asserts are silent.
+        // THE POLL PATTERN (integration audit B4): sample this
+        // counter once per frame and alarm on growth; per-call
+        // notification is deliberately absent because a hook in the
+        // hot path would tax every healthy call for the sick ones,
+        // and in Debug the assert hook already fires per misuse.
         int32_t particlePairOverflow; // pairs dropped last step (budget)
         int32_t particleBodyOverflow; // body contacts dropped last step
         uint64_t particlePoolFull;    // emits refused by a full pool, cumulative

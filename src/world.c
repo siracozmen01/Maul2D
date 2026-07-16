@@ -965,7 +965,10 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     // Before any solver kernel runs, make sure this CPU can execute the
     // backend the binary was built for: a clear abort beats a bare
     // illegal-instruction trap on pre-Haswell hardware.
-    m2VerifyCpuBackend();
+    if (m2VerifyCpuBackend() == 0)
+    {
+        return m2_nullWorldId; // B1: typed refusal, never an abort
+    }
     if (def == NULL || def->internalValue != M2_WORLD_COOKIE || def->bodyCapacity < 1 ||
         def->shapeCapacity < 1 || def->jointCapacity < 1)
     {
