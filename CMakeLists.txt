@@ -9,7 +9,6 @@ option(MAUL2D_COVERAGE "Build with gcov coverage instrumentation (one-off audit)
 
 include(cmake/CompilerFlags.cmake)
 
-find_package(Threads REQUIRED)
 
 add_library(maul2d STATIC
     src/core.c
@@ -21,12 +20,12 @@ add_library(maul2d STATIC
     src/particle.c
     src/buoyancy.c
     src/query.c
-    src/platform_thread.c
     src/draw.c
     src/manifold.c
     src/math_functions.c
     src/shape.c
     src/solver.c
+    src/platform_time.c
     src/world.c)
 target_include_directories(maul2d PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                                          $<INSTALL_INTERFACE:include>)
@@ -35,11 +34,11 @@ if(NOT MSVC)
     # The library's own math (sqrtf/floorf) needs libm; consumers inherit it.
     target_link_libraries(maul2d PUBLIC m)
 endif()
-# The deterministic worker pool rides the platform threads; the
-# exported target carries the dependency for consumers.
-target_link_libraries(maul2d PUBLIC Threads::Threads)
 
 enable_testing()
+# The worker-count invariance tests carry their own host pool now
+# (the engine opens no threads); only the TESTS need a thread lib.
+find_package(Threads REQUIRED)
 
 add_executable(test_core test/test_core.c)
 target_link_libraries(test_core PRIVATE maul2d)
@@ -118,7 +117,7 @@ maul2d_apply_flags(test_redteam)
 add_test(NAME redteam COMMAND test_redteam)
 
 add_executable(test_fuzz test/test_fuzz.c)
-target_link_libraries(test_fuzz PRIVATE maul2d)
+target_link_libraries(test_fuzz PRIVATE maul2d Threads::Threads)
 maul2d_apply_flags(test_fuzz)
 add_test(NAME fuzz COMMAND test_fuzz)
 
@@ -135,7 +134,7 @@ maul2d_apply_flags(test_soak)
 
 add_executable(test_fluid test/test_fluid.c)
 target_include_directories(test_fluid PRIVATE src)
-target_link_libraries(test_fluid PRIVATE maul2d)
+target_link_libraries(test_fluid PRIVATE maul2d Threads::Threads)
 maul2d_apply_flags(test_fluid)
 add_test(NAME fluid COMMAND test_fluid)
 

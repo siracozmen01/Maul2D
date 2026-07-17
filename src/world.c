@@ -915,10 +915,25 @@ static void UpdateContactsRange(int32_t begin, int32_t end, void* userCtx)
 static void UpdateContacts(m2World* world)
 {
     m2UpdateContactsCtx ctx = {world};
-    m2ThreadPoolRun(world->pool, UpdateContactsRange, &ctx, world->pairCount);
+    m2RunParallel(world, UpdateContactsRange, &ctx, world->pairCount, 16);
 }
 
 // --- Defs & world lifecycle ----------------------------------------------------
+
+void m2RunParallel(m2World* world, m2TaskFn* fn, void* ctx, int32_t itemCount, int32_t minRange)
+{
+    if (itemCount <= 0)
+    {
+        return;
+    }
+    if (world->enqueueTask != NULL)
+    {
+        void* task = world->enqueueTask(fn, itemCount, minRange, ctx, world->userTaskContext);
+        world->finishTask(task, world->userTaskContext);
+        return;
+    }
+    fn(0, itemCount, ctx);
+}
 
 m2WorldDef m2DefaultWorldDef(void)
 {
@@ -1187,7 +1202,9 @@ m2WorldId m2CreateWorld(const m2WorldDef* def)
     M2_ALLOC(constraintColors, world->pairCapacity, uint8_t);
     M2_ALLOC(colorOrder, world->pairCapacity, int32_t);
 
-    world->pool = m2ThreadPoolCreate(def->workerCount);
+    world->enqueueTask = def->enqueueTask;
+    world->finishTask = def->finishTask;
+    world->userTaskContext = def->userTaskContext;
     M2_ALLOC(beginEvents, world->pairCapacity, m2ContactBeginEvent);
     M2_ALLOC(endEvents, world->pairCapacity, m2ContactEndEvent);
     M2_ALLOC(pendingEndEvents, world->pairCapacity, m2ContactEndEvent);
@@ -1420,7 +1437,6 @@ void m2DestroyWorld(m2WorldId worldId)
     m2Free(world->colorMasks);
     m2Free(world->constraintColors);
     m2Free(world->colorOrder);
-    m2ThreadPoolDestroy(world->pool);
     m2Free(world->beginEvents);
     m2Free(world->endEvents);
     m2Free(world->pendingEndEvents);

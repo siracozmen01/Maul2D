@@ -1113,7 +1113,7 @@ static void RunContactStageWide(m2World* world, m2ContactConstraint* constraints
             continue;
         }
         ctx.blocks = (m2ContactBlock*)world->contactBlocks + begin;
-        m2ThreadPoolRun(world->pool, BlockStageRange, &ctx, end - begin);
+        m2RunParallel(world, BlockStageRange, &ctx, end - begin, 1);
     }
 
     // Overflow bucket: serial per-item path, canonical order.

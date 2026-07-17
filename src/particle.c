@@ -31,8 +31,6 @@
 
 #include "maul2d/base.h"
 
-#include "platform_thread.h"
-
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -346,8 +344,14 @@ static void UpdateParticleBodyContacts(m2World* world)
 {
     world->particleBodyCount = 0;
     world->particleBodyOverflow = 0;
-    m2ThreadPool* pool = world->particleCount >= M2_FLUID_THREAD_MIN ? world->pool : NULL;
-    m2ThreadPoolRun(pool, StageBodyContactsRange, world, world->maxParticleIndex);
+    if (world->particleCount >= M2_FLUID_THREAD_MIN)
+    {
+        m2RunParallel(world, StageBodyContactsRange, world, world->maxParticleIndex, 64);
+    }
+    else
+    {
+        StageBodyContactsRange(0, world->maxParticleIndex, world);
+    }
     for (int32_t i = 0; i < world->maxParticleIndex; ++i)
     {
         world->particleBodyOverflow += world->particleBodyStageDrops[i];

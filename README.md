@@ -35,9 +35,11 @@ m2World_Restore(world, buffer, size); // bit-exact resimulation from here
   kinematic, dynamic; forces, damping, dominance groups, conveyor
   surfaces, explosions.
 - **A soft-step solver** with speculative contacts, warm starting
-  and graph-colored SIMD solving. Worker count is non-semantic: 1,
-  2 or 8 threads produce bit-identical trajectories and a CI gate
-  proves it every commit.
+  and graph-colored SIMD solving. Parallelism rides the HOST's
+  task executor (the same enqueue/finish contract as Box2D v3 and
+  Maul3D); the engine opens no threads of its own. Scheduling is
+  non-semantic: serial or 8 workers produce bit-identical
+  trajectories and a CI gate proves it every commit.
 - **Eleven joint types**: distance (with hard range), revolute
   (with angular spring), prismatic, weld, wheel, motor, mouse,
   filter, gear, pulley and ratchet; motors, limits, runtime tuning,

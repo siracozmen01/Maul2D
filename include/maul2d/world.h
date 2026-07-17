@@ -25,6 +25,15 @@ extern "C"
         uint16_t generation;
     } m2WorldId;
 
+    /// A range job: run items [startIndex, endIndex).
+    typedef void m2TaskFn(int32_t startIndex, int32_t endIndex, void* taskContext);
+    /// Split [0, itemCount) into subranges of at least minRange and
+    /// run task over them on the host's scheduler; the return value
+    /// is handed back to finishTask, which blocks until all done.
+    typedef void* m2EnqueueTaskFn(m2TaskFn* task, int32_t itemCount, int32_t minRange,
+                                  void* taskContext, void* userContext);
+    typedef void m2FinishTaskFn(void* userTask, void* userContext);
+
     typedef struct m2WorldDef
     {
         m2Vec2 gravity;       // meters/s^2, applied to dynamic bodies
@@ -48,10 +57,22 @@ extern "C"
         float particleElasticStrength;  // elastic-flagged batches (reference 0.25)
         float particleTensilePressureStrength; // surface tension, reference 0.2
         float particleTensileNormalStrength;   // reference 0.2
-        /// Solver worker threads including the caller (clamped to 8).
-        /// NON-SEMANTIC by law: any worker count produces identical
-        /// bits; it only changes how the same arithmetic is scheduled.
+        /// HOST HINT ONLY (integration audit A1/D4): the engine no
+        /// longer opens threads and never reads this; parallelism
+        /// comes from the task hooks below. Kept for ABI and
+        /// deliberately outside the config hash.
         int32_t workerCount;
+        /// The host task executor (integration audit A1), the same
+        /// contract Maul3D and Box2D v3 carry: the engine calls
+        /// enqueueTask with a range job, the host runs it on its own
+        /// scheduler (splitting [0, itemCount) into subranges of at
+        /// least minRange), and finishTask must not return before
+        /// every subrange completed. Both NULL (the default) means
+        /// serial in the caller's thread. NON-SEMANTIC by law: any
+        /// executor and any split produce identical bits.
+        m2EnqueueTaskFn* enqueueTask;
+        m2FinishTaskFn* finishTask;
+        void* userTaskContext;
         int32_t internalValue;
     } m2WorldDef;
 

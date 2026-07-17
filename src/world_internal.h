@@ -13,7 +13,6 @@
 #include "maul2d/joint.h"
 #include "maul2d/particle.h"
 #include "maul2d/world.h"
-#include "platform_thread.h"
 #include "shape_internal.h"
 
 #define M2_TREE_COUNT 3 // one per body type (topic-02 D1)
@@ -251,14 +250,16 @@ typedef struct m2World
     // Solver scratch (slice 4): all step-transient, zeroed at prepare.
     m2Vec2* deltaPositions; // f32 position deltas within the step
     m2Rot* deltaRotations;
-    void* constraintScratch;  // m2ContactConstraint[pairCapacity]
-    void* contactBlocks;      // wide SoA blocks (step-transient)
-    int32_t* islandParent;    // union-find scratch (step-transient)
-    uint8_t* islandDisturbed; // island flags scratch (step-transient)
-    m2Pos2* ccdPrevPositions; // bullet substep origins (step-transient)
-    uint8_t* touchingScratch; // pair-touching carry scratch (step-transient)
-    int32_t* queryScratch;    // shapeCapacity ints (query-transient, never snapshot)
-    m2ThreadPool* pool;       // NULL = serial; never snapshot state
+    void* constraintScratch;      // m2ContactConstraint[pairCapacity]
+    void* contactBlocks;          // wide SoA blocks (step-transient)
+    int32_t* islandParent;        // union-find scratch (step-transient)
+    uint8_t* islandDisturbed;     // island flags scratch (step-transient)
+    m2Pos2* ccdPrevPositions;     // bullet substep origins (step-transient)
+    uint8_t* touchingScratch;     // pair-touching carry scratch (step-transient)
+    int32_t* queryScratch;        // shapeCapacity ints (query-transient, never snapshot)
+    m2EnqueueTaskFn* enqueueTask; // host executor (A1); both NULL =
+    m2FinishTaskFn* finishTask;   // serial; never snapshot state
+    void* userTaskContext;
     // Buoyancy volumes: particle-free water regions (snapshot state).
     m2Pos2* fvLower;
     m2Pos2* fvUpper;
@@ -495,5 +496,13 @@ struct m2CastHitInternal
 };
 struct m2CastHitInternal m2RayCastShapeIndex(const m2World* world, int32_t shapeIndex,
                                              m2Pos2 origin, m2Vec2 translation, float maxFraction);
+
+// The task dispatch (A1): hooks when the host installed them,
+// serial in the caller otherwise. Bit-blind to the split by the
+// worker-count law.
+void m2RunParallel(m2World* world, m2TaskFn* fn, void* ctx, int32_t itemCount, int32_t minRange);
+
+// Monotonic profile clock (observer only, never a hash input).
+uint64_t m2TimeNowNs(void);
 
 #endif // MAUL2D_WORLD_INTERNAL_H

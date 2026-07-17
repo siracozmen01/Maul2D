@@ -10,6 +10,7 @@
 #include "world_internal.h"
 
 #include "maul2d/base.h"
+#include "test_task_pool.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -826,6 +827,12 @@ static void TestFluidThreadingParity(void)
         def.jointCapacity = 4;
         def.particleCapacity = 6000;
         def.workerCount = workers[run];
+        if (workers[run] > 1)
+        {
+            def.enqueueTask = TpEnqueue;
+            def.finishTask = TpFinish;
+            def.userTaskContext = &workers[run];
+        }
         m2WorldId world = m2CreateWorld(&def);
         m2ShapeDef sd = m2DefaultShapeDef();
         m2BodyDef fd = m2DefaultBodyDef();

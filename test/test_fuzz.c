@@ -20,6 +20,7 @@
 // of; this walks the ones we did not.
 
 #include "maul2d/maul2d.h"
+#include "test_task_pool.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -764,6 +765,14 @@ static uint64_t RunScenario(uint64_t seed, uint8_t* journal, int32_t journalCapa
     def.particleCapacity = 128; // the walks drive water too
     def.fluidVolumeCapacity = 2;
     def.workerCount = workerCount;
+    static int32_t s_fuzzWorkers;
+    s_fuzzWorkers = workerCount;
+    if (workerCount > 1)
+    {
+        def.enqueueTask = TpEnqueue;
+        def.finishTask = TpFinish;
+        def.userTaskContext = &s_fuzzWorkers;
+    }
     m2WorldId world = m2CreateWorld(&def);
     if (journal != NULL)
     {
